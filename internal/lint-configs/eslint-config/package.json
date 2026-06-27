@@ -1,0 +1,13 @@
+{
+  "name": "@llmops/eslint-config",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "eslint": "catalog:"
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "name": "@LLMopsDev/utils",
+  "name": "@llmops/utils",
   "version": "1.0.0",
   "license": "ISC",
   "type": "module"
