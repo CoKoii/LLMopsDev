@@ -8,9 +8,14 @@
     "pnpm": ">=11.7.0"
   },
   "type": "module",
+  "scripts": {
+    "postinstall": "pnpm -r run --if-present stub"
+  },
   "devDependencies": {
     "@types/node": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "tsdown": "catalog:",
+    "@llmops/eslint-config": "workspace:*"
   },
   "packageManager": "pnpm@11.7.0"
 }
