@@ -1,13 +1,6 @@
 {
   "name": "LLMopsDev",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
   "license": "ISC",
   "devEngines": {
     "packageManager": {
@@ -17,9 +10,13 @@
     }
   },
   "engines": {
-    "node": ">=22.14.0",
-    "npm": ">=9.5.0",
-    "pnpm": ">=11.6.0"
+    "node": ">=22.19.0",
+    "npm": ">=10.9.3",
+    "pnpm": ">=11.7.0"
   },
-  "type": "module"
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "typescript": "^6.0.3"
+  }
 }
