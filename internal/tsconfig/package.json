@@ -1,5 +1,9 @@
 {
   "name": "@llmops/tsconfig",
   "version": "1.0.0",
-  "type": "module"
+  "type": "module",
+  "devDependencies": {
+    "vite": "catalog:",
+    "@types/node": "catalog:"
+  }
 }

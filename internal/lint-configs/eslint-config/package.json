@@ -14,6 +14,10 @@
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
-    "eslint": "catalog:"
+    "@llmops/tsconfig": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:"
   }
 }

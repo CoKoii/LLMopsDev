@@ -12,13 +12,8 @@
     "postinstall": "pnpm -r run --if-present stub"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
-    "typescript": "catalog:",
-    "tsdown": "catalog:",
-    "vite": "catalog:",
     "eslint": "catalog:",
-    "@llmops/eslint-config": "workspace:*",
-    "@llmops/tsconfig": "workspace:*"
+    "@llmops/eslint-config": "workspace:*"
   },
   "packageManager": "pnpm@11.7.0"
 }
