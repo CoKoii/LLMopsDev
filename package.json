@@ -15,6 +15,7 @@
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "tsdown": "catalog:",
+    "vite": "catalog:",
     "eslint": "catalog:",
     "@llmops/eslint-config": "workspace:*",
     "@llmops/tsconfig": "workspace:*"
