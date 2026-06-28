@@ -15,7 +15,9 @@
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "tsdown": "catalog:",
-    "@llmops/eslint-config": "workspace:*"
+    "eslint": "catalog:",
+    "@llmops/eslint-config": "workspace:*",
+    "@llmops/tsconfig": "workspace:*"
   },
   "packageManager": "pnpm@11.7.0"
 }

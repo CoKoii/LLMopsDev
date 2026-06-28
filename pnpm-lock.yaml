@@ -228,9 +228,15 @@ importers:
       '@llmops/eslint-config':
         specifier: workspace:*
         version: link:internal/lint-configs/eslint-config
+      '@llmops/tsconfig':
+        specifier: workspace:*
+        version: link:internal/tsconfig
       '@types/node':
         specifier: 'catalog:'
         version: 25.9.3
+      eslint:
+        specifier: 'catalog:'
+        version: 10.5.0
       tsdown:
         specifier: 'catalog:'
         version: 0.22.3(typescript@6.0.3)
@@ -250,6 +256,8 @@ importers:
       eslint:
         specifier: 'catalog:'
         version: 10.5.0
+
+  internal/tsconfig: {}
 
   packages/components: {}
 
