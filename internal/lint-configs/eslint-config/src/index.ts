@@ -1,20 +1,13 @@
-import js from "@eslint/js";
 import type { Linter } from "eslint";
 
-const baseConfig: Linter.Config[] = [
-  {
-    ignores: [
-      "**/dist/**",
-      "**/node_modules/**",
-      "**/coverage/**",
-      "**/.turbo/**",
-    ],
-  },
-  js.configs.recommended,
-];
+import { ignores } from "./ignores";
+import { javascript } from "./javascript";
 
-const defineConfig = (...config: Linter.Config[]): Linter.Config[] => [
-  ...baseConfig,
+const defineConfig = async (
+  config: Linter.Config[] = [],
+): Promise<Linter.Config[]> => [
+  ...(await ignores()),
+  ...(await javascript()),
   ...config,
 ];
 

@@ -17,6 +17,8 @@
     "@llmops/tsconfig": "workspace:*",
     "@types/node": "catalog:",
     "eslint": "catalog:",
+    "eslint-plugin-unused-imports": "catalog:",
+    "globals": "catalog:",
     "tsdown": "catalog:",
     "typescript": "catalog:"
   }
