@@ -1,16 +1,43 @@
-<script setup lang="ts">
-import { X } from '@lucide/vue'
-import { Button } from 'ant-design-vue'
+<script lang="ts" setup>
+import { Layout, LayoutContent, LayoutFooter, LayoutHeader, LayoutSider } from 'ant-design-vue'
+import type { CSSProperties } from 'vue'
+const headerStyle: CSSProperties = {
+  textAlign: 'center',
+  color: '#fff',
+  height: 64,
+  paddingInline: 50,
+  lineHeight: '64px',
+  backgroundColor: '#7dbcea',
+}
+
+const contentStyle: CSSProperties = {
+  textAlign: 'center',
+  minHeight: 120,
+  lineHeight: '120px',
+  color: '#fff',
+  backgroundColor: '#108ee9',
+}
+
+const siderStyle: CSSProperties = {
+  textAlign: 'center',
+  height: '100vh',
+  color: '#fff',
+  backgroundColor: '#3ba0e9',
+}
+const footerStyle: CSSProperties = {
+  textAlign: 'center',
+  color: '#fff',
+  backgroundColor: '#7dbcea',
+}
 </script>
-
 <template>
-  <h1>You did it!</h1>
-  <Button type="primary">Ant Design Button</Button>
-  <X />
-  <p>
-    Visit <a href="https://vuejs.org/" target="_blank" rel="noopener">vuejs.org</a> to read the
-    documentation
-  </p>
-</template>
+  <Layout>
+    <LayoutSider width="15rem" :style="siderStyle">Sider</LayoutSider>
 
-<style scoped></style>
+    <Layout>
+      <LayoutHeader :style="headerStyle">Header</LayoutHeader>
+      <LayoutContent :style="contentStyle">Content</LayoutContent>
+      <LayoutFooter :style="footerStyle">Footer</LayoutFooter>
+    </Layout>
+  </Layout>
+</template>
