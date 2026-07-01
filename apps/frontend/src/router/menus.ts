@@ -1,4 +1,4 @@
-import { House, User } from '@lucide/vue'
+import { LayoutGrid, User } from '@lucide/vue'
 import type { Component } from 'vue'
 import type { RouteRecordRaw } from 'vue-router'
 
@@ -10,7 +10,7 @@ export const routes: MenuRoute[] = [
   {
     path: '/',
     name: '主页',
-    icon: House,
+    icon: LayoutGrid,
     component: () => import('../views/home/index.vue'),
   },
   {

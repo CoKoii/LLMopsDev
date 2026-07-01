@@ -10,7 +10,7 @@ const route = useRoute()
   <div class="SideBar">
     <div class="content">
       <div class="title"></div>
-      <Button type="primary" block>
+      <Button type="primary" block class="create-btn">
         <template #icon>
           <PlusOutlined />
         </template>
@@ -46,6 +46,9 @@ const route = useRoute()
       border-radius: 0.8rem;
       background: rgb(229, 231, 235);
       margin-bottom: 2rem;
+    }
+    .create-btn {
+      font-size: 1.4rem;
     }
     .menus {
       display: flex;
@@ -88,6 +91,10 @@ const route = useRoute()
           align-items: center;
           justify-content: center;
           flex-shrink: 0;
+          fill: none;
+        }
+        .link.active :deep(.icon) {
+          fill: currentColor;
         }
         .link :deep(.icon svg) {
           width: 100%;
