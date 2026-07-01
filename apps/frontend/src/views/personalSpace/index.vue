@@ -6,9 +6,7 @@ const route = useRoute()
 
 <template>
   <PageToolbar>
-    <div class="index">
-      {{ route.name }}
-    </div>
+    <div class="index" style="color: red">{{ route.name }}</div>
   </PageToolbar>
 </template>
 

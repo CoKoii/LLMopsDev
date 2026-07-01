@@ -1,11 +1,7 @@
-<script setup lang="ts">
-import HomeLayout from '@/components/Layouts/HomeLayout/HomeLayout.vue'
-</script>
+<script setup lang="ts"></script>
 
 <template>
-  <HomeLayout>
-    <div class="index"></div>
-  </HomeLayout>
+  <div class="index"></div>
 </template>
 
 <style scoped lang="scss"></style>
