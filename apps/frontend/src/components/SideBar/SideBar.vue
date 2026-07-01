@@ -4,6 +4,7 @@ import { PlusOutlined } from '@antdv-next/icons'
 import { Button } from 'antdv-next'
 import { useRoute } from 'vue-router'
 const route = useRoute()
+console.log(routes)
 </script>
 
 <template>
@@ -21,7 +22,7 @@ const route = useRoute()
           创建AI应用
         </Button>
         <div class="menus">
-          <div class="menu-item" v-for="(item, index) in routes" :key="index">
+          <div class="menu-item" v-for="(item, index) in routes[0]?.children" :key="index">
             <div class="tag" v-if="item.tag">{{ item.tag }}</div>
             <router-link :to="item.path" class="link" :class="{ active: item.path === route.path }">
               <component :is="item.icon" v-if="item.icon" class="icon" />
