@@ -5,6 +5,7 @@ packages:
   - internal/lint-configs/*
 
 allowBuilds:
+  '@parcel/watcher': true
   core-js: false
 
 catalog:

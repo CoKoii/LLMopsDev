@@ -9,6 +9,7 @@
   },
   "type": "module",
   "scripts": {
+    "dev": "pnpm -r run --if-present dev",
     "postinstall": "pnpm -r run --if-present stub"
   },
   "devDependencies": {
