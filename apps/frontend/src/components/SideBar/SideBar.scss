@@ -1,0 +1,129 @@
+.SideBar {
+  width: 100%;
+  height: 100%;
+  padding: 0.8rem;
+  .content {
+    width: 100%;
+    height: 100%;
+    padding: 1.6rem 0.8rem;
+    border-radius: 0.8rem;
+    background-color: var(--white);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    .main {
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 0.8rem;
+        margin-bottom: 2rem;
+        .logo {
+          width: 3.6rem;
+          height: 3.6rem;
+        }
+        .text {
+          font-size: 2rem;
+          font-weight: bold;
+        }
+      }
+      .create-btn {
+        font-size: 1.4rem;
+      }
+      .menus {
+        display: flex;
+        flex-direction: column;
+        gap: 0.8rem;
+        margin-top: 1.6rem;
+        .menu-item {
+          display: flex;
+          flex-direction: column;
+          gap: 0.8rem;
+          .tag {
+            padding: 0 0.6rem;
+            color: var(--font-light-color);
+          }
+          .link {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0 0.8rem;
+            font-size: 1.4rem;
+            line-height: 1;
+            border-radius: 8px;
+            height: 3.2rem;
+            color: var(--font-color);
+            text-decoration: none;
+            transition: background-color 0.3s;
+            &:hover {
+              background-color: var(--touch-bg);
+            }
+          }
+          .link.active {
+            background-color: var(--touch-bg);
+            color: var(--font-active-color);
+            font-weight: bold;
+          }
+          .link :deep(.icon) {
+            width: 1.4rem;
+            height: 1.4rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            fill: none;
+          }
+          .link.active :deep(.icon) {
+            fill: currentColor;
+          }
+          .link :deep(.icon svg) {
+            width: 100%;
+            height: 100%;
+            display: block;
+          }
+          .link .text {
+            line-height: 1;
+          }
+        }
+      }
+    }
+    .user {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+      padding: 0.8rem;
+      border-radius: 0.8rem;
+      cursor: pointer;
+      transition: background-color 0.3s;
+      &:hover {
+        background-color: var(--touch-bg);
+      }
+      .avatar {
+        width: 3.2rem;
+        height: 3.2rem;
+        border-radius: 50%;
+        overflow: hidden;
+        img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+      }
+      .info {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+        .name {
+          font-size: 1.4rem;
+          font-weight: bold;
+          color: var(--font-color);
+        }
+        .email {
+          font-size: 1.2rem;
+          color: var(--font-light-color);
+        }
+      }
+    }
+  }
+}

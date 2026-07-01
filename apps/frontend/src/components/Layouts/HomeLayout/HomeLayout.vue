@@ -19,7 +19,9 @@ const siderStyle: CSSProperties = {
       <SideBar />
     </LayoutSider>
     <Layout>
-      <LayoutContent :style="contentStyle">Content</LayoutContent>
+      <LayoutContent :style="contentStyle">
+        <RouterView />
+      </LayoutContent>
     </Layout>
   </Layout>
 </template>
