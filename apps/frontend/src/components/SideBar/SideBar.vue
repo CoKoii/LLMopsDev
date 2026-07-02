@@ -2,8 +2,6 @@
 import { routes } from '@/router/menus'
 import { PlusOutlined } from '@antdv-next/icons'
 import { Button } from 'antdv-next'
-import { useRoute } from 'vue-router'
-const route = useRoute()
 </script>
 
 <template>
@@ -23,7 +21,7 @@ const route = useRoute()
         <div class="menus">
           <div class="menu-item" v-for="(item, index) in routes[0]?.children" :key="index">
             <div class="tag" v-if="item.meta?.tag">{{ item.meta.tag }}</div>
-            <router-link :to="item.path" class="link" :class="{ active: item.path === route.path }">
+            <router-link :to="item.path" class="link" active-class="active">
               <component :is="item.meta?.icon" v-if="item.meta?.icon" class="icon" />
               <span class="text">{{ item.meta?.title }}</span>
             </router-link>

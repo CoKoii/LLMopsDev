@@ -23,7 +23,6 @@ export const routes: RouteRecordRaw[] = [
           icon: User,
         },
         redirect: '/personal-space/apps',
-        component: () => import('../views/personalSpace/index.vue'),
         children: [
           {
             path: '/personal-space/apps',
@@ -31,7 +30,31 @@ export const routes: RouteRecordRaw[] = [
             meta: {
               title: 'AI应用',
             },
-            component: () => import('../views/personalSpace/views/apps/index.vue'),
+            component: () => import('../views/personalSpace/apps/index.vue'),
+          },
+          {
+            path: '/personal-space/plugins',
+            name: 'personal-space-plugins',
+            meta: {
+              title: '插件',
+            },
+            component: () => import('../views/personalSpace/plugins/index.vue'),
+          },
+          {
+            path: '/personal-space/workflows',
+            name: 'personal-space-workflows',
+            meta: {
+              title: '工作流',
+            },
+            component: () => import('../views/personalSpace/workflows/index.vue'),
+          },
+          {
+            path: '/personal-space/knowledge',
+            name: 'personal-space-knowledge',
+            meta: {
+              title: '知识库',
+            },
+            component: () => import('../views/personalSpace/knowledge/index.vue'),
           },
         ],
       },
@@ -43,7 +66,7 @@ export const routes: RouteRecordRaw[] = [
           icon: Astroid,
           tag: '探索',
         },
-        component: () => import('../views/personalSpace/index.vue'),
+        component: () => import('../views/apps/index.vue'),
       },
       {
         path: '/plugins',
@@ -52,7 +75,7 @@ export const routes: RouteRecordRaw[] = [
           title: '插件广场',
           icon: Blocks,
         },
-        component: () => import('../views/personalSpace/index.vue'),
+        component: () => import('../views/plugins/index.vue'),
       },
       {
         path: '/open-api',
@@ -61,7 +84,7 @@ export const routes: RouteRecordRaw[] = [
           title: '开放API',
           icon: CodeXml,
         },
-        component: () => import('../views/personalSpace/index.vue'),
+        component: () => import('../views/openAPI/index.vue'),
       },
     ],
   },
