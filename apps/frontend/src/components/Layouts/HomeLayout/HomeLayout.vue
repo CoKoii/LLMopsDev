@@ -4,9 +4,7 @@ import { Layout, LayoutContent, LayoutSider } from 'antdv-next'
 import type { CSSProperties } from 'vue'
 
 const contentStyle: CSSProperties = {
-  textAlign: 'center',
-  lineHeight: '100vh',
-  color: '#fff',
+  height: '100vh',
 }
 
 const siderStyle: CSSProperties = {

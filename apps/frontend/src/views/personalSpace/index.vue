@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import PageToolbar from '@/components/PageToolbar/PageToolbar.vue'
+import ListPage from '@/components/ListPage/ListPage.vue'
 import { useRoute } from 'vue-router'
 const route = useRoute()
 </script>
 
 <template>
-  <PageToolbar>
+  <ListPage>
     <div class="index" style="color: red">{{ route.name }}</div>
-  </PageToolbar>
+  </ListPage>
 </template>
 
 <style scoped lang="scss"></style>
