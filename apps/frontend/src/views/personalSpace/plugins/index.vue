@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { useRoute } from 'vue-router'
-const route = useRoute()
+import ListBox from '@/components/ListBox/ListBox.vue'
 </script>
 
 <template>
-  <div class="index" style="color: red">{{ route.name }}</div>
+  <list-box />
 </template>
 
 <style scoped lang="scss"></style>

@@ -5,6 +5,8 @@ import type { CSSProperties } from 'vue'
 
 const contentStyle: CSSProperties = {
   height: '100vh',
+  minHeight: 0,
+  overflow: 'hidden',
 }
 
 const siderStyle: CSSProperties = {

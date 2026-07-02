@@ -71,10 +71,16 @@ const pageIcon = computed(() => props.icon ?? route.meta.icon)
 .ListPage {
   padding: 2.4rem;
   height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
   .header {
+    flex: none;
     display: flex;
     flex-direction: column;
     gap: 2.4rem;
+    margin-bottom: 2.4rem;
     .logo_btn {
       display: flex;
       align-items: center;

@@ -17,6 +17,15 @@ const listPageConfig = computed(() => layoutRecord.value?.meta.listPage)
     :create-text="listPageConfig?.createText"
     :tabs="listPageConfig?.tabs"
   >
-    <RouterView />
+    <div class="content">
+      <RouterView />
+    </div>
   </ListPage>
 </template>
+<style scoped lang="scss">
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+</style>
