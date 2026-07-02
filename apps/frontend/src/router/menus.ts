@@ -4,10 +4,10 @@ import type { RouteRecordRaw } from 'vue-router'
 export const routes: RouteRecordRaw[] = [
   {
     path: '/',
-    component: () => import('../components/Layouts/HomeLayout/HomeLayout.vue'),
+    component: () => import('../components/Layouts/SidebarLayout/SidebarLayout.vue'),
     children: [
       {
-        path: '/',
+        path: '',
         name: 'home',
         meta: {
           title: '主页',
@@ -16,16 +16,25 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('../views/home/index.vue'),
       },
       {
-        path: '/personal-space',
+        path: 'personal-space',
         name: 'personal-space',
         meta: {
           title: '个人空间',
           icon: User,
+          listPage: {
+            tabs: [
+              { title: 'AI应用', to: { name: 'personal-space-apps' } },
+              { title: '插件', to: { name: 'personal-space-plugins' } },
+              { title: '工作流', to: { name: 'personal-space-workflows' } },
+              { title: '知识库', to: { name: 'personal-space-knowledge' } },
+            ],
+          },
         },
-        redirect: '/personal-space/apps',
+        component: () => import('../components/Layouts/ListPageLayout/ListPageLayout.vue'),
+        redirect: { name: 'personal-space-apps' },
         children: [
           {
-            path: '/personal-space/apps',
+            path: 'apps',
             name: 'personal-space-apps',
             meta: {
               title: 'AI应用',
@@ -33,7 +42,7 @@ export const routes: RouteRecordRaw[] = [
             component: () => import('../views/personalSpace/apps/index.vue'),
           },
           {
-            path: '/personal-space/plugins',
+            path: 'plugins',
             name: 'personal-space-plugins',
             meta: {
               title: '插件',
@@ -41,7 +50,7 @@ export const routes: RouteRecordRaw[] = [
             component: () => import('../views/personalSpace/plugins/index.vue'),
           },
           {
-            path: '/personal-space/workflows',
+            path: 'workflows',
             name: 'personal-space-workflows',
             meta: {
               title: '工作流',
@@ -49,7 +58,7 @@ export const routes: RouteRecordRaw[] = [
             component: () => import('../views/personalSpace/workflows/index.vue'),
           },
           {
-            path: '/personal-space/knowledge',
+            path: 'knowledge',
             name: 'personal-space-knowledge',
             meta: {
               title: '知识库',
@@ -59,26 +68,48 @@ export const routes: RouteRecordRaw[] = [
         ],
       },
       {
-        path: '/apps',
-        name: 'apps',
+        path: 'apps',
         meta: {
           title: '应用广场',
           icon: Astroid,
           tag: '探索',
+          activeMenu: 'apps',
+          listPage: {},
         },
-        component: () => import('../views/apps/index.vue'),
+        component: () => import('../components/Layouts/ListPageLayout/ListPageLayout.vue'),
+        children: [
+          {
+            path: '',
+            name: 'apps',
+            meta: {
+              title: '应用广场',
+            },
+            component: () => import('../views/apps/index.vue'),
+          },
+        ],
       },
       {
-        path: '/plugins',
-        name: 'plugins',
+        path: 'plugins',
         meta: {
           title: '插件广场',
           icon: Blocks,
+          activeMenu: 'plugins',
+          listPage: {},
         },
-        component: () => import('../views/plugins/index.vue'),
+        component: () => import('../components/Layouts/ListPageLayout/ListPageLayout.vue'),
+        children: [
+          {
+            path: '',
+            name: 'plugins',
+            meta: {
+              title: '插件广场',
+            },
+            component: () => import('../views/plugins/index.vue'),
+          },
+        ],
       },
       {
-        path: '/open-api',
+        path: 'open-api',
         name: 'open-api',
         meta: {
           title: '开放API',

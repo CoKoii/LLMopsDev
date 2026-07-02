@@ -2,6 +2,24 @@
 import { routes } from '@/router/menus'
 import { PlusOutlined } from '@antdv-next/icons'
 import { Button } from 'antdv-next'
+import type { RouteRecordRaw } from 'vue-router'
+import { useRoute } from 'vue-router'
+
+const route = useRoute()
+
+function getMenuName(item: RouteRecordRaw) {
+  return item.meta?.activeMenu ?? item.name
+}
+
+function isMenuActive(item: RouteRecordRaw) {
+  const menuName = getMenuName(item)
+
+  if (!menuName) return false
+
+  return route.matched.some(
+    (record) => record.name === menuName || record.meta.activeMenu === menuName,
+  )
+}
 </script>
 
 <template>
@@ -21,7 +39,11 @@ import { Button } from 'antdv-next'
         <div class="menus">
           <div class="menu-item" v-for="(item, index) in routes[0]?.children" :key="index">
             <div class="tag" v-if="item.meta?.tag">{{ item.meta.tag }}</div>
-            <router-link :to="item.path" class="link" active-class="active">
+            <router-link
+              :to="{ name: getMenuName(item) }"
+              class="link"
+              :class="{ active: isMenuActive(item) }"
+            >
               <component :is="item.meta?.icon" v-if="item.meta?.icon" class="icon" />
               <span class="text">{{ item.meta?.title }}</span>
             </router-link>

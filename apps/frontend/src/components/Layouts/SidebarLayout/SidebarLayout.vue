@@ -11,6 +11,7 @@ const siderStyle: CSSProperties = {
   height: '100vh',
 }
 </script>
+
 <template>
   <Layout>
     <LayoutSider width="24rem" :style="siderStyle">

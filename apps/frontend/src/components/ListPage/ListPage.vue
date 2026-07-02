@@ -1,12 +1,27 @@
 <script setup lang="ts">
 import { PlusOutlined, SearchOutlined } from '@antdv-next/icons'
 import { Button, Input } from 'antdv-next'
+import type { Component } from 'vue'
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-const route = useRoute()
+import type { ListPageTab } from './types'
 
-const pageTitle = computed(() => route.meta.title)
-const pageIcon = computed(() => route.meta.icon)
+const props = withDefaults(
+  defineProps<{
+    title?: string
+    icon?: Component
+    createText?: string
+    tabs?: ListPageTab[]
+  }>(),
+  {
+    createText: '创建AI应用',
+    tabs: () => [],
+  },
+)
+
+const route = useRoute()
+const pageTitle = computed(() => props.title ?? route.meta.title)
+const pageIcon = computed(() => props.icon ?? route.meta.icon)
 </script>
 
 <template>
@@ -24,16 +39,20 @@ const pageIcon = computed(() => route.meta.icon)
             <template #icon>
               <PlusOutlined />
             </template>
-            创建AI应用
+            {{ props.createText }}
           </Button>
         </div>
       </div>
       <div class="tab_search">
         <div class="tabs">
-          <router-link :key="1" to="2" class="active"> AI应用 </router-link>
-          <router-link :key="1" to="2"> 插件 </router-link>
-          <router-link :key="1" to="2"> 工作流 </router-link>
-          <router-link :key="1" to="2"> 知识库 </router-link>
+          <router-link
+            v-for="tab in props.tabs"
+            :key="tab.title"
+            :to="tab.to"
+            active-class="active"
+          >
+            {{ tab.title }}
+          </router-link>
         </div>
         <div class="search">
           <Input placeholder="搜索">
@@ -44,6 +63,7 @@ const pageIcon = computed(() => route.meta.icon)
         </div>
       </div>
     </div>
+    <slot />
   </div>
 </template>
 
