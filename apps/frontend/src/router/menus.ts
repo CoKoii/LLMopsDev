@@ -22,7 +22,18 @@ export const routes: RouteRecordRaw[] = [
           title: '个人空间',
           icon: User,
         },
+        redirect: '/personal-space/apps',
         component: () => import('../views/personalSpace/index.vue'),
+        children: [
+          {
+            path: '/personal-space/apps',
+            name: 'personal-space-apps',
+            meta: {
+              title: 'AI应用',
+            },
+            component: () => import('../views/personalSpace/views/apps/index.vue'),
+          },
+        ],
       },
       {
         path: '/apps',
