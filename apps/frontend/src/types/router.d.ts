@@ -1,5 +1,4 @@
 import type { Component } from 'vue'
-import type { ListPageConfig } from '@/components/ListPage/types'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -7,6 +6,5 @@ declare module 'vue-router' {
     icon?: Component
     tag?: string
     activeMenu?: string
-    listPage?: ListPageConfig
   }
 }

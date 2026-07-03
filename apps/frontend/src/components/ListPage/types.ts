@@ -1,11 +1,18 @@
+import type { Component } from 'vue'
 import type { RouteLocationRaw } from 'vue-router'
 
 export interface ListPageTab {
+  key: string
   title: string
-  to: RouteLocationRaw
+  to?: RouteLocationRaw
 }
 
-export interface ListPageConfig {
+export interface ListPageProps {
+  title?: string
+  icon?: Component
   createText?: string
   tabs?: ListPageTab[]
+  searchPlaceholder?: string
+  showSearch?: boolean
+  searchProps?: Record<string, unknown>
 }

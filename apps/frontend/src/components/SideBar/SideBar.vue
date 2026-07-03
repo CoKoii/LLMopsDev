@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { routes } from '@/router/menus'
+import { mainRoutes } from '@/router/menus'
 import { PlusOutlined } from '@antdv-next/icons'
 import { Button } from 'antdv-next'
 import type { RouteRecordRaw } from 'vue-router'
@@ -37,7 +37,7 @@ function isMenuActive(item: RouteRecordRaw) {
           创建AI应用
         </Button>
         <div class="menus">
-          <div class="menu-item" v-for="(item, index) in routes[0]?.children" :key="index">
+          <div class="menu-item" v-for="item in mainRoutes" :key="item.path">
             <div class="tag" v-if="item.meta?.tag">{{ item.meta.tag }}</div>
             <router-link
               :to="{ name: getMenuName(item) }"

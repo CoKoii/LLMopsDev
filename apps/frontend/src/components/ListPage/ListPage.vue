@@ -1,27 +1,36 @@
 <script setup lang="ts">
 import { PlusOutlined, SearchOutlined } from '@antdv-next/icons'
 import { Button, Input } from 'antdv-next'
-import type { Component } from 'vue'
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import type { ListPageTab } from './types'
+import type { ListPageProps, ListPageTab } from './types'
 
-const props = withDefaults(
-  defineProps<{
-    title?: string
-    icon?: Component
-    createText?: string
-    tabs?: ListPageTab[]
-  }>(),
-  {
-    createText: '创建AI应用',
-    tabs: () => [],
-  },
-)
+const props = withDefaults(defineProps<ListPageProps>(), {
+  tabs: () => [],
+  searchPlaceholder: '搜索',
+  showSearch: true,
+  searchProps: () => ({}),
+})
 
+const emit = defineEmits<{
+  create: []
+}>()
+
+const activeTab = defineModel<string>('activeTab')
+const searchValue = defineModel<string>('searchValue')
 const route = useRoute()
 const pageTitle = computed(() => props.title ?? route.meta.title)
 const pageIcon = computed(() => props.icon ?? route.meta.icon)
+const routeTabs = computed(() =>
+  props.tabs.filter((tab): tab is ListPageTab & { to: NonNullable<ListPageTab['to']> } =>
+    Boolean(tab.to),
+  ),
+)
+const actionTabs = computed(() => props.tabs.filter((tab) => !tab.to))
+const mergedSearchProps = computed(() => ({
+  placeholder: props.searchPlaceholder,
+  ...props.searchProps,
+}))
 </script>
 
 <template>
@@ -34,8 +43,8 @@ const pageIcon = computed(() => props.icon ?? route.meta.icon)
           </div>
           <div class="title">{{ pageTitle }}</div>
         </div>
-        <div class="btn">
-          <Button type="primary" class="create-btn" size="large">
+        <div class="btn" v-if="props.createText">
+          <Button type="primary" class="create-btn" size="large" @click="emit('create')">
             <template #icon>
               <PlusOutlined />
             </template>
@@ -44,18 +53,28 @@ const pageIcon = computed(() => props.icon ?? route.meta.icon)
         </div>
       </div>
       <div class="tab_search">
-        <div class="tabs">
+        <div class="tabs" v-if="props.tabs.length">
           <router-link
-            v-for="tab in props.tabs"
-            :key="tab.title"
+            v-for="tab in routeTabs"
+            :key="tab.key"
             :to="tab.to"
             active-class="active"
+            :class="{ active: activeTab === tab.key }"
           >
             {{ tab.title }}
           </router-link>
+          <button
+            v-for="tab in actionTabs"
+            :key="tab.key"
+            type="button"
+            :class="{ active: activeTab === tab.key }"
+            @click="activeTab = tab.key"
+          >
+            {{ tab.title }}
+          </button>
         </div>
-        <div class="search">
-          <Input placeholder="搜索">
+        <div class="search" v-if="props.showSearch">
+          <Input v-model:value="searchValue" v-bind="mergedSearchProps">
             <template #prefix>
               <SearchOutlined />
             </template>
@@ -63,7 +82,9 @@ const pageIcon = computed(() => props.icon ?? route.meta.icon)
         </div>
       </div>
     </div>
-    <slot />
+    <div class="content">
+      <slot />
+    </div>
   </div>
 </template>
 
@@ -85,6 +106,7 @@ const pageIcon = computed(() => props.icon ?? route.meta.icon)
       display: flex;
       align-items: center;
       width: 100%;
+      min-height: 4rem;
       justify-content: space-between;
       .logo {
         display: flex;
@@ -118,19 +140,29 @@ const pageIcon = computed(() => props.icon ?? route.meta.icon)
         display: flex;
         align-items: center;
         gap: 0.8rem;
-        a {
+        a,
+        button {
           line-height: 3.2rem;
           height: 3.2rem;
           padding: 0 1.4rem;
           font-size: 1.4rem;
           color: var(--text-color);
           border-radius: 0.8rem;
+          border: 0;
+          background: transparent;
+          cursor: pointer;
+          font-family: inherit;
         }
         .active {
           background-color: var(--border-color);
         }
       }
     }
+  }
+  .content {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
   }
 }
 </style>
