@@ -18,6 +18,7 @@ export const mainRoutes: RouteRecordRaw[] = [
       title: '个人空间',
       icon: User,
     },
+    component: () => import('../views/personalSpace/index.vue'),
     redirect: { name: 'personal-space-apps' },
     children: [
       {
@@ -83,6 +84,25 @@ export const mainRoutes: RouteRecordRaw[] = [
       icon: CodeXml,
     },
     component: () => import('../views/openAPI/index.vue'),
+    redirect: { name: 'open-api-quick-start' },
+    children: [
+      {
+        path: 'quick-start',
+        name: 'open-api-quick-start',
+        meta: {
+          title: '快速开始',
+        },
+        component: () => import('../views/openAPI/quickStart/index.vue'),
+      },
+      {
+        path: 'keys',
+        name: 'open-api-keys',
+        meta: {
+          title: '秘钥',
+        },
+        component: () => import('../views/openAPI/keys/index.vue'),
+      },
+    ],
   },
 ]
 
