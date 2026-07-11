@@ -6,7 +6,10 @@ packages:
 
 allowBuilds:
   '@parcel/watcher': true
+  '@swc/core': false
+  argon2: false
   core-js: false
+  unrs-resolver: false
 
 catalog:
   "@eslint/js": "^10.0.1"
