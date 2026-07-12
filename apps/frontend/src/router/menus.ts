@@ -112,4 +112,12 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../components/Layouts/SidebarLayout/SidebarLayout.vue'),
     children: mainRoutes,
   },
+  {
+    path: '/login',
+    name: 'login',
+    meta: {
+      title: '登录',
+    },
+    component: () => import('../views/login/index.vue'),
+  },
 ]
