@@ -125,13 +125,14 @@ function submit() {
 }
 
 .welcome-title {
-  margin: 0 0 1.2rem;
+  margin: 0;
   font-size: 2.8rem;
   font-weight: 700;
   color: var(--font-active-color);
 }
 
 .welcome-desc {
+  margin-top: 0.8rem;
   font-size: 1.4rem;
   color: var(--font-light-color);
 }
