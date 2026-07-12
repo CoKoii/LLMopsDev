@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const request = axios.create({
-  baseURL: 'https://api.example.com',
+  baseURL: 'http://localhost:3000/api', // 设置基础URL
   timeout: 5000,
   headers: { 'X-Custom-Header': 'foobar' },
 })
@@ -31,3 +31,5 @@ request.interceptors.response.use(
     return Promise.reject(error)
   },
 )
+
+export default request
