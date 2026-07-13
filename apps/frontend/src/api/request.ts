@@ -3,7 +3,6 @@ import axios from 'axios'
 const request = axios.create({
   baseURL: 'http://localhost:3000/api', // 设置基础URL
   timeout: 5000,
-  headers: { 'X-Custom-Header': 'foobar' },
 })
 
 // 添加请求拦截器
@@ -23,7 +22,7 @@ request.interceptors.response.use(
   function (response) {
     // 状态码在 2xx 范围内的响应会触发此函数
     // 处理响应数据
-    return response
+    return response.data.data
   },
   function (error) {
     // 状态码不在 2xx 范围内的响应会触发此函数

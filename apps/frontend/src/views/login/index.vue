@@ -2,15 +2,19 @@
 import { LockKeyhole, UserRound } from '@lucide/vue'
 import { Button, Card, Form, FormItem, Input, InputPassword } from 'antdv-next'
 import { reactive } from 'vue'
+import { useAuthStore } from '@/stores/auth'
 
+const authStore = useAuthStore()
 const formModel = reactive({
   username: '',
   password: '',
 })
 
 function submit() {
-  const { username, password } = formModel
-  console.log('submit', { username, password })
+  authStore.authLogin({
+    username: formModel.username,
+    password: formModel.password,
+  })
 }
 </script>
 
