@@ -5,8 +5,13 @@ export type LoginParams = {
   password: string
 }
 
+type LoginResponse = {
+  accessToken: string
+  refreshToken: string
+}
+
 // 登录接口
-export const loginApi = async (params: LoginParams) => {
+export const loginApi = async (params: LoginParams): Promise<LoginResponse> => {
   return request.post('/auth/login', params)
 }
 

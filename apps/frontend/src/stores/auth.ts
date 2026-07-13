@@ -7,11 +7,13 @@ export const useAuthStore = defineStore(
   () => {
     const accessToken = ref('')
     const refreshToken = ref('')
-
     const authLogin = async (params: LoginParams) => {
+      // 先进行登录
       const res = await loginApi(params)
+      // 登录成功后，保存 accessToken 和 refreshToken
       accessToken.value = res.accessToken
       refreshToken.value = res.refreshToken
+      //
       message.success('登录成功')
     }
 
