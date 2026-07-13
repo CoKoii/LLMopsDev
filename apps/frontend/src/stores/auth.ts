@@ -1,25 +1,36 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
-import { loginApi, type LoginParams } from '../api/core/auth'
+import { loginApi, getUserInfoApi, type LoginParams } from '../api/core/auth'
 import { message } from 'antdv-next'
 export const useAuthStore = defineStore(
   'auth',
   () => {
-    const accessToken = ref('')
-    const refreshToken = ref('')
+    const accessToken = ref()
+    const refreshToken = ref()
+    const userInfo = ref()
+    // 登录函数
     const authLogin = async (params: LoginParams) => {
       // 先进行登录
-      const res = await loginApi(params)
+      const loginRes = await loginApi(params)
       // 登录成功后，保存 accessToken 和 refreshToken
-      accessToken.value = res.accessToken
-      refreshToken.value = res.refreshToken
-      //
+      accessToken.value = loginRes.accessToken
+      refreshToken.value = loginRes.refreshToken
+      // 用accessToken获取用户信息
+      const userInfoRes = await getUserInfoApi()
+      userInfo.value = userInfoRes
       message.success('登录成功')
     }
+    // 获取用户信息函数
+    const getUserInfo = async () => {
+      const userInfoRes = await getUserInfoApi()
+      userInfo.value = userInfoRes
+    }
 
-    return { accessToken, refreshToken, authLogin }
+    return { accessToken, refreshToken, userInfo, authLogin, getUserInfo }
   },
   {
-    persist: true,
+    persist: {
+      pick: ['accessToken', 'refreshToken'],
+    },
   },
 )
