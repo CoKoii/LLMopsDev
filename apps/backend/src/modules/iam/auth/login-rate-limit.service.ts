@@ -2,9 +2,9 @@ import { HttpException, HttpStatus, Inject, Injectable } from "@nestjs/common";
 import type { Redis } from "ioredis";
 import { REDIS } from "../../../common/cache/redis.token";
 
-const MAX_LOGIN_FAILURES = 5;
+const MAX_LOGIN_FAILURES = 10;
 const FAILURE_WINDOW_SECONDS = 15 * 60;
-const LOCK_SECONDS = 15 * 60;
+const LOCK_SECONDS = 5 * 60;
 
 const normalizeKeyPart = (value: string) =>
   value
