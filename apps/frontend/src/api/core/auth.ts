@@ -26,5 +26,10 @@ export type RefreshResponse = {
 }
 
 export const refreshAccessTokenApi = async (): Promise<RefreshResponse> => {
-  return request.post('/auth/refresh')
+  const auth = JSON.parse(localStorage.getItem('auth') || '{}')
+  return request.post('/auth/refresh', undefined, {
+    headers: {
+      Authorization: `Bearer ${auth.refreshToken}`,
+    },
+  })
 }

@@ -1,6 +1,8 @@
 import axios from 'axios'
 import { message } from 'antdv-next'
 import router from '@/router'
+import { getAccessToken } from '@/utils/auth'
+
 const request = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL,
   timeout: 10000,
@@ -10,7 +12,11 @@ const request = axios.create({
 request.interceptors.request.use(
   function (config) {
     // 在请求发送之前执行某些操作
-    config.headers.Authorization = `Bearer ${JSON.parse(localStorage.getItem('auth')!)?.accessToken}`
+    const token = getAccessToken()
+
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
     return config
   },
   function (error) {

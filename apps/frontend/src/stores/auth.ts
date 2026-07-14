@@ -2,18 +2,18 @@ import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { loginApi, getUserInfoApi, type LoginParams } from '../api/core/auth'
 import { message } from 'antdv-next'
+import { refreshAccessTokenApi } from '../api/core/auth'
 export const useAuthStore = defineStore(
   'auth',
   () => {
     const accessToken = ref()
     const refreshToken = ref()
     const userInfo = ref()
-
+    // 获取用户信息函数
     const getUserInfo = async () => {
       if (userInfo.value) {
         return userInfo.value
       }
-
       const userInfoRes = await getUserInfoApi()
       userInfo.value = userInfoRes
       return userInfoRes
@@ -32,7 +32,14 @@ export const useAuthStore = defineStore(
       message.success('登录成功')
     }
 
-    return { accessToken, refreshToken, userInfo, getUserInfo, authLogin }
+    // 刷新accessToken函数
+    const refreshAccessToken = async () => {
+      const refreshRes = await refreshAccessTokenApi()
+      accessToken.value = refreshRes.accessToken
+      refreshToken.value = refreshRes.refreshToken
+    }
+
+    return { accessToken, refreshToken, userInfo, getUserInfo, authLogin, refreshAccessToken }
   },
   {
     persist: {
