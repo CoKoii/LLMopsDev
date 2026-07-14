@@ -8,6 +8,17 @@ export const useAuthStore = defineStore(
     const accessToken = ref()
     const refreshToken = ref()
     const userInfo = ref()
+
+    const getUserInfo = async () => {
+      if (userInfo.value) {
+        return userInfo.value
+      }
+
+      const userInfoRes = await getUserInfoApi()
+      userInfo.value = userInfoRes
+      return userInfoRes
+    }
+
     // 登录函数
     const authLogin = async (params: LoginParams) => {
       // 先进行登录
@@ -21,7 +32,7 @@ export const useAuthStore = defineStore(
       message.success('登录成功')
     }
 
-    return { accessToken, refreshToken, userInfo, authLogin }
+    return { accessToken, refreshToken, userInfo, getUserInfo, authLogin }
   },
   {
     persist: {
