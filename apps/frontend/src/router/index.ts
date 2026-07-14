@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { routes } from './menus'
 import { useAuthStore } from '../stores/auth'
+import { getUserInfoApi } from '../api/core/auth'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -19,7 +20,7 @@ router.beforeEach(async (to) => {
     }
 
     try {
-      await authStore.getUserInfo()
+      await getUserInfoApi()
       return true
     } catch {
       return '/login'

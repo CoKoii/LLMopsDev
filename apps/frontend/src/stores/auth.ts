@@ -20,13 +20,8 @@ export const useAuthStore = defineStore(
       userInfo.value = userInfoRes
       message.success('登录成功')
     }
-    // 获取用户信息函数
-    const getUserInfo = async () => {
-      const userInfoRes = await getUserInfoApi()
-      userInfo.value = userInfoRes
-    }
 
-    return { accessToken, refreshToken, userInfo, authLogin, getUserInfo }
+    return { accessToken, refreshToken, userInfo, authLogin }
   },
   {
     persist: {
