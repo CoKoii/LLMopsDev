@@ -1,12 +1,4 @@
-import {
-  Body,
-  Controller,
-  HttpCode,
-  HttpStatus,
-  Post,
-  Req,
-  UseGuards,
-} from "@nestjs/common";
+import { Body, Controller, Post, Req, UseGuards } from "@nestjs/common";
 import type { Request } from "express";
 import {
   type AuthUser,
@@ -35,7 +27,6 @@ export class AuthController {
   // -------------------------
   // 登录
   @Public()
-  @HttpCode(HttpStatus.OK)
   @Post("login")
   login(@Body() dto: LoginDto, @Req() request: Request): Promise<AuthTokens> {
     return this.authService.login(dto, createAuthRequestContext(request));
@@ -58,7 +49,6 @@ export class AuthController {
   // 刷新令牌
   @Public()
   @UseGuards(JwtRefreshGuard)
-  @HttpCode(HttpStatus.OK)
   @Post("refresh")
   refresh(
     @CurrentUser() user: RefreshTokenUser,
@@ -70,7 +60,6 @@ export class AuthController {
 
   // -------------------------
   // 退出登录
-  @HttpCode(HttpStatus.OK)
   @Post("logout")
   logout(@CurrentUser() user: AuthUser): Promise<{ success: true }> {
     return this.authService.logout(user);
@@ -79,7 +68,6 @@ export class AuthController {
 
   // -------------------------
   // 退出全部登录会话
-  @HttpCode(HttpStatus.OK)
   @Post("logout-all")
   logoutAll(@CurrentUser() user: AuthUser): Promise<{ success: true }> {
     return this.authService.logoutAll(user);

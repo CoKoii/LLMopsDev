@@ -1,4 +1,4 @@
-import { ForbiddenException, Inject, Injectable } from "@nestjs/common";
+import { HttpException, HttpStatus, Inject, Injectable } from "@nestjs/common";
 import type { Redis } from "ioredis";
 import { REDIS } from "../../../common/cache/redis.token";
 
@@ -27,7 +27,10 @@ export class LoginRateLimitService {
   async assertAllowed(ip: string, username: string): Promise<void> {
     const ttl = await this.redis.ttl(this.lockKey(ip, username));
     if (ttl > 0) {
-      throw new ForbiddenException(`登录失败次数过多，请${ttl}秒后再试`);
+      throw new HttpException(
+        `登录失败次数过多，请${ttl}秒后再试`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
   }
 

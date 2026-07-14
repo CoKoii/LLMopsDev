@@ -3,8 +3,6 @@ import {
   Controller,
   Delete,
   Get,
-  HttpCode,
-  HttpStatus,
   Param,
   ParseIntPipe,
   Post,
@@ -31,7 +29,6 @@ export class FilesController {
 
   // -------------------------
   // 确认上传完成
-  @HttpCode(HttpStatus.OK)
   @Post(":id/complete")
   complete(
     @Param("id", ParseIntPipe) id: number,

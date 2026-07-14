@@ -9,7 +9,8 @@ import {
   getDatabaseEnvironment,
   getDatabaseEnvironmentFromProcess,
 } from "../config/env";
-import { getDatabaseDriver } from "./database-driver.registry";
+import { createMysqlConnectionOptions } from "./drivers/mysql/config";
+import { createPostgresConnectionOptions } from "./drivers/postgres/config";
 
 const isTypeScriptRuntime = __filename.endsWith(".ts");
 const runtimeExtension = isTypeScriptRuntime ? "ts" : "js";
@@ -22,12 +23,20 @@ const migrations = [join(runtimeRoot, "migrations", `*.${runtimeExtension}`)];
 const createDatabaseOptions = (
   databaseEnvironment: DatabaseEnvironment,
   nodeEnv: string,
-): DataSourceOptions =>
-  getDatabaseDriver(databaseEnvironment.type).createConnectionOptions({
+): DataSourceOptions => {
+  const context = {
     databaseEnvironment,
     entities,
     nodeEnv,
-  });
+  };
+
+  switch (databaseEnvironment.type) {
+    case "mysql":
+      return createMysqlConnectionOptions(context);
+    case "postgres":
+      return createPostgresConnectionOptions(context);
+  }
+};
 
 export const createTypeOrmOptions = (
   configService: ConfigService,

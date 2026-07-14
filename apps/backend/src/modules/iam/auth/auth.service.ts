@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  InternalServerErrorException,
   UnauthorizedException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -20,7 +21,6 @@ import {
   type RefreshTokenUser,
 } from "../../../common/auth/auth-user";
 import { getAuthEnvironment } from "../../../common/config/env";
-import { DatabaseErrorMapper } from "../../../common/database/database-error.mapper";
 import { User, UserStatus } from "../users/user.entity";
 import type { AuthRequestContext, AuthTokens } from "./auth.types";
 import { LoginDto } from "./dto/login.dto";
@@ -47,7 +47,6 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly permissionCache: AuthPermissionCacheService,
     private readonly loginRateLimit: LoginRateLimitService,
-    private readonly databaseErrorMapper: DatabaseErrorMapper,
   ) {}
 
   // --------------------------------------------------------------------------------------------------
@@ -143,14 +142,14 @@ export class AuthService {
   // --------------------------------------------------------------------------------------------------
   // 抛出登录凭证无效异常
   private throwInvalidCredentials(): never {
-    throw new ForbiddenException("用户名或密码错误");
+    throw new UnauthorizedException("用户名或密码错误");
   }
   // --------------------------------------------------------------------------------------------------
 
   // --------------------------------------------------------------------------------------------------
   // 抛出刷新令牌无效异常
   private throwInvalidRefreshToken(): never {
-    throw new ForbiddenException("刷新令牌无效或已过期");
+    throw new UnauthorizedException("刷新令牌无效或已过期");
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -163,7 +162,16 @@ export class AuthService {
 
   // --------------------------------------------------------------------------------------------------
   // 校验用户状态
-  private ensureUserIsActive(user: Pick<User, "status">): void {
+  private ensureAuthenticatedUserIsActive(user: Pick<User, "status">): void {
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new ForbiddenException("账户已被禁用");
+    }
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 校验登录用户状态
+  private ensureLoginUserIsActive(user: Pick<User, "status">): void {
     if (user.status !== UserStatus.ACTIVE) {
       throw new ForbiddenException("账户已被禁用");
     }
@@ -175,12 +183,12 @@ export class AuthService {
   private extractTokenExpiration(token: string): Date {
     const payload: unknown = this.jwtService.decode(token);
     if (!payload || typeof payload !== "object" || payload === null) {
-      throw new ForbiddenException("刷新令牌生成失败");
+      throw new InternalServerErrorException("刷新令牌生成失败");
     }
 
     const exp = (payload as { exp?: unknown }).exp;
     if (typeof exp !== "number") {
-      throw new ForbiddenException("刷新令牌生成失败");
+      throw new InternalServerErrorException("刷新令牌生成失败");
     }
 
     return new Date(exp * 1000);
@@ -389,7 +397,7 @@ export class AuthService {
     if (!(await argon2.verify(user.password, password))) {
       this.throwInvalidCredentials();
     }
-    this.ensureUserIsActive(user);
+    this.ensureLoginUserIsActive(user);
     return user;
   }
   // --------------------------------------------------------------------------------------------------
@@ -408,7 +416,7 @@ export class AuthService {
     if (session.expiresAt.getTime() <= Date.now()) {
       this.throwInvalidRefreshToken();
     }
-    this.ensureUserIsActive(session.user);
+    this.ensureAuthenticatedUserIsActive(session.user);
     if (!(await argon2.verify(session.refreshTokenHash, refreshToken))) {
       this.throwInvalidRefreshToken();
     }
@@ -434,7 +442,7 @@ export class AuthService {
       this.throwInvalidAccessToken();
     }
 
-    this.ensureUserIsActive(session.user);
+    this.ensureAuthenticatedUserIsActive(session.user);
 
     await this.touchSessionIfStale(session);
 
@@ -472,18 +480,13 @@ export class AuthService {
   // --------------------------------------------------------------------------------------------------
   // 创建用户
   private async createUser(dto: RegisterDto): Promise<User> {
-    try {
-      return await this.users.save(
-        this.users.create({
-          username: dto.username,
-          password: await argon2.hash(dto.password),
-          profile: { nickname: dto.username },
-        }),
-      );
-    } catch (error) {
-      this.databaseErrorMapper.rethrow(error, { unique: "当前用户名已被注册" });
-      throw error;
-    }
+    return this.users.save(
+      this.users.create({
+        username: dto.username,
+        password: await argon2.hash(dto.password),
+        profile: { nickname: dto.username },
+      }),
+    );
   }
   // --------------------------------------------------------------------------------------------------
 

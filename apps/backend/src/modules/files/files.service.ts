@@ -1,9 +1,10 @@
 import {
-  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
+  PayloadTooLargeException,
 } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { InjectRepository } from "@nestjs/typeorm";
@@ -69,7 +70,7 @@ export class FilesService {
 
   async createUploadIntent(dto: CreateUploadIntentDto, userId: number) {
     if (dto.size > this.ossService.uploadMaxSize) {
-      throw new BadRequestException("文件大小超过限制");
+      throw new PayloadTooLargeException("文件大小超过限制");
     }
 
     const objectKey = createObjectKey(userId, dto.filename);
@@ -94,15 +95,15 @@ export class FilesService {
     const file = await this.findOwnedFile(id, userId);
 
     if (file.status !== FILE_STATUS.PENDING) {
-      throw new BadRequestException("文件状态不允许完成上传");
+      throw new ConflictException("文件状态不允许完成上传");
     }
 
     const object = await this.ossService.headObject(file.objectKey);
     if (object.size !== file.size) {
-      throw new BadRequestException("文件大小与上传意图不一致");
+      throw new ConflictException("文件大小与上传意图不一致");
     }
     if (object.contentType !== file.contentType) {
-      throw new BadRequestException("文件类型与上传意图不一致");
+      throw new ConflictException("文件类型与上传意图不一致");
     }
 
     file.status = FILE_STATUS.UPLOADED;
@@ -129,7 +130,7 @@ export class FilesService {
     }
 
     if (file.status !== FILE_STATUS.UPLOADED) {
-      throw new BadRequestException("文件尚未上传完成");
+      throw new ConflictException("文件尚未上传完成");
     }
 
     const usedObjectKey = createUsedObjectKey(file.objectKey);

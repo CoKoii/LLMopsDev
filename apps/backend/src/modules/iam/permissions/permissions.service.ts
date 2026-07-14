@@ -6,7 +6,6 @@ import {
   type PageResult,
   resolvePageQuery,
 } from "../../../common/http/page-query.dto";
-import { DatabaseErrorMapper } from "../../../common/database/database-error.mapper";
 import { AuthPermissionCacheService } from "../auth/auth-permission-cache.service";
 import { CreatePermissionDto } from "./dto/create-permission.dto";
 import type { QueryPermissionsDto } from "./dto/query-permissions.dto";
@@ -19,21 +18,14 @@ export class PermissionsService {
     @InjectRepository(Permission)
     private readonly permissionRepository: Repository<Permission>,
     private readonly permissionCache: AuthPermissionCacheService,
-    private readonly databaseErrorMapper: DatabaseErrorMapper,
   ) {}
 
   // --------------------------------------------------------------------------------------------------
   // 创建权限
   async create(createPermissionDto: CreatePermissionDto) {
-    try {
-      await this.permissionRepository.save(createPermissionDto);
-      await this.permissionCache.invalidateAll();
-      return { success: true };
-    } catch (error) {
-      this.databaseErrorMapper.rethrow(error, {
-        unique: `权限码 "${createPermissionDto.code}" 已存在`,
-      });
-    }
+    await this.permissionRepository.save(createPermissionDto);
+    await this.permissionCache.invalidateAll();
+    return { success: true };
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -62,23 +54,14 @@ export class PermissionsService {
   // --------------------------------------------------------------------------------------------------
   // 更新权限
   async update(id: number, updatePermissionDto: UpdatePermissionDto) {
-    try {
-      const permission = await this.permissionRepository.preload({
-        id,
-        ...updatePermissionDto,
-      });
-      if (!permission) throw new NotFoundException("权限不存在");
-      await this.permissionRepository.save(permission);
-      await this.permissionCache.invalidateAll();
-      return { success: true };
-    } catch (error) {
-      const duplicateMessage = updatePermissionDto.code
-        ? `权限码 "${updatePermissionDto.code}" 已存在`
-        : "权限码已存在";
-      this.databaseErrorMapper.rethrow(error, {
-        unique: duplicateMessage,
-      });
-    }
+    const permission = await this.permissionRepository.preload({
+      id,
+      ...updatePermissionDto,
+    });
+    if (!permission) throw new NotFoundException("权限不存在");
+    await this.permissionRepository.save(permission);
+    await this.permissionCache.invalidateAll();
+    return { success: true };
   }
   // --------------------------------------------------------------------------------------------------
 

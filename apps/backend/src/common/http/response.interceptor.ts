@@ -9,6 +9,8 @@ import { Observable, map } from "rxjs";
 import type { RequestWithRequestId } from "./request-id.middleware";
 import { SKIP_RESPONSE_WRAP_KEY } from "./skip-response-wrap.decorator";
 
+const SUCCESS_CODE = 0;
+
 @Injectable()
 export class ResponseInterceptor implements NestInterceptor {
   constructor(private readonly reflector: Reflector) {}
@@ -21,16 +23,17 @@ export class ResponseInterceptor implements NestInterceptor {
       SKIP_RESPONSE_WRAP_KEY,
       [context.getHandler(), context.getClass()],
     );
+    const http = context.switchToHttp();
 
     if (skipResponseWrap) {
       return next.handle();
     }
 
-    const request = context.switchToHttp().getRequest<RequestWithRequestId>();
+    const request = http.getRequest<RequestWithRequestId>();
 
     return next.handle().pipe(
       map((data) => ({
-        code: 0,
+        code: SUCCESS_CODE,
         data,
         requestId: request.requestId,
         timestamp: new Date().toISOString(),

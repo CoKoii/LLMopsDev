@@ -6,7 +6,6 @@ import {
   type PageResult,
   resolvePageQuery,
 } from "../../../common/http/page-query.dto";
-import { DatabaseErrorMapper } from "../../../common/database/database-error.mapper";
 import { AuthPermissionCacheService } from "../auth/auth-permission-cache.service";
 import { CreateRoleDto } from "./dto/create-role.dto";
 import { QueryRolesDto } from "./dto/query-roles.dto";
@@ -19,7 +18,6 @@ export class RolesService {
     @InjectRepository(Role)
     private readonly roleRepository: Repository<Role>,
     private readonly permissionCache: AuthPermissionCacheService,
-    private readonly databaseErrorMapper: DatabaseErrorMapper,
   ) {}
 
   // --------------------------------------------------------------------------------------------------
@@ -50,18 +48,11 @@ export class RolesService {
   // --------------------------------------------------------------------------------------------------
   // 创建角色
   async create(createRoleDto: CreateRoleDto) {
-    try {
-      const role = await this.roleRepository.save(
-        this.roleRepository.create(this.buildRolePayload(createRoleDto)),
-      );
-      await this.permissionCache.invalidateByRoleIds([role.id]);
-      return { success: true };
-    } catch (error) {
-      this.databaseErrorMapper.rethrow(error, {
-        unique: "角色名称已存在",
-        foreignKeyConstraint: "权限不存在",
-      });
-    }
+    const role = await this.roleRepository.save(
+      this.roleRepository.create(this.buildRolePayload(createRoleDto)),
+    );
+    await this.permissionCache.invalidateByRoleIds([role.id]);
+    return { success: true };
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -108,21 +99,14 @@ export class RolesService {
   // --------------------------------------------------------------------------------------------------
   // 更新角色
   async update(id: number, updateRoleDto: UpdateRoleDto) {
-    try {
-      const role = await this.roleRepository.preload({
-        id,
-        ...this.buildRolePayload(updateRoleDto),
-      });
-      if (!role) throw new NotFoundException("角色不存在");
-      await this.roleRepository.save(role);
-      await this.permissionCache.invalidateByRoleIds([id]);
-      return { success: true };
-    } catch (error) {
-      this.databaseErrorMapper.rethrow(error, {
-        unique: "角色名称已存在",
-        foreignKeyConstraint: "权限不存在",
-      });
-    }
+    const role = await this.roleRepository.preload({
+      id,
+      ...this.buildRolePayload(updateRoleDto),
+    });
+    if (!role) throw new NotFoundException("角色不存在");
+    await this.roleRepository.save(role);
+    await this.permissionCache.invalidateByRoleIds([id]);
+    return { success: true };
   }
   // --------------------------------------------------------------------------------------------------
 }

@@ -521,7 +521,6 @@ hello() {
 
 ```text
 src/common/http/exception.filter.ts
-src/common/http/exception.util.ts
 ```
 
 所有异常会被统一处理。
@@ -550,7 +549,7 @@ throw new NotFoundException("用户不存在");
 - requestId。
 - IP、params、query、body。
 - 当前登录用户。
-- 异常名和堆栈。
+- 异常名，服务端错误会额外记录堆栈。
 
 这些敏感字段会自动脱敏：
 

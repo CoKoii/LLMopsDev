@@ -6,7 +6,6 @@ import {
   type PageResult,
   resolvePageQuery,
 } from "../../../common/http/page-query.dto";
-import { DatabaseErrorMapper } from "../../../common/database/database-error.mapper";
 import { Role } from "../roles/role.entity";
 import { AuthPermissionCacheService } from "../auth/auth-permission-cache.service";
 import { QueryUsersDto } from "./dto/query-users.dto";
@@ -18,7 +17,6 @@ export class UsersService {
   constructor(
     @InjectRepository(User) private readonly userRepository: Repository<User>,
     private readonly permissionCache: AuthPermissionCacheService,
-    private readonly databaseErrorMapper: DatabaseErrorMapper,
   ) {}
 
   // --------------------------------------------------------------------------------------------------
@@ -77,7 +75,7 @@ export class UsersService {
       user.profile = {
         ...(user.profile ?? { nickname: user.username }),
         ...profile,
-      } as User["profile"];
+      };
     }
     Object.assign(user, rest);
     if (roles !== undefined) {
@@ -85,14 +83,8 @@ export class UsersService {
         (roleId) => ({ id: roleId }) as Role,
       );
     }
-    try {
-      await this.userRepository.save(user);
-      await this.permissionCache.invalidateUser(id);
-    } catch (error) {
-      this.databaseErrorMapper.rethrow(error, {
-        foreignKeyConstraint: "角色不存在",
-      });
-    }
+    await this.userRepository.save(user);
+    await this.permissionCache.invalidateUser(id);
     return { success: true };
   }
   // --------------------------------------------------------------------------------------------------
