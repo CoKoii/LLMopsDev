@@ -14,19 +14,8 @@ router.beforeEach(async (to) => {
     return true
   }
 
-  if (authStore.accessToken) {
-    if (authStore.userInfo) {
-      return true
-    }
-
-    try {
-      await getUserInfoApi()
-      return true
-    } catch {
-      return '/login'
-    }
+  if (authStore.userInfo || (await getUserInfoApi())) {
+    return true
   }
-
-  return '/login'
 })
 export default router

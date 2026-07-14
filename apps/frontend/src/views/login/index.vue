@@ -1,20 +1,29 @@
 <script setup lang="ts">
 import { LockKeyhole, UserRound } from '@lucide/vue'
 import { Button, Card, Form, FormItem, Input, InputPassword } from 'antdv-next'
-import { reactive } from 'vue'
+import { ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { useRouter } from 'vue-router'
 
+const loading = ref(false)
 const authStore = useAuthStore()
-const formModel = reactive({
+const formModel = ref({
   username: '',
   password: '',
 })
+const router = useRouter()
 
-function submit() {
-  authStore.authLogin({
-    username: formModel.username,
-    password: formModel.password,
-  })
+const submit = async () => {
+  loading.value = true
+  try {
+    await authStore.authLogin({
+      username: formModel.value.username,
+      password: formModel.value.password,
+    })
+    router.push('/')
+  } finally {
+    loading.value = false
+  }
 }
 </script>
 
@@ -71,7 +80,9 @@ function submit() {
         </FormItem>
 
         <FormItem class="submit-item">
-          <Button class="login-button" type="primary" html-type="submit" block>登录</Button>
+          <Button class="login-button" type="primary" html-type="submit" block :loading="loading">
+            登录
+          </Button>
         </FormItem>
       </Form>
 
