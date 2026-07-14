@@ -27,22 +27,9 @@ request.interceptors.response.use(
     return response.data.data
   },
   function (error) {
-    switch (error.response?.status) {
-      case 401:
-        message.warning('您的登录状态已过期，请重新登录以继续。')
-        router.push('/login')
-        break
-      case 403:
-        message.warning('您没有权限访问该资源。')
-        break
-      case 404:
-        message.warning('请求的资源不存在。')
-        break
-      case 500:
-        message.error('服务器内部错误，请稍后再试')
-        break
-      default:
-        message.error(`请求失败: ${error.message}`)
+    message.error(error.response?.data?.message)
+    if (error.response?.status === 401 || error.response?.status === 403) {
+      router.push({ name: 'login' })
     }
 
     // 处理响应错误
