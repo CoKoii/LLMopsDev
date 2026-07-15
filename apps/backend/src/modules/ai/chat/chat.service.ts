@@ -4,10 +4,10 @@ import { ConfigService } from "@nestjs/config";
 import { createAgent, tool } from "langchain";
 import { Readable } from "node:stream";
 import * as z from "zod";
-import { getAiEnvironment } from "../../common/config/env";
+import { getAiEnvironment } from "../../../common/config/env";
 @Injectable()
-export class AiService {
-  private readonly logger = new Logger(AiService.name);
+export class ChatService {
+  private readonly logger = new Logger(ChatService.name);
   private readonly chatModel: ChatOpenAI;
   private readonly getWeather = tool(
     (input) => `${input.city} 的天气一直是晴天！`,
