@@ -1,34 +1,66 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
-import { AppService } from './app.service';
-import { CreateAppDto } from './dto/create-app.dto';
-import { UpdateAppDto } from './dto/update-app.dto';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseIntPipe,
+  Post,
+  Put,
+  Query,
+} from "@nestjs/common";
+import { type AuthUser } from "../../../common/auth/auth-user";
+import { CurrentUser } from "../../../common/auth/current-user.decorator";
+import { AppService } from "./app.service";
+import { CreateAppDto } from "./dto/create-app.dto";
+import { QueryAppsDto } from "./dto/query-apps.dto";
+import { UpdateAppDto } from "./dto/update-app.dto";
 
-@Controller('app')
+@Controller("ai/apps")
 export class AppController {
   constructor(private readonly appService: AppService) {}
 
+  // -------------------------
+  // 创建AI应用
   @Post()
-  create(@Body() createAppDto: CreateAppDto) {
-    return this.appService.create(createAppDto);
+  create(@Body() createAppDto: CreateAppDto, @CurrentUser() user: AuthUser) {
+    return this.appService.create(createAppDto, user.userId);
   }
+  // -------------------------
 
+  // -------------------------
+  // 获取AI应用列表
   @Get()
-  findAll() {
-    return this.appService.findAll();
+  list(@Query() query: QueryAppsDto) {
+    return this.appService.list(query);
   }
+  // -------------------------
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.appService.findOne(+id);
+  // -------------------------
+  // 获取AI应用详情
+  @Get(":id")
+  findOne(@Param("id", ParseIntPipe) id: number) {
+    return this.appService.findOne(id);
   }
+  // -------------------------
 
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updateAppDto: UpdateAppDto) {
-    return this.appService.update(+id, updateAppDto);
+  // -------------------------
+  // 更新AI应用
+  @Put(":id")
+  update(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() updateAppDto: UpdateAppDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.appService.update(id, updateAppDto, user.userId);
   }
+  // -------------------------
 
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.appService.remove(+id);
+  // -------------------------
+  // 删除AI应用
+  @Delete(":id")
+  remove(@Param("id", ParseIntPipe) id: number) {
+    return this.appService.remove(id);
   }
+  // -------------------------
 }

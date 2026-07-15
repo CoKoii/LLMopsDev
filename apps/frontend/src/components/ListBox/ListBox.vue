@@ -1,39 +1,93 @@
 <script setup lang="ts">
 import { Ellipsis } from '@lucide/vue'
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ListBoxItem } from './types'
 
-const defaultItems: ListBoxItem[] = Array.from({ length: 17 }, (_, index) => ({
-  id: index + 1,
-  title: '电商智能客服',
-  description: '月之暗面 · Moonshot (128k)',
-  content:
-    '## 任务 您的主要使命是通过“DALLE”工具赋能用户，激发他们的创造力。通过询问“您希望设计传达什么信息？”或“这个设计是为了什么场合？”等问题，引导用户分享他们想要创造的设计核心。',
-  image: 'https://q1.qlogo.cn/g?b=qq&nk=2655252336&s=100',
-  authorImage: 'https://q1.qlogo.cn/g?b=qq&nk=2655257336&s=100',
-  footer: 'CaoKai · 最近编辑 05-15 16:05',
-}))
-
 const props = defineProps<{
-  items?: ListBoxItem[]
+  items: ListBoxItem[]
+  loading?: boolean
 }>()
 
-const listItems = computed(() => props.items ?? defaultItems)
+const emit = defineEmits<{
+  edit: [item: ListBoxItem]
+  delete: [item: ListBoxItem]
+  open: [item: ListBoxItem]
+}>()
+
+const listItems = computed(() => props.items)
+const activeActionId = ref<ListBoxItem['id']>()
+const actionItems = [
+  { key: 'edit', label: '编辑' },
+  { key: 'delete', label: '删除', danger: true },
+]
+
+const handleAction = (key: string, item: ListBoxItem) => {
+  activeActionId.value = undefined
+  if (key === 'edit') {
+    emit('edit', item)
+  }
+  if (key === 'delete') {
+    emit('delete', item)
+  }
+}
+
+const toggleActions = (item: ListBoxItem) => {
+  activeActionId.value = activeActionId.value === item.id ? undefined : item.id
+}
+
+const closeActions = () => {
+  activeActionId.value = undefined
+}
+
+const closeActionsWithEsc = (event: KeyboardEvent) => {
+  if (event.key === 'Escape') {
+    closeActions()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', closeActions)
+  document.addEventListener('keydown', closeActionsWithEsc)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', closeActions)
+  document.removeEventListener('keydown', closeActionsWithEsc)
+})
 </script>
 
 <template>
-  <div class="items">
-    <div class="item" v-for="item in listItems" :key="item.id">
+  <div class="items" v-if="listItems.length">
+    <div class="item" v-for="item in listItems" :key="item.id" @click="emit('open', item)">
       <div class="head">
         <div class="title_image">
           <img :src="item.image" alt="" v-if="item.image" />
+          <div class="placeholder" v-else>{{ item.title.slice(0, 1) }}</div>
           <div class="text">
             <div class="title">{{ item.title }}</div>
             <div class="desc">{{ item.description }}</div>
           </div>
         </div>
-        <div class="more">
-          <ellipsis class="icon" />
+        <div class="actions" @click.stop>
+          <button
+            class="more"
+            type="button"
+            :class="{ active: activeActionId === item.id }"
+            @click="toggleActions(item)"
+          >
+            <ellipsis class="icon" />
+          </button>
+          <div class="action-menu" v-if="activeActionId === item.id">
+            <button
+              v-for="action in actionItems"
+              :key="action.key"
+              type="button"
+              :class="{ danger: action.danger }"
+              @click="handleAction(action.key, item)"
+            >
+              {{ action.label }}
+            </button>
+          </div>
         </div>
       </div>
       <div class="content">{{ item.content }}</div>
@@ -42,6 +96,9 @@ const listItems = computed(() => props.items ?? defaultItems)
         <span>{{ item.footer }}</span>
       </div>
     </div>
+  </div>
+  <div class="empty" v-else>
+    {{ loading ? '加载中...' : '暂无数据' }}
   </div>
 </template>
 
@@ -78,10 +135,23 @@ const listItems = computed(() => props.items ?? defaultItems)
         display: flex;
         align-items: center;
         gap: 1.2rem;
-        img {
+        img,
+        .placeholder {
           width: 4rem;
           height: 4rem;
           border-radius: 0.8rem;
+          flex: none;
+        }
+        img {
+          object-fit: cover;
+        }
+        .placeholder {
+          display: grid;
+          place-items: center;
+          background: var(--touch-bg);
+          color: var(--font-light-color);
+          font-size: 1.6rem;
+          font-weight: 700;
         }
         .text {
           display: flex;
@@ -90,6 +160,7 @@ const listItems = computed(() => props.items ?? defaultItems)
           .title {
             font-size: 1.6rem;
             font-weight: 700;
+            color: var(--font-active-color);
           }
           .desc {
             font-size: 1.2rem;
@@ -97,24 +168,70 @@ const listItems = computed(() => props.items ?? defaultItems)
           }
         }
       }
-      .more {
-        cursor: pointer;
-        padding: 0.8rem;
-        border-radius: 0.8rem;
-        transition: all 0.3s;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        &:hover {
-          background-color: var(--touch-bg);
+      .actions {
+        position: relative;
+        flex: none;
+
+        .more {
+          cursor: pointer;
+          padding: 0.8rem;
+          border: 0;
+          border-radius: 0.8rem;
+          background: transparent;
+          transition: background-color 0.12s ease;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+
+          &:hover,
+          &.active {
+            background-color: var(--touch-bg);
+          }
+
+          .icon {
+            opacity: 0.72;
+            width: 1.6rem;
+            height: 1.6rem;
+            color: var(--font-light-color);
+          }
         }
-        .icon {
-          transition: all 0.3s;
-          opacity: 0;
-          visibility: hidden;
-          width: 1.6rem;
-          height: 1.6rem;
-          color: var(--font-light-color);
+
+        .action-menu {
+          position: absolute;
+          top: calc(100% + 0.4rem);
+          right: 0;
+          z-index: 20;
+          min-width: 8.8rem;
+          padding: 0.4rem;
+          border: 1px solid var(--border-color);
+          border-radius: 0.6rem;
+          background: var(--white);
+          box-shadow: 0 1rem 3rem rgb(17 24 39 / 12%);
+
+          button {
+            width: 100%;
+            height: 3.2rem;
+            padding: 0 1rem;
+            border: 0;
+            border-radius: 0.4rem;
+            background: transparent;
+            color: var(--font-color);
+            cursor: pointer;
+            text-align: left;
+            font-size: 1.4rem;
+
+            &:hover {
+              background: var(--touch-bg);
+            }
+
+            &.danger {
+              color: #dc2626;
+
+              &:hover {
+                background: #fef2f2;
+              }
+            }
+          }
         }
       }
     }
@@ -122,6 +239,8 @@ const listItems = computed(() => props.items ?? defaultItems)
       color: rgba(107, 114, 128, 1);
       line-height: 1.8rem;
       font-size: 1.4rem;
+      min-height: 3.6rem;
+      white-space: pre-line;
     }
     .footer {
       display: flex;
@@ -139,5 +258,13 @@ const listItems = computed(() => props.items ?? defaultItems)
       }
     }
   }
+}
+
+.empty {
+  height: 24rem;
+  display: grid;
+  place-items: center;
+  color: var(--font-light-color);
+  font-size: 1.4rem;
 }
 </style>

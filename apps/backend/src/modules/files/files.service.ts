@@ -54,6 +54,13 @@ export class FilesService {
     private readonly ossService: OssService,
   ) {}
 
+  private withAccessibleUrl(file: FileEntity): FileEntity {
+    return {
+      ...file,
+      url: this.createAccessibleUrl(file.url) ?? "",
+    };
+  }
+
   private async findOwnedFile(id: number, userId: number) {
     const file = await this.filesRepository.findOne({ where: { id } });
 
@@ -107,11 +114,11 @@ export class FilesService {
     }
 
     file.status = FILE_STATUS.UPLOADED;
-    return this.filesRepository.save(file);
+    return this.withAccessibleUrl(await this.filesRepository.save(file));
   }
 
-  findOne(id: number, userId: number) {
-    return this.findOwnedFile(id, userId);
+  async findOne(id: number, userId: number) {
+    return this.withAccessibleUrl(await this.findOwnedFile(id, userId));
   }
 
   async remove(id: number, userId: number) {
@@ -158,6 +165,10 @@ export class FilesService {
     }
 
     return savedFile;
+  }
+
+  createAccessibleUrl(value?: string | null) {
+    return this.ossService.createAccessibleUrl(value);
   }
 
   @Cron(CronExpression.EVERY_HOUR)

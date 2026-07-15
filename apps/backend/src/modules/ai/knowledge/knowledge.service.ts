@@ -1,26 +1,130 @@
-import { Injectable } from '@nestjs/common';
-import { CreateKnowledgeDto } from './dto/create-knowledge.dto';
-import { UpdateKnowledgeDto } from './dto/update-knowledge.dto';
+import { Injectable, NotFoundException } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { FilesService } from "../../files/files.service";
+import {
+  createPageResult,
+  type PageResult,
+  resolvePageQuery,
+} from "../../../common/http/page-query.dto";
+import { CreateKnowledgeDto } from "./dto/create-knowledge.dto";
+import { QueryKnowledgeDto } from "./dto/query-knowledge.dto";
+import { UpdateKnowledgeDto } from "./dto/update-knowledge.dto";
+import { Knowledge } from "./entities/knowledge.entity";
 
 @Injectable()
 export class KnowledgeService {
-  create(createKnowledgeDto: CreateKnowledgeDto) {
-    return 'This action adds a new knowledge';
+  constructor(
+    @InjectRepository(Knowledge)
+    private readonly knowledgeRepository: Repository<Knowledge>,
+    private readonly filesService: FilesService,
+  ) {}
+
+  private withAccessibleIcon(knowledge: Knowledge): Knowledge {
+    return {
+      ...knowledge,
+      icon: this.filesService.createAccessibleUrl(knowledge.icon),
+    };
   }
 
-  findAll() {
-    return `This action returns all knowledge`;
+  private async buildKnowledgePayload(
+    dto: CreateKnowledgeDto | UpdateKnowledgeDto,
+    userId: number,
+  ): Promise<Partial<Knowledge>> {
+    const payload: Partial<Knowledge> = {};
+
+    if (dto.icon !== undefined) {
+      payload.icon = dto.icon || null;
+    }
+    if (dto.name !== undefined) {
+      payload.name = dto.name;
+    }
+    if (dto.description !== undefined) {
+      payload.description = dto.description || null;
+    }
+    if (dto.status !== undefined) {
+      payload.status = dto.status;
+    }
+    if (dto.iconFileId !== undefined) {
+      const file = await this.filesService.markUsed(dto.iconFileId, userId);
+      payload.icon = file.url;
+    }
+
+    return payload;
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} knowledge`;
+  // --------------------------------------------------------------------------------------------------
+  // 创建知识库
+  async create(createKnowledgeDto: CreateKnowledgeDto, userId: number) {
+    await this.knowledgeRepository.save(
+      this.knowledgeRepository.create(
+        await this.buildKnowledgePayload(createKnowledgeDto, userId),
+      ),
+    );
+    return { success: true };
   }
+  // --------------------------------------------------------------------------------------------------
 
-  update(id: number, updateKnowledgeDto: UpdateKnowledgeDto) {
-    return `This action updates a #${id} knowledge`;
-  }
+  // --------------------------------------------------------------------------------------------------
+  // 获取知识库列表
+  async list(query: QueryKnowledgeDto): Promise<PageResult<Knowledge>> {
+    const { page, pageSize, skip } = resolvePageQuery(query);
+    const name = query.name?.trim();
+    const queryBuilder = this.knowledgeRepository
+      .createQueryBuilder("knowledge")
+      .orderBy("knowledge.id", "DESC")
+      .skip(skip)
+      .take(pageSize);
 
-  remove(id: number) {
-    return `This action removes a #${id} knowledge`;
+    if (name) {
+      queryBuilder.andWhere("knowledge.name LIKE :name", {
+        name: `%${name}%`,
+      });
+    }
+
+    const [items, total] = await queryBuilder.getManyAndCount();
+    return createPageResult(
+      items.map((item) => this.withAccessibleIcon(item)),
+      total,
+      page,
+      pageSize,
+    );
   }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 获取知识库详情
+  async findOne(id: number) {
+    const knowledge = await this.knowledgeRepository.findOne({ where: { id } });
+    if (!knowledge) throw new NotFoundException("知识库不存在");
+    return this.withAccessibleIcon(knowledge);
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 更新知识库
+  async update(
+    id: number,
+    updateKnowledgeDto: UpdateKnowledgeDto,
+    userId: number,
+  ) {
+    const knowledge = await this.knowledgeRepository.preload({
+      id,
+      ...(await this.buildKnowledgePayload(updateKnowledgeDto, userId)),
+    });
+    if (!knowledge) throw new NotFoundException("知识库不存在");
+    await this.knowledgeRepository.save(knowledge);
+    return { success: true };
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 删除知识库
+  async remove(id: number) {
+    const knowledge = await this.knowledgeRepository.findOne({ where: { id } });
+    if (!knowledge) throw new NotFoundException("知识库不存在");
+    await this.knowledgeRepository.softRemove(knowledge);
+    return { success: true };
+  }
+  // --------------------------------------------------------------------------------------------------
 }

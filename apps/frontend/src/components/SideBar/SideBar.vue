@@ -85,7 +85,9 @@ async function handleUserMenuClick({ key }: { key: string | number }) {
       </div>
       <Dropdown
         :menu="{ items: userMenuItems }"
-        :trigger="['click']"
+        :trigger="['hover']"
+        :mouse-enter-delay="0"
+        :mouse-leave-delay="0.12"
         placement="topRight"
         @menu-click="handleUserMenuClick"
       >

@@ -1,34 +1,69 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
-import { PluginService } from './plugin.service';
-import { CreatePluginDto } from './dto/create-plugin.dto';
-import { UpdatePluginDto } from './dto/update-plugin.dto';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseIntPipe,
+  Post,
+  Put,
+  Query,
+} from "@nestjs/common";
+import { type AuthUser } from "../../../common/auth/auth-user";
+import { CurrentUser } from "../../../common/auth/current-user.decorator";
+import { CreatePluginDto } from "./dto/create-plugin.dto";
+import { QueryPluginsDto } from "./dto/query-plugins.dto";
+import { UpdatePluginDto } from "./dto/update-plugin.dto";
+import { PluginService } from "./plugin.service";
 
-@Controller('plugin')
+@Controller("ai/plugins")
 export class PluginController {
   constructor(private readonly pluginService: PluginService) {}
 
+  // -------------------------
+  // 创建插件
   @Post()
-  create(@Body() createPluginDto: CreatePluginDto) {
-    return this.pluginService.create(createPluginDto);
+  create(
+    @Body() createPluginDto: CreatePluginDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.pluginService.create(createPluginDto, user.userId);
   }
+  // -------------------------
 
+  // -------------------------
+  // 获取插件列表
   @Get()
-  findAll() {
-    return this.pluginService.findAll();
+  list(@Query() query: QueryPluginsDto) {
+    return this.pluginService.list(query);
   }
+  // -------------------------
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.pluginService.findOne(+id);
+  // -------------------------
+  // 获取插件详情
+  @Get(":id")
+  findOne(@Param("id", ParseIntPipe) id: number) {
+    return this.pluginService.findOne(id);
   }
+  // -------------------------
 
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updatePluginDto: UpdatePluginDto) {
-    return this.pluginService.update(+id, updatePluginDto);
+  // -------------------------
+  // 更新插件
+  @Put(":id")
+  update(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() updatePluginDto: UpdatePluginDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.pluginService.update(id, updatePluginDto, user.userId);
   }
+  // -------------------------
 
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.pluginService.remove(+id);
+  // -------------------------
+  // 删除插件
+  @Delete(":id")
+  remove(@Param("id", ParseIntPipe) id: number) {
+    return this.pluginService.remove(id);
   }
+  // -------------------------
 }

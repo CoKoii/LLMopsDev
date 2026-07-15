@@ -6,4 +6,5 @@ export interface ListBoxItem {
   image?: string
   authorImage?: string
   footer?: string
+  raw?: unknown
 }

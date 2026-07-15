@@ -1,34 +1,69 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
-import { KnowledgeService } from './knowledge.service';
-import { CreateKnowledgeDto } from './dto/create-knowledge.dto';
-import { UpdateKnowledgeDto } from './dto/update-knowledge.dto';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseIntPipe,
+  Post,
+  Put,
+  Query,
+} from "@nestjs/common";
+import { type AuthUser } from "../../../common/auth/auth-user";
+import { CurrentUser } from "../../../common/auth/current-user.decorator";
+import { CreateKnowledgeDto } from "./dto/create-knowledge.dto";
+import { QueryKnowledgeDto } from "./dto/query-knowledge.dto";
+import { UpdateKnowledgeDto } from "./dto/update-knowledge.dto";
+import { KnowledgeService } from "./knowledge.service";
 
-@Controller('knowledge')
+@Controller("ai/knowledge")
 export class KnowledgeController {
   constructor(private readonly knowledgeService: KnowledgeService) {}
 
+  // -------------------------
+  // 创建知识库
   @Post()
-  create(@Body() createKnowledgeDto: CreateKnowledgeDto) {
-    return this.knowledgeService.create(createKnowledgeDto);
+  create(
+    @Body() createKnowledgeDto: CreateKnowledgeDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.knowledgeService.create(createKnowledgeDto, user.userId);
   }
+  // -------------------------
 
+  // -------------------------
+  // 获取知识库列表
   @Get()
-  findAll() {
-    return this.knowledgeService.findAll();
+  list(@Query() query: QueryKnowledgeDto) {
+    return this.knowledgeService.list(query);
   }
+  // -------------------------
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.knowledgeService.findOne(+id);
+  // -------------------------
+  // 获取知识库详情
+  @Get(":id")
+  findOne(@Param("id", ParseIntPipe) id: number) {
+    return this.knowledgeService.findOne(id);
   }
+  // -------------------------
 
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updateKnowledgeDto: UpdateKnowledgeDto) {
-    return this.knowledgeService.update(+id, updateKnowledgeDto);
+  // -------------------------
+  // 更新知识库
+  @Put(":id")
+  update(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() updateKnowledgeDto: UpdateKnowledgeDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.knowledgeService.update(id, updateKnowledgeDto, user.userId);
   }
+  // -------------------------
 
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.knowledgeService.remove(+id);
+  // -------------------------
+  // 删除知识库
+  @Delete(":id")
+  remove(@Param("id", ParseIntPipe) id: number) {
+    return this.knowledgeService.remove(id);
   }
+  // -------------------------
 }

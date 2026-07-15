@@ -14,7 +14,7 @@ const tabs: ListPageTab[] = [
 
 <template>
   <ListPage v-model:active-tab="activeTab" :tabs="tabs">
-    <ListBox />
+    <ListBox :items="[]" />
   </ListPage>
 </template>
 
