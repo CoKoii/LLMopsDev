@@ -11,7 +11,9 @@ type LoginResponse = {
   refreshToken: string
 }
 export const loginApi = async (params: LoginParams): Promise<LoginResponse> => {
-  return request.post('/auth/login', params)
+  return request.post('/auth/login', params, {
+    authAction: 'login',
+  })
 }
 
 // 获取用户信息接口
@@ -28,6 +30,7 @@ export type RefreshResponse = {
 export const refreshAccessTokenApi = async (): Promise<RefreshResponse> => {
   const auth = JSON.parse(localStorage.getItem('auth') || '{}')
   return request.post('/auth/refresh', undefined, {
+    authAction: 'refresh',
     headers: {
       Authorization: `Bearer ${auth.refreshToken}`,
     },

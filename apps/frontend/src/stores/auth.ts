@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { loginApi, getUserInfoApi, type LoginParams } from '../api/core/auth'
 import { message } from 'antdv-next'
 import { refreshAccessTokenApi } from '../api/core/auth'
+import { setAuthLifecycleHandlers } from '../api/request'
 export const useAuthStore = defineStore(
   'auth',
   () => {
@@ -37,9 +38,25 @@ export const useAuthStore = defineStore(
       const refreshRes = await refreshAccessTokenApi()
       accessToken.value = refreshRes.accessToken
       refreshToken.value = refreshRes.refreshToken
+      return refreshRes
     }
 
-    return { accessToken, refreshToken, userInfo, getUserInfo, authLogin, refreshAccessToken }
+    const clearAuth = () => {
+      accessToken.value = undefined
+      refreshToken.value = undefined
+      userInfo.value = undefined
+      localStorage.removeItem('auth')
+    }
+
+    return {
+      accessToken,
+      refreshToken,
+      userInfo,
+      getUserInfo,
+      authLogin,
+      refreshAccessToken,
+      clearAuth,
+    }
   },
   {
     persist: {
@@ -47,3 +64,14 @@ export const useAuthStore = defineStore(
     },
   },
 )
+
+setAuthLifecycleHandlers({
+  refreshAccessToken: async () => {
+    const authStore = useAuthStore()
+    const refreshRes = await authStore.refreshAccessToken()
+    return refreshRes.accessToken
+  },
+  clearAuth: () => {
+    useAuthStore().clearAuth()
+  },
+})

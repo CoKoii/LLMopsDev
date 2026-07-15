@@ -2,13 +2,14 @@
 import { mainRoutes } from '@/router/menus'
 import { PlusOutlined } from '@antdv-next/icons'
 import { Button } from 'antdv-next'
-import type { RouteRecordRaw } from 'vue-router'
+import type { RouteRecordNameGeneric, RouteRecordRaw } from 'vue-router'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
 
-function getMenuName(item: RouteRecordRaw) {
-  return item.meta?.activeMenu ?? item.name
+function getMenuName(item: RouteRecordRaw): RouteRecordNameGeneric | undefined {
+  const activeMenu = item.meta?.activeMenu
+  return typeof activeMenu === 'string' ? activeMenu : item.name
 }
 
 function isMenuActive(item: RouteRecordRaw) {
