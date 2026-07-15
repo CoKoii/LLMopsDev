@@ -16,6 +16,11 @@ export const loginApi = async (params: LoginParams): Promise<LoginResponse> => {
   })
 }
 
+// 退出登录接口
+export const logoutApi = async () => {
+  return request.post('/auth/logout')
+}
+
 // 获取用户信息接口
 export const getUserInfoApi = async () => {
   return request.get('/profiles/me')

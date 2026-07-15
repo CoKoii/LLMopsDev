@@ -1,11 +1,32 @@
 <script setup lang="ts">
 import { mainRoutes } from '@/router/menus'
-import { PlusOutlined } from '@antdv-next/icons'
-import { Button } from 'antdv-next'
+import { useAuthStore } from '@/stores/auth'
+import { LogoutOutlined, PlusOutlined, SettingOutlined } from '@antdv-next/icons'
+import { Button, Dropdown, message } from 'antdv-next'
+import type { MenuProps } from 'antdv-next'
 import type { RouteRecordNameGeneric, RouteRecordRaw } from 'vue-router'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
+const authStore = useAuthStore()
+
+const userMenuItems: MenuProps['items'] = [
+  {
+    key: 'account-settings',
+    icon: SettingOutlined,
+    label: '账号设置',
+  },
+  {
+    key: 'divider',
+    type: 'divider',
+  },
+  {
+    key: 'logout',
+    icon: LogoutOutlined,
+    label: '退出登录',
+    danger: true,
+  },
+]
 
 function getMenuName(item: RouteRecordRaw): RouteRecordNameGeneric | undefined {
   const activeMenu = item.meta?.activeMenu
@@ -20,6 +41,17 @@ function isMenuActive(item: RouteRecordRaw) {
   return route.matched.some(
     (record) => record.name === menuName || record.meta.activeMenu === menuName,
   )
+}
+
+async function handleUserMenuClick({ key }: { key: string | number }) {
+  if (key === 'account-settings') {
+    message.info('账号设置功能开发中')
+    return
+  }
+
+  if (key === 'logout') {
+    await authStore.authLogout()
+  }
 }
 </script>
 
@@ -51,15 +83,22 @@ function isMenuActive(item: RouteRecordRaw) {
           </div>
         </div>
       </div>
-      <div class="user">
-        <div class="avatar">
-          <img src="http://q1.qlogo.cn/g?b=qq&nk=2655257336&s=100" alt="Avatar" />
+      <Dropdown
+        :menu="{ items: userMenuItems }"
+        :trigger="['click']"
+        placement="topRight"
+        @menu-click="handleUserMenuClick"
+      >
+        <div class="user">
+          <div class="avatar">
+            <img src="http://q1.qlogo.cn/g?b=qq&nk=2655257336&s=100" alt="Avatar" />
+          </div>
+          <div class="info">
+            <div class="name">CaoKai</div>
+            <div class="email">2655257336@qq.com</div>
+          </div>
         </div>
-        <div class="info">
-          <div class="name">CaoKai</div>
-          <div class="email">2655257336@qq.com</div>
-        </div>
-      </div>
+      </Dropdown>
     </div>
   </div>
 </template>
