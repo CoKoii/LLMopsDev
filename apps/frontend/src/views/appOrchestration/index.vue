@@ -477,7 +477,10 @@ onMounted(() => {
             v-for="tab in pageTabs"
             :key="tab.page"
             v-slot="{ href, navigate }"
-            :to="{ name: 'app-orchestration', params: { appId: route.params.appId, page: tab.page } }"
+            :to="{
+              name: 'app-orchestration',
+              params: { appId: route.params.appId, page: tab.page },
+            }"
             custom
           >
             <a
@@ -499,7 +502,7 @@ onMounted(() => {
           <template #icon><History :size="18" /></template>
         </Button>
         <div class="publish-action">
-          <Button class="publish-action__main" type="primary">更新版本</Button>
+          <Button class="publish-action__main" type="primary">保存版本</Button>
           <Button class="publish-action__toggle" type="primary" aria-label="发布操作">
             <ChevronDown :size="14" />
           </Button>
