@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { getAiAppApi, type AiAppItem } from '@/api'
 import { useAuthStore } from '@/stores/auth'
+import { renderMarkdown } from '@/utils/markdown'
 import {
   BadgeDollarSign,
   BookOpen,
@@ -12,6 +12,7 @@ import {
   CircleDot,
   CircleEqual,
   CircleHelp,
+  CircleStop,
   CircleX,
   Clock3,
   Copy,
@@ -31,7 +32,6 @@ import {
   Save,
   Send,
   Settings,
-  Square,
   Trash2,
   User,
   UsersRound,
@@ -39,12 +39,13 @@ import {
   X,
 } from '@lucide/vue'
 import { Bubble, Prompts, Sender } from 'ant-design-x-vue'
-import type { BubbleListProps, PromptsProps } from 'ant-design-x-vue'
+import type { BubbleListProps } from 'ant-design-x-vue'
 import {
   Button,
   Drawer,
   Input,
   InputNumber,
+  Modal,
   Popover,
   Select,
   Slider,
@@ -53,16 +54,14 @@ import {
   TextArea,
   message,
 } from 'antdv-next'
-import { computed, h, nextTick, onMounted, reactive, ref, type VNode } from 'vue'
+import { computed, h, nextTick, onMounted, ref, type VNode } from 'vue'
 import { useRoute } from 'vue-router'
-
-type CapabilityItem = {
-  key: string
-  title: string
-  description: string
-  icon: string
-  tone: string
-}
+import {
+  configToggles,
+  useAppOrchestrationDraft,
+  type CapabilityItem,
+} from './useAppOrchestrationDraft'
+import { useAppDebugSession } from './useAppDebugSession'
 
 type ChatMessage = {
   key: string
@@ -74,114 +73,52 @@ type ChatMessage = {
 
 const route = useRoute()
 const authStore = useAuthStore()
-const appDetail = ref<AiAppItem>()
-const promptContent = ref(`# 角色
-你是一个智能聊天机器人，能够与用户进行各种话题的交流，包括但不限于生活、工作、学习、娱乐等。
-
-## 技能
-### 技能 1: 日常交流
-1. 当用户分享日常生活经历时，给予积极的回应和适当的建议。
-2. 对于用户的心情表达，提供安慰和鼓励。
-
-### 技能 2: 知识解答
-1. 当用户提出问题，运用知识库和搜索工具提供准确、详细的答案。
-2. 对于复杂问题，分步骤进行解释。
-
-### 技能 3: 娱乐互动
-1. 能与用户玩文字游戏，如猜谜语、成语接龙等。
-2. 推荐有趣的娱乐活动和节目。
-
-## 限制:
-- 回答内容应积极、友善、文明，不得包含不当言论。
-- 所输出的内容必须按照给定的格式进行组织，不能偏离框架要求。
-- 对于不确定的问题，应明确告知用户并尽力提供获取准确信息的途径。`)
-const selectedModel = ref('gpt-4o')
 const modelSettingsOpen = ref(false)
 const pluginModalOpen = ref(false)
 const publishHistoryOpen = ref(false)
-const senderValue = ref('')
-const responding = ref(false)
+const promptOptimizeOpen = ref(false)
+const promptOptimizeSource = ref('')
+const promptOptimizeResult = ref('')
 const chatListRef = ref<HTMLElement>()
-const messages = ref<ChatMessage[]>([
-  { key: 'u1', role: 'user', content: '你好，你是？' },
-  {
-    key: 'a1',
-    role: 'assistant',
-    content: '你好呀，我是ChatGPT，很高兴和您交流！',
-    footer: createAssistantFooter('1.7s · 72 Tokens'),
-  },
-  { key: 'u2', role: 'user', content: '能详细讲解下LLM是什么吗？' },
-  {
-    key: 'a2',
-    role: 'assistant',
-    content:
-      'LLM 即 Large Language Model，大语言模型，是一种基于深度学习的自然语言处理模型，具备较强的语言理解和生成能力，能够处理文本生成、问答、翻译、摘要等任务。',
-    footer: createAssistantFooter('1.7s · 1,085 Tokens'),
-  },
-])
-const capabilities = ref<CapabilityItem[]>([
-  {
-    key: 'imgUnderstand',
-    title: '图片理解 / imgUnderstand',
-    description: '回答用户关于图像的问题',
-    icon: 'image',
-    tone: '#fff7ed',
-  },
-  {
-    key: 'bingWebSearch',
-    title: '必应搜索 / bingWebSearch',
-    description: '必应搜索引擎。当你需要搜索未知信息，比如天气、汇率、时事时使用。',
-    icon: 'globe',
-    tone: '#ecfeff',
-  },
-])
-const settings = reactive({
-  temperature: 1,
-  topP: 0.48,
-  presencePenalty: 0.1,
-  frequencyPenalty: 0.1,
-})
-
-const modelOptions = [
-  { label: 'GPT-4o', value: 'gpt-4o' },
-  { label: 'DeepSeek Chat', value: 'deepseek-chat' },
-  { label: 'Moonshot Kimi K2', value: 'kimi-k2' },
-]
+const promptOptimizeResultRef = ref<HTMLElement>()
+let promptOptimizeAbortController: AbortController | undefined
 const pageTabs = [
   { page: 'edit', label: '编辑' },
   { page: 'publish', label: '发布配置' },
   { page: 'stats', label: '统计分析' },
 ] as const
 type PageTab = (typeof pageTabs)[number]['page']
-const configToggles = [
-  {
-    key: 'longTermMemory',
-    title: '长期记忆',
-    description: '总结聊天对话的内容，并用于更好的响应用户的消息。',
-  },
-  {
-    key: 'questionSuggestions',
-    title: '用户问题建议',
-    description: '在应用回复后，自动根据对话内容提供 3 条用户提问建议。',
-  },
-  {
-    key: 'voiceInput',
-    title: '语音输入',
-    description: '启用后，您可以使用语音输入。',
-  },
-  {
-    key: 'voiceOutput',
-    title: '语音输出',
-    description: '启用后，应用会将文本回复转换为语音输出。',
-  },
-] as const
-const toggleSettings = reactive<Record<(typeof configToggles)[number]['key'], boolean>>({
-  longTermMemory: true,
-  questionSuggestions: true,
-  voiceInput: true,
-  voiceOutput: false,
-})
 const appId = computed(() => Number(route.params.appId))
+const {
+  appDetail,
+  appDraft,
+  publishedVersions,
+  promptContent,
+  selectedLlmId,
+  capabilities,
+  settings,
+  toggleSettings,
+  loading,
+  publishing,
+  optimizingPrompt,
+  lastSavedAt,
+  modelOptions,
+  selectedModelLabel,
+  autoSaveText,
+  loadApp,
+  saveDraftNow,
+  publishVersion,
+  restoreVersion,
+  optimizePrompt,
+} = useAppOrchestrationDraft(appId)
+const {
+  debugStore,
+  senderValue,
+  responding,
+  submitMessage: submitDebugMessage,
+  stopResponse,
+  clearChat,
+} = useAppDebugSession(appId, saveDraftNow)
 const isPageTab = (page: unknown): page is PageTab => {
   return typeof page === 'string' && pageTabs.some((item) => item.page === page)
 }
@@ -191,13 +128,10 @@ const activePage = computed<PageTab>(() => {
 })
 const appName = computed(() => appDetail.value?.name || '聊天机器人')
 const appAvatar = computed(() => appDetail.value?.image || '')
-const selectedModelLabel = computed(
-  () =>
-    modelOptions.find((item) => item.value === selectedModel.value)?.label || selectedModel.value,
-)
 const userName = computed(
-  () => authStore.userInfo?.profile?.nickname || authStore.userInfo?.username || '慕小课',
+  () => authStore.userInfo?.profile?.nickname || authStore.userInfo?.username || '用户',
 )
+const userAvatar = computed(() => authStore.userInfo?.profile?.avatar || '')
 const userInitial = computed(() => userName.value.slice(0, 1) || '用')
 type ChatRoles = NonNullable<BubbleListProps['roles']>
 const chatRoles = computed<ChatRoles>(() => ({
@@ -205,7 +139,7 @@ const chatRoles = computed<ChatRoles>(() => ({
     placement: 'end',
     variant: 'filled',
     header: userName.value,
-    avatar: h('span', { class: 'chat-avatar chat-avatar--user' }, userInitial.value),
+    avatar: createUserAvatar(),
   },
   assistant: {
     placement: 'start',
@@ -214,11 +148,27 @@ const chatRoles = computed<ChatRoles>(() => ({
     avatar: createAssistantAvatar(),
   },
 }))
-const quickPrompts = [
-  { key: 'scenario', label: 'LLM 大语言模型有什么应用场景？' },
-  { key: 'open-source', label: '有哪些开源的LLM模型？' },
-  { key: 'agent', label: 'LLM与Agent之间的关系是什么？' },
-]
+const suggestedPrompts = computed(() => debugStore.getSuggestions(appId.value))
+const suggestionTargetMessageKey = computed(() => {
+  return [...debugStore.getMessages(appId.value)]
+    .reverse()
+    .find((item) => item.role === 'assistant' && !item.pending && item.content.trim())?.key
+})
+const displayMessages = computed<ChatMessage[]>(() =>
+  debugStore.getMessages(appId.value).map((item) => ({
+    ...item,
+    footer:
+      item.role === 'assistant' && !item.pending && item.elapsedMs !== undefined
+        ? createAssistantFooter(
+            `${formatDuration(item.elapsedMs)} · ${formatTokens(item.tokens || 0)} Tokens`,
+            item.key === suggestionTargetMessageKey.value ? suggestedPrompts.value : [],
+          )
+        : undefined,
+  })),
+)
+const promptOptimizeDisplay = computed(
+  () => promptOptimizeResult.value || (optimizingPrompt.value ? '正在生成优化版本...' : '暂无优化结果'),
+)
 const pluginGroups = [
   {
     title: 'Google',
@@ -234,12 +184,6 @@ const pluginGroups = [
     title: 'SerperApi',
     items: ['Google Serper API', 'Google Jobs API', 'Google News API', 'YouTube 脚本 API'],
   },
-]
-const versions = [
-  { no: '#009', current: true, time: '2024-08-15 17:54' },
-  { no: '#008', current: false, time: '2024-08-14 11:41' },
-  { no: '#007', current: false, time: '2024-08-14 08:34' },
-  { no: '#006', current: false, time: '2024-08-11 23:11' },
 ]
 const publishChannels = [
   {
@@ -322,18 +266,54 @@ const detailMetrics = [
   { key: 'cost', title: '费用消耗' },
 ]
 
-function createAssistantFooter(text: string) {
+function createAssistantFooter(text: string, suggestions: string[] = []) {
   return h('div', { class: 'chat-message-footer' }, [
-    h('span', text),
-    h('div', { class: 'chat-message-footer__actions' }, [
-      h('button', { class: 'chat-message-footer__button', type: 'button' }, [
-        h(Copy, { size: 14 }),
-      ]),
-      h('button', { class: 'chat-message-footer__button', type: 'button' }, [
-        h(Trash2, { size: 14 }),
+    h('div', { class: 'chat-message-footer__meta' }, [
+      h('span', text),
+      h('div', { class: 'chat-message-footer__actions' }, [
+        h('button', { class: 'chat-message-footer__button', type: 'button' }, [
+          h(Copy, { size: 14 }),
+        ]),
+        h('button', { class: 'chat-message-footer__button', type: 'button' }, [
+          h(Trash2, { size: 14 }),
+        ]),
       ]),
     ]),
+    suggestions.length
+      ? h(Prompts, {
+          class: 'chat-message-suggestions',
+          items: suggestions.map((item, index) => ({
+            key: `${index}-${item}`,
+            label: item,
+          })),
+          vertical: true,
+          onItemClick: (info: { data: { label?: unknown } }) => {
+            if (typeof info.data.label === 'string') {
+              submitSuggestedPrompt(info.data.label)
+            }
+          },
+        })
+      : null,
   ])
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return '-'
+  return new Date(value).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function formatDuration(value: number) {
+  return `${(value / 1000).toFixed(1)}s`
+}
+
+function formatTokens(value: number) {
+  return value.toLocaleString('en-US')
 }
 
 function createAssistantAvatar() {
@@ -344,6 +324,16 @@ function createAssistantAvatar() {
   }
 
   return h('span', { class: 'chat-avatar chat-avatar--assistant' }, [h(Bot, { size: 16 })])
+}
+
+function createUserAvatar() {
+  if (userAvatar.value) {
+    return h('span', { class: 'chat-avatar chat-avatar--user has-image' }, [
+      h('img', { src: userAvatar.value, alt: '' }),
+    ])
+  }
+
+  return h('span', { class: 'chat-avatar chat-avatar--user' }, userInitial.value)
 }
 
 function getCapabilityIcon(item: CapabilityItem) {
@@ -372,59 +362,80 @@ function removeCapability(key: string) {
   capabilities.value = capabilities.value.filter((item) => item.key !== key)
 }
 
-type PromptClickInfo = Parameters<NonNullable<PromptsProps['onItemClick']>>[0]
-
-function handlePromptClick(info: PromptClickInfo) {
-  if (typeof info.data.label === 'string') {
-    void submitMessage(info.data.label)
-  }
+function submitSuggestedPrompt(content: string) {
+  void submitDebugMessage(content, scrollChatToBottom)
 }
 
-async function submitMessage(value: string) {
-  const content = value.trim()
-  if (!content || responding.value) return
+async function generatePromptOptimization(source: string) {
+  promptOptimizeAbortController?.abort()
+  const abortController = new AbortController()
+  promptOptimizeAbortController = abortController
+  promptOptimizeSource.value = source
+  promptOptimizeResult.value = ''
+  promptOptimizeOpen.value = true
 
-  const key = Date.now()
-  messages.value.push({
-    key: `u-${key}`,
-    role: 'user',
-    content,
-  })
-  messages.value.push({
-    key: `a-${key}`,
-    role: 'assistant',
-    content: '正在思考...',
-    pending: true,
-  })
-  senderValue.value = ''
-  responding.value = true
-  await scrollChatToBottom()
-
-  window.setTimeout(async () => {
-    const target = messages.value.find((item) => item.key === `a-${key}`)
-    if (target) {
-      target.content =
-        '这是一个前端调试预览回复。后续接入调试接口后，可以在这里替换为流式生成内容，并展示工具调用、知识库检索和 Token 统计。'
-      target.pending = false
-      target.footer = createAssistantFooter('1.2s · 128 Tokens')
+  try {
+    await optimizePrompt(
+      source,
+      (chunk) => {
+        promptOptimizeResult.value += chunk
+        void nextTick(() => {
+          if (promptOptimizeResultRef.value) {
+            promptOptimizeResultRef.value.scrollTop = promptOptimizeResultRef.value.scrollHeight
+          }
+        })
+      },
+      abortController.signal,
+    )
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === 'AbortError')) {
+      message.error('优化生成失败，请稍后重试')
     }
-    responding.value = false
-    await scrollChatToBottom()
-  }, 700)
-}
-
-function stopResponse() {
-  responding.value = false
-  const last = [...messages.value].reverse().find((item) => item.pending)
-  if (last) {
-    last.pending = false
-    last.content = '已停止响应'
-    last.footer = createAssistantFooter('已停止')
+    if (
+      !promptOptimizeResult.value &&
+      !(error instanceof DOMException && error.name === 'AbortError')
+    ) {
+      promptOptimizeOpen.value = false
+    }
+  } finally {
+    if (promptOptimizeAbortController === abortController) {
+      promptOptimizeAbortController = undefined
+    }
   }
 }
 
-function clearChat() {
-  messages.value = []
+function closePromptOptimize() {
+  promptOptimizeAbortController?.abort()
+  promptOptimizeOpen.value = false
+}
+
+function openPromptOptimize() {
+  if (optimizingPrompt.value) return
+  if (!selectedLlmId.value) {
+    message.error('请先选择模型')
+    return
+  }
+  if (!promptContent.value.trim()) {
+    message.error('请先填写人设与回复逻辑')
+    return
+  }
+
+  void generatePromptOptimization(promptContent.value)
+}
+
+function regeneratePromptOptimization() {
+  if (optimizingPrompt.value) return
+  void generatePromptOptimization(promptOptimizeSource.value)
+}
+
+async function applyOptimizedPrompt() {
+  if (!promptOptimizeResult.value || optimizingPrompt.value) return
+
+  promptContent.value = promptOptimizeResult.value
+  promptOptimizeOpen.value = false
+  await nextTick()
+  await saveDraftNow()
+  message.success('已应用优化版本')
 }
 
 async function scrollChatToBottom() {
@@ -434,16 +445,8 @@ async function scrollChatToBottom() {
   }
 }
 
-async function loadApp() {
-  if (!Number.isFinite(appId.value)) return
-  try {
-    appDetail.value = await getAiAppApi(appId.value)
-  } catch {
-    message.warning('应用详情加载失败，已使用默认内容')
-  }
-}
-
 onMounted(() => {
+  void authStore.getUserInfo()
   void loadApp()
 })
 </script>
@@ -466,7 +469,7 @@ onMounted(() => {
             <span>个人空间</span>
             <Clock3 :size="13" />
             <span>草稿</span>
-            <Tag color="processing">已自动保存 23:18:15</Tag>
+            <Tag color="processing">{{ autoSaveText }}</Tag>
           </p>
         </div>
       </div>
@@ -502,7 +505,14 @@ onMounted(() => {
           <template #icon><History :size="18" /></template>
         </Button>
         <div class="publish-action">
-          <Button class="publish-action__main" type="primary">保存版本</Button>
+          <Button
+            class="publish-action__main"
+            type="primary"
+            :loading="publishing"
+            @click="publishVersion"
+          >
+            保存版本
+          </Button>
           <Button class="publish-action__toggle" type="primary" aria-label="发布操作">
             <ChevronDown :size="14" />
           </Button>
@@ -532,7 +542,13 @@ onMounted(() => {
                     <h3>模型设置</h3>
                     <label class="model-settings__field">
                       <span>模型</span>
-                      <Select v-model:value="selectedModel" :options="modelOptions" />
+                      <Select
+                        v-model:value="selectedLlmId"
+                        :options="modelOptions"
+                        :loading="loading"
+                        allow-clear
+                        placeholder="请选择模型"
+                      />
                     </label>
                     <div class="model-settings__group">
                       <span>参数</span>
@@ -608,7 +624,12 @@ onMounted(() => {
           <div class="app-orchestration__prompt-content">
             <div class="app-orchestration__prompt-heading">
               <h3>人设与回复逻辑</h3>
-              <Button type="text" size="small">
+              <Button
+                type="text"
+                size="small"
+                :loading="optimizingPrompt"
+                @click="openPromptOptimize"
+              >
                 <template #icon><RefreshCw :size="15" /></template>
                 优化
               </Button>
@@ -731,22 +752,26 @@ onMounted(() => {
             </div>
           </div>
           <div ref="chatListRef" class="chat-preview">
-            <Bubble.List :items="messages" :roles="chatRoles">
+            <div v-if="displayMessages.length === 0" class="chat-preview__empty">
+              <div class="chat-preview__empty-avatar" :class="{ 'has-image': appAvatar }">
+                <img v-if="appAvatar" :src="appAvatar" alt="" />
+                <Bot v-else :size="24" />
+              </div>
+              <strong>{{ appName }}</strong>
+            </div>
+            <Bubble.List v-else :items="displayMessages" :roles="chatRoles">
               <template #message="{ item }">
-                <span>{{ item.content }}</span>
+                <div
+                  class="chat-markdown"
+                  v-html="renderMarkdown(item.content || (item.pending ? '...' : ''))"
+                ></div>
               </template>
             </Bubble.List>
-            <Prompts
-              class="chat-preview__prompts"
-              :items="quickPrompts"
-              vertical
-              @item-click="handlePromptClick"
-            />
-            <Button v-if="responding" class="stop-button" @click="stopResponse">
-              <template #icon><Square :size="14" /></template>
-              停止响应
-            </Button>
           </div>
+          <Button v-if="responding" class="stop-button" @click="stopResponse">
+            <template #icon><CircleStop :size="14" /></template>
+            停止响应
+          </Button>
           <footer class="chat-composer">
             <div class="composer-row">
               <Sender
@@ -754,7 +779,7 @@ onMounted(() => {
                 :placeholder="responding ? '正在生成回复...' : '输入调试消息...'"
                 :auto-size="{ minRows: 1, maxRows: 4 }"
                 class="app-chat-composer"
-                @submit="submitMessage"
+                @submit="(value) => submitDebugMessage(value, scrollChatToBottom)"
               >
                 <template #prefix>
                   <Button type="text" shape="circle">
@@ -762,7 +787,11 @@ onMounted(() => {
                   </Button>
                 </template>
                 <template #actions>
-                  <Button type="text" shape="circle" @click="submitMessage(senderValue)">
+                  <Button
+                    type="text"
+                    shape="circle"
+                    @click="submitDebugMessage(senderValue, scrollChatToBottom)"
+                  >
                     <template #icon><Send :size="16" /></template>
                   </Button>
                 </template>
@@ -978,24 +1007,28 @@ onMounted(() => {
           </div>
           <div>
             <strong>{{ appName }}</strong>
-            <span>最近编辑：2024-08-15 17:54</span>
+            <span>最近编辑：{{ formatDateTime(lastSavedAt || appDraft?.updatedAt) }}</span>
           </div>
         </div>
         <p class="publish-history__description">
-          采用最智能的大模型，自动化AI编程。精通多种编程语言。
+          {{ appDetail?.description || '暂无应用描述' }}
         </p>
-        <p class="publish-history__count">共计 26 条发布记录</p>
+        <p class="publish-history__count">共计 {{ publishedVersions.length }} 条发布记录</p>
         <div class="publish-history__list">
-          <article v-for="item in versions" :key="item.no" class="publish-history__item">
+          <article
+            v-for="(item, index) in publishedVersions"
+            :key="item.id"
+            class="publish-history__item"
+          >
             <div class="publish-history__item-main">
               <div>
                 <strong>版本</strong>
-                <Tag>{{ item.no }}</Tag>
-                <Tag v-if="item.current">当前版本</Tag>
+                <Tag>{{ item.version }}</Tag>
+                <Tag v-if="index === 0">当前版本</Tag>
               </div>
-              <span>发布时间: {{ item.time }}</span>
+              <span>发布时间: {{ formatDateTime(item.publishedAt || item.createdAt) }}</span>
             </div>
-            <Button size="small" :disabled="item.current">
+            <Button size="small" :disabled="index === 0" @click="restoreVersion(item.id)">
               <template #icon><RotateCcw :size="13" /></template>
               回退
             </Button>
@@ -1003,6 +1036,48 @@ onMounted(() => {
         </div>
       </div>
     </Drawer>
+
+    <Modal
+      v-model:open="promptOptimizeOpen"
+      width="108rem"
+      title="优化人设与回复逻辑"
+      :footer="null"
+      wrap-class-name="prompt-optimize-modal"
+      @cancel="closePromptOptimize"
+    >
+      <div class="prompt-optimize">
+        <section class="prompt-optimize__panel">
+          <header>
+            <h3>当前版本</h3>
+            <Tag>原文</Tag>
+          </header>
+          <pre>{{ promptOptimizeSource }}</pre>
+        </section>
+
+        <section class="prompt-optimize__panel">
+          <header>
+            <h3>优化版本</h3>
+            <Tag v-if="optimizingPrompt" color="processing">生成中</Tag>
+            <Tag v-else-if="promptOptimizeResult" color="success">可应用</Tag>
+          </header>
+          <pre ref="promptOptimizeResultRef" :class="{ 'is-empty': !promptOptimizeResult && optimizingPrompt }">{{ promptOptimizeDisplay }}</pre>
+        </section>
+      </div>
+
+      <footer class="prompt-optimize__actions">
+        <Button @click="closePromptOptimize">取消</Button>
+        <div class="prompt-optimize__primary-actions">
+          <Button :loading="optimizingPrompt" @click="regeneratePromptOptimization">重新生成</Button>
+          <Button
+            type="primary"
+            :disabled="!promptOptimizeResult || optimizingPrompt"
+            @click="applyOptimizedPrompt"
+          >
+            应用
+          </Button>
+        </div>
+      </footer>
+    </Modal>
   </div>
 </template>
 

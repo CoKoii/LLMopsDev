@@ -1,12 +1,5 @@
-import {
-  Column,
-  Entity,
-  ManyToMany,
-  PrimaryGeneratedColumn,
-  Relation,
-} from "typeorm";
+import { Column, Entity, PrimaryGeneratedColumn } from "typeorm";
 import { AuditableEntity } from "../../../../common/database/base.entity";
-import { AiApp } from "../../app/entities/app.entity";
 
 @Entity({ name: "ai_knowledge", comment: "知识库" })
 export class Knowledge extends AuditableEntity {
@@ -35,6 +28,4 @@ export class Knowledge extends AuditableEntity {
   @Column({ comment: "状态", default: true })
   status!: boolean;
 
-  @ManyToMany(() => AiApp, (app) => app.knowledgeBases)
-  apps!: Relation<AiApp[]>;
 }

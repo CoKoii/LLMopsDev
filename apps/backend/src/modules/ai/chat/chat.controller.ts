@@ -4,35 +4,33 @@ import {
   Header,
   HttpCode,
   HttpStatus,
+  Param,
+  ParseIntPipe,
   Post,
   StreamableFile,
 } from "@nestjs/common";
 import { SkipResponseWrap } from "../../../common/http/skip-response-wrap.decorator";
-import { ChatDto } from "./dto/chat.dto";
 import { ChatService } from "./chat.service";
+import { DebugAppChatDto } from "./dto/debug-app-chat.dto";
+import { OptimizeAppPromptDto } from "./dto/optimize-app-prompt.dto";
 
-@Controller("ai")
+@Controller("ai/apps")
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
   // -------------------------
-  // 普通对话
-  @Post("chat")
-  chat(@Body() dto: ChatDto) {
-    return this.chatService.chat(dto.message);
-  }
-  // -------------------------
-
-  // -------------------------
-  // 流式对话
-  @Post("chat/stream")
+  // 流式调试AI应用草稿
+  @Post(":id/debug/stream")
   @HttpCode(HttpStatus.OK)
   @Header("Cache-Control", "no-cache, no-transform")
   @Header("Connection", "keep-alive")
   @SkipResponseWrap()
-  streamChat(@Body() dto: ChatDto): StreamableFile {
+  debugStream(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: DebugAppChatDto,
+  ): StreamableFile {
     return new StreamableFile(
-      this.chatService.createChatSseStream(dto.message),
+      this.chatService.createAppDebugSseStream(id, dto.message),
       {
         type: "text/event-stream; charset=utf-8",
       },
@@ -41,10 +39,33 @@ export class ChatController {
   // -------------------------
 
   // -------------------------
-  // 学习测试用
-  @Post("learn")
-  learn(@Body() dto: ChatDto) {
-    return this.chatService.learn(dto.message);
+  // 流式优化AI应用草稿Prompt
+  @Post(":id/prompt/optimize/stream")
+  @HttpCode(HttpStatus.OK)
+  @Header("Cache-Control", "no-cache, no-transform")
+  @Header("Connection", "keep-alive")
+  @SkipResponseWrap()
+  optimizePromptStream(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: OptimizeAppPromptDto,
+  ): StreamableFile {
+    return new StreamableFile(
+      this.chatService.createPromptOptimizeSseStream(id, dto.prompt),
+      {
+        type: "text/event-stream; charset=utf-8",
+      },
+    );
+  }
+  // -------------------------
+
+  // -------------------------
+  // 优化AI应用草稿Prompt
+  @Post(":id/prompt/optimize")
+  optimizePrompt(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: OptimizeAppPromptDto,
+  ) {
+    return this.chatService.optimizePrompt(id, dto.prompt);
   }
   // -------------------------
 }

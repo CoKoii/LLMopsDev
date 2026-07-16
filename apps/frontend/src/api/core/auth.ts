@@ -27,7 +27,9 @@ export const getUserInfoApi = async () => {
 }
 
 export type UpdateCurrentProfileParams = {
-  nickname: string
+  nickname?: string
+  avatar?: string
+  avatarFileId?: number
 }
 
 export const updateCurrentProfileApi = async (params: UpdateCurrentProfileParams) => {

@@ -49,11 +49,7 @@ const listItems = computed<ListBoxItem[]>(() =>
   records.value.map((item) => ({
     id: item.id,
     title: item.name,
-    description: item.llm
-      ? `${item.llm.provider} · ${item.llm.modelName}`
-      : item.llmId
-        ? `LLM #${item.llmId}`
-        : '未绑定大模型',
+    description: 'AI 应用',
     content: item.description || '暂无描述',
     image: item.image || undefined,
     footer: item.updatedAt ? `最近编辑 ${formatDate(item.updatedAt)}` : undefined,

@@ -3,6 +3,7 @@ import { changeCurrentPasswordApi, updateCurrentProfileApi } from '@/api'
 import AppModal from '@/components/AppModal/AppModal.vue'
 import { mainRoutes } from '@/router/menus'
 import { useAuthStore } from '@/stores/auth'
+import ImageUpload from '@/views/personalSpace/components/ImageUpload.vue'
 import { LogoutOutlined, PlusOutlined, SettingOutlined } from '@antdv-next/icons'
 import { Button, Dropdown, Form, FormItem, Input, InputPassword, message } from 'antdv-next'
 import type { FormInstance, MenuProps } from 'antdv-next'
@@ -18,17 +19,21 @@ const passwordFormRef = ref<FormInstance>()
 const profileLoading = ref(false)
 const passwordLoading = ref(false)
 const editingNickname = ref(false)
+const editingAvatar = ref(false)
 const editingPassword = ref(false)
 
 type CurrentUserInfo = {
   username?: string
   profile?: {
     nickname?: string
+    avatar?: string | null
   } | null
 }
 
 const profileForm = reactive({
   nickname: '',
+  avatar: undefined as string | undefined,
+  avatarFileId: undefined as number | undefined,
 })
 
 const passwordForm = reactive({
@@ -42,6 +47,8 @@ const displayName = computed(
   () => currentUser.value?.profile?.nickname || currentUser.value?.username || '未命名用户',
 )
 const accountName = computed(() => currentUser.value?.username || '未绑定账号')
+const accountAvatar = computed(() => currentUser.value?.profile?.avatar || '')
+const accountInitial = computed(() => displayName.value.slice(0, 1) || '用')
 
 const passwordRules = {
   currentPassword: [{ required: true, message: '请输入原密码' }],
@@ -97,12 +104,19 @@ function isMenuActive(item: RouteRecordRaw) {
 
 function syncProfileForm() {
   profileForm.nickname = displayName.value
+  profileForm.avatar = accountAvatar.value || undefined
+  profileForm.avatarFileId = undefined
 }
 
 function cancelEditNickname() {
   syncProfileForm()
   profileFormRef.value?.clearValidate()
   editingNickname.value = false
+}
+
+function cancelEditAvatar() {
+  syncProfileForm()
+  editingAvatar.value = false
 }
 
 function resetPasswordForm() {
@@ -122,6 +136,7 @@ async function openAccountSettings() {
   syncProfileForm()
   resetPasswordForm()
   editingNickname.value = false
+  editingAvatar.value = false
   editingPassword.value = false
   accountSettingsOpen.value = true
 }
@@ -137,13 +152,19 @@ async function saveProfile() {
   profileForm.nickname = nickname
   await profileFormRef.value?.validate()
 
+  const payload = {
+    nickname,
+    ...(profileForm.avatarFileId !== undefined ? { avatarFileId: profileForm.avatarFileId } : {}),
+  }
+
   profileLoading.value = true
   try {
-    const updatedUser = await updateCurrentProfileApi({ nickname })
+    const updatedUser = await updateCurrentProfileApi(payload)
     authStore.setUserInfo(updatedUser)
     syncProfileForm()
     editingNickname.value = false
-    message.success('账号昵称已更新')
+    editingAvatar.value = false
+    message.success('账号资料已更新')
   } finally {
     profileLoading.value = false
   }
@@ -221,7 +242,8 @@ onMounted(() => {
       >
         <div class="user">
           <div class="avatar">
-            <img src="http://q1.qlogo.cn/g?b=qq&nk=2655257336&s=100" alt="Avatar" />
+            <img v-if="accountAvatar" :src="accountAvatar" alt="Avatar" />
+            <span v-else>{{ accountInitial }}</span>
           </div>
           <div class="info">
             <div class="name">{{ displayName }}</div>
@@ -248,11 +270,23 @@ onMounted(() => {
 
           <div class="settings-field">
             <div class="field-label required">账号头像</div>
-            <img
-              class="settings-avatar"
-              src="http://q1.qlogo.cn/g?b=qq&nk=2655257336&s=100"
-              alt="Avatar"
-            />
+            <div v-if="!editingAvatar" class="field-display">
+              <span class="settings-avatar-preview">
+                <img v-if="accountAvatar" :src="accountAvatar" alt="Avatar" />
+                <span v-else>{{ accountInitial }}</span>
+              </span>
+              <Button type="link" class="inline-action" @click="editingAvatar = true">
+                编辑
+              </Button>
+            </div>
+            <div v-else class="avatar-form">
+              <ImageUpload
+                v-model:url="profileForm.avatar"
+                v-model:file-id="profileForm.avatarFileId"
+              />
+              <Button @click="cancelEditAvatar">取消</Button>
+              <Button type="primary" :loading="profileLoading" @click="saveProfile">保存</Button>
+            </div>
           </div>
 
           <div class="settings-field">

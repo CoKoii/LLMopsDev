@@ -7,6 +7,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import * as argon2 from "argon2";
 import { Repository } from "typeorm";
 import type { AuthUser } from "../../../common/auth/auth-user";
+import { FilesService } from "../../files/files.service";
 import { User } from "../users/user.entity";
 import { ChangeCurrentPasswordDto } from "./dto/change-current-password.dto";
 import { UpdateCurrentProfileDto } from "./dto/update-current-profile.dto";
@@ -16,6 +17,7 @@ export class ProfilesService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly filesService: FilesService,
   ) {}
 
   // --------------------------------------------------------------------------------------------------
@@ -38,6 +40,9 @@ export class ProfilesService {
         ? {
             id: currentUser.profile.id,
             nickname: currentUser.profile.nickname,
+            avatar: this.filesService.createAccessibleUrl(
+              currentUser.profile.avatar,
+            ),
             createdAt: currentUser.profile.createdAt,
             updatedAt: currentUser.profile.updatedAt,
           }
@@ -53,12 +58,6 @@ export class ProfilesService {
   // --------------------------------------------------------------------------------------------------
   // 更新当前用户资料
   async updateCurrent(user: AuthUser, dto: UpdateCurrentProfileDto) {
-    const nickname = dto.nickname.trim();
-
-    if (!nickname) {
-      throw new BadRequestException("昵称不能为空");
-    }
-
     const currentUser = await this.userRepository.findOne({
       where: { id: user.userId },
       relations: ["profile"],
@@ -68,9 +67,28 @@ export class ProfilesService {
       throw new UnauthorizedException("用户不存在或已被删除");
     }
 
+    const nickname =
+      dto.nickname === undefined
+        ? (currentUser.profile?.nickname ?? currentUser.username)
+        : dto.nickname.trim();
+
+    if (!nickname) {
+      throw new BadRequestException("昵称不能为空");
+    }
+
+    let avatar = dto.avatar;
+    if (dto.avatarFileId !== undefined) {
+      const file = await this.filesService.markUsed(
+        dto.avatarFileId,
+        user.userId,
+      );
+      avatar = file.url;
+    }
+
     currentUser.profile = {
       ...(currentUser.profile ?? { nickname: currentUser.username }),
       nickname,
+      avatar: avatar === undefined ? currentUser.profile?.avatar : avatar || null,
     };
 
     await this.userRepository.save(currentUser);

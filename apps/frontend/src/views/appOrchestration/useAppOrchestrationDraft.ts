@@ -1,0 +1,308 @@
+import {
+  getAiAppApi,
+  getAiAppDraftApi,
+  listAiAppVersionsApi,
+  listLlmsApi,
+  publishAiAppVersionApi,
+  restoreAiAppVersionApi,
+  streamAiAppPromptOptimizeApi,
+  updateAiAppDraftApi,
+  type AiAppItem,
+  type AiAppVersionConfig,
+  type AiAppVersionItem,
+  type LlmItem,
+} from '@/api'
+import { message } from 'antdv-next'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch, type Ref } from 'vue'
+
+export type CapabilityItem = {
+  key: string
+  title: string
+  description: string
+  icon: string
+  tone: string
+}
+
+export const defaultPrompt = `# 角色
+你是一个智能聊天机器人，能够与用户进行各种话题的交流，包括但不限于生活、工作、学习、娱乐等。
+
+## 技能
+### 技能 1: 日常交流
+1. 当用户分享日常生活经历时，给予积极的回应和适当的建议。
+2. 对于用户的心情表达，提供安慰和鼓励。
+
+### 技能 2: 知识解答
+1. 当用户提出问题，运用知识库和搜索工具提供准确、详细的答案。
+2. 对于复杂问题，分步骤进行解释。
+
+### 技能 3: 娱乐互动
+1. 能与用户玩文字游戏，如猜谜语、成语接龙等。
+2. 推荐有趣的娱乐活动和节目。
+
+## 限制:
+- 回答内容应积极、友善、文明，不得包含不当言论。
+- 所输出的内容必须按照给定的格式进行组织，不能偏离框架要求。
+- 对于不确定的问题，应明确告知用户并尽力提供获取准确信息的途径。`
+
+export const configToggles = [
+  {
+    key: 'longTermMemory',
+    title: '长期记忆',
+    description: '总结聊天对话的内容，并用于更好的响应用户的消息。',
+  },
+  {
+    key: 'questionSuggestions',
+    title: '用户问题建议',
+    description: '在应用回复后，自动根据对话内容提供 3 条用户提问建议。',
+  },
+  {
+    key: 'voiceInput',
+    title: '语音输入',
+    description: '启用后，您可以使用语音输入。',
+  },
+  {
+    key: 'voiceOutput',
+    title: '语音输出',
+    description: '启用后，应用会将文本回复转换为语音输出。',
+  },
+] as const
+
+const createInitialCapabilities = (): CapabilityItem[] => [
+  {
+    key: 'imgUnderstand',
+    title: '图片理解 / imgUnderstand',
+    description: '回答用户关于图像的问题',
+    icon: 'image',
+    tone: '#fff7ed',
+  },
+  {
+    key: 'bingWebSearch',
+    title: '必应搜索 / bingWebSearch',
+    description: '必应搜索引擎。当你需要搜索未知信息，比如天气、汇率、时事时使用。',
+    icon: 'globe',
+    tone: '#ecfeff',
+  },
+]
+
+const formatTime = (value: string) =>
+  new Date(value).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+
+export function useAppOrchestrationDraft(appId: Ref<number>) {
+  const appDetail = ref<AiAppItem>()
+  const appDraft = ref<AiAppVersionItem>()
+  const publishedVersions = ref<AiAppVersionItem[]>([])
+  const llms = ref<LlmItem[]>([])
+  const promptContent = ref(defaultPrompt)
+  const selectedLlmId = ref<number | null>(null)
+  const capabilities = ref<CapabilityItem[]>(createInitialCapabilities())
+  const loading = ref(false)
+  const publishing = ref(false)
+  const savingDraft = ref(false)
+  const optimizingPrompt = ref(false)
+  const lastSavedAt = ref<string>()
+  const draftReady = ref(false)
+  let autoSaveTimer: ReturnType<typeof window.setTimeout> | undefined
+
+  const settings = reactive({
+    temperature: 1,
+    topP: 0.48,
+    presencePenalty: 0.1,
+    frequencyPenalty: 0.1,
+  })
+  const toggleSettings = reactive<Record<(typeof configToggles)[number]['key'], boolean>>({
+    longTermMemory: true,
+    questionSuggestions: true,
+    voiceInput: true,
+    voiceOutput: false,
+  })
+
+  const modelOptions = computed(() =>
+    llms.value.map((item) => ({
+      label: `${item.provider} · ${item.modelName}`,
+      value: item.id,
+    })),
+  )
+  const selectedModelLabel = computed(
+    () =>
+      modelOptions.value.find((item) => item.value === selectedLlmId.value)?.label || '请选择模型',
+  )
+  const autoSaveText = computed(() => {
+    if (savingDraft.value) return '正在自动保存...'
+    return lastSavedAt.value ? `已自动保存 ${formatTime(lastSavedAt.value)}` : '草稿'
+  })
+
+  const buildDraftConfig = (): AiAppVersionConfig => ({
+    prompt: promptContent.value,
+    llmId: selectedLlmId.value,
+    modelSettings: { ...settings },
+    capabilities: capabilities.value.map((item) => ({ ...item })),
+    pluginIds: [],
+    workflowIds: [],
+    knowledgeIds: [],
+    toggles: { ...toggleSettings },
+  })
+
+  const hydrateDraft = (version: AiAppVersionItem) => {
+    const config = version.config
+    promptContent.value = config.prompt || defaultPrompt
+    selectedLlmId.value = config.llmId ?? null
+    Object.assign(settings, {
+      temperature: config.modelSettings?.temperature ?? 1,
+      topP: config.modelSettings?.topP ?? 0.48,
+      presencePenalty: config.modelSettings?.presencePenalty ?? 0.1,
+      frequencyPenalty: config.modelSettings?.frequencyPenalty ?? 0.1,
+    })
+    capabilities.value = config.capabilities?.length
+      ? config.capabilities.map((item) => ({
+          key: item.key,
+          title: item.title,
+          description: item.description || '内置插件能力',
+          icon: item.icon || 'globe',
+          tone: item.tone || '#eff6ff',
+        }))
+      : []
+    Object.assign(toggleSettings, {
+      longTermMemory: config.toggles?.longTermMemory ?? true,
+      questionSuggestions: config.toggles?.questionSuggestions ?? true,
+      voiceInput: config.toggles?.voiceInput ?? true,
+      voiceOutput: config.toggles?.voiceOutput ?? false,
+    })
+    appDraft.value = version
+    lastSavedAt.value = version.updatedAt
+  }
+
+  const saveDraftNow = async () => {
+    if (!draftReady.value || !Number.isFinite(appId.value)) return
+    if (autoSaveTimer) {
+      window.clearTimeout(autoSaveTimer)
+      autoSaveTimer = undefined
+    }
+
+    savingDraft.value = true
+    try {
+      appDraft.value = await updateAiAppDraftApi(appId.value, { config: buildDraftConfig() })
+      lastSavedAt.value = appDraft.value.updatedAt
+    } finally {
+      savingDraft.value = false
+    }
+  }
+
+  const scheduleAutoSave = () => {
+    if (!draftReady.value) return
+    if (autoSaveTimer) {
+      window.clearTimeout(autoSaveTimer)
+    }
+    autoSaveTimer = window.setTimeout(() => {
+      void saveDraftNow()
+    }, 600)
+  }
+
+  const loadApp = async () => {
+    if (!Number.isFinite(appId.value)) return
+    loading.value = true
+    draftReady.value = false
+    try {
+      const [app, draft, llmResult, versions] = await Promise.all([
+        getAiAppApi(appId.value),
+        getAiAppDraftApi(appId.value),
+        listLlmsApi({ page: 1, pageSize: 100 }),
+        listAiAppVersionsApi(appId.value),
+      ])
+      appDetail.value = app
+      llms.value = llmResult.items
+      publishedVersions.value = versions
+      hydrateDraft(draft)
+      await nextTick()
+      draftReady.value = true
+    } catch {
+      message.warning('应用详情加载失败，已使用默认内容')
+    } finally {
+      loading.value = false
+    }
+  }
+
+  const publishVersion = async () => {
+    publishing.value = true
+    try {
+      await saveDraftNow()
+      await publishAiAppVersionApi(appId.value)
+      publishedVersions.value = await listAiAppVersionsApi(appId.value)
+      message.success('版本已保存')
+    } finally {
+      publishing.value = false
+    }
+  }
+
+  const restoreVersion = async (versionId: number) => {
+    const restored = await restoreAiAppVersionApi(appId.value, versionId)
+    draftReady.value = false
+    hydrateDraft(restored)
+    await nextTick()
+    draftReady.value = true
+    message.success('已回退到草稿')
+  }
+
+  const optimizePrompt = async (
+    source: string,
+    onContent: (content: string) => void,
+    signal?: AbortSignal,
+  ) => {
+    const prompt = source.trim()
+    if (!prompt) {
+      message.error('请先填写人设与回复逻辑')
+      return
+    }
+
+    optimizingPrompt.value = true
+    try {
+      await saveDraftNow()
+      await streamAiAppPromptOptimizeApi({
+        appId: appId.value,
+        prompt,
+        onContent,
+        signal,
+      })
+    } finally {
+      optimizingPrompt.value = false
+    }
+  }
+
+  watch(
+    () => buildDraftConfig(),
+    () => {
+      scheduleAutoSave()
+    },
+    { deep: true },
+  )
+
+  onBeforeUnmount(() => {
+    if (autoSaveTimer) window.clearTimeout(autoSaveTimer)
+  })
+
+  return {
+    appDetail,
+    appDraft,
+    publishedVersions,
+    promptContent,
+    selectedLlmId,
+    capabilities,
+    settings,
+    toggleSettings,
+    loading,
+    publishing,
+    optimizingPrompt,
+    lastSavedAt,
+    modelOptions,
+    selectedModelLabel,
+    autoSaveText,
+    loadApp,
+    saveDraftNow,
+    publishVersion,
+    restoreVersion,
+    optimizePrompt,
+  }
+}

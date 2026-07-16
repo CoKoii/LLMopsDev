@@ -17,6 +17,9 @@ export class Profile extends AuditableEntity {
   @Column({ comment: "昵称", length: 50 })
   nickname!: string;
 
+  @Column({ comment: "头像", type: "varchar", length: 1024, nullable: true })
+  avatar?: string | null;
+
   @OneToOne(() => User, (user) => user.profile, { onDelete: "CASCADE" })
   @JoinColumn({ name: "userId" })
   user!: Relation<User>;

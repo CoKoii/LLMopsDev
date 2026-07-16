@@ -27,10 +27,6 @@ export class CreateAppDto {
   description?: string;
 
   @IsOptional()
-  @IsInt({ message: "绑定的大模型ID必须为整数" })
-  llmId?: number;
-
-  @IsOptional()
   @IsBoolean({ message: "状态必须为布尔值" })
   status?: boolean;
 }

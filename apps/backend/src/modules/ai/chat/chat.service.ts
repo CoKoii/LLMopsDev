@@ -1,95 +1,202 @@
 import { ChatOpenAI } from "@langchain/openai";
-import { BadGatewayException, Injectable, Logger } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
-import { createAgent, tool } from "langchain";
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
 import { Readable } from "node:stream";
-import * as z from "zod";
-import { getAiEnvironment } from "../../../common/config/env";
+import { Repository } from "typeorm";
+import {
+  AiAppVersion,
+  AiAppVersionStatus,
+  type AiAppVersionConfig,
+} from "../app/entities/app-version.entity";
+import { AiApp } from "../app/entities/app.entity";
+import { Llm } from "../llm/entities/llm.entity";
+
+const DRAFT_VERSION = "draft";
+
 @Injectable()
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
-  private readonly chatModel: ChatOpenAI;
-  private readonly getWeather = tool(
-    (input) => `${input.city} 的天气一直是晴天！`,
-    {
-      name: "get_weather",
-      description: "查询指定城市的天气",
-      schema: z.object({
-        city: z.string().describe("要查询天气的城市"),
-      }),
-    },
-  );
-  private readonly Answer = z.object({
-    answer: z.string().describe("AI 的回答"),
-  });
-  constructor(configService: ConfigService) {
-    const aiEnvironment = getAiEnvironment(configService);
-    this.chatModel = new ChatOpenAI({
-      apiKey: aiEnvironment.apiKey,
-      model: aiEnvironment.chatModel,
+
+  constructor(
+    @InjectRepository(AiApp)
+    private readonly appRepository: Repository<AiApp>,
+    @InjectRepository(AiAppVersion)
+    private readonly appVersionRepository: Repository<AiAppVersion>,
+    @InjectRepository(Llm)
+    private readonly llmRepository: Repository<Llm>,
+  ) {}
+
+  private async getDraft(appId: number): Promise<AiAppVersion> {
+    const app = await this.appRepository.findOne({ where: { id: appId } });
+    if (!app) throw new NotFoundException("AI应用不存在");
+
+    const draft = await this.appVersionRepository.findOne({
+      where: {
+        appId,
+        version: DRAFT_VERSION,
+        status: AiAppVersionStatus.DRAFT,
+      },
+    });
+    if (!draft) throw new NotFoundException("AI应用草稿不存在");
+
+    return draft;
+  }
+
+  private async getConfiguredLlm(config: AiAppVersionConfig): Promise<Llm> {
+    if (!config.llmId) {
+      throw new BadRequestException("请先选择模型");
+    }
+
+    const llm = await this.llmRepository.findOne({
+      where: { id: config.llmId },
+    });
+    if (!llm) throw new BadRequestException("模型不存在");
+
+    return llm;
+  }
+
+  private createModel(llm: Llm, config: AiAppVersionConfig): ChatOpenAI {
+    const settings = config.modelSettings ?? {};
+
+    return new ChatOpenAI({
+      apiKey: llm.apiKey,
+      model: llm.modelName,
       maxRetries: 1,
-      temperature: aiEnvironment.temperature,
-      configuration: aiEnvironment.baseUrl
-        ? { baseURL: aiEnvironment.baseUrl }
-        : undefined,
+      temperature: settings.temperature,
+      topP: settings.topP,
+      frequencyPenalty: settings.frequencyPenalty,
+      presencePenalty: settings.presencePenalty,
+      configuration: { baseURL: llm.url },
     });
   }
-  // --------------------------------------------------------------------------------------------------
-  // 学习测试用
-  async learn(message: string) {
+
+  private createMessages(config: AiAppVersionConfig, message: string) {
+    const messages: Array<["system" | "human", string]> = [];
+    const prompt = config.prompt?.trim();
+
+    if (prompt) {
+      messages.push(["system", prompt]);
+    }
+    messages.push(["human", message]);
+
+    return messages;
+  }
+
+  private estimateTokens(input: string, output: string): number {
+    return Math.max(
+      1,
+      Math.ceil((Array.from(input).length + Array.from(output).length) / 2),
+    );
+  }
+
+  private parseSuggestions(content: string): string[] {
+    const matched = /\[[\s\S]*\]/.exec(content);
+    if (!matched) return [];
+
     try {
-      const agent = createAgent({
-        model: this.chatModel,
-        tools: [this.getWeather],
-        responseFormat: this.Answer,
-      });
+      const parsed: unknown = JSON.parse(matched[0]);
+      if (!Array.isArray(parsed)) return [];
 
-      const response = await agent.invoke({
-        messages: [
-          { role: "system", content: "你是一个简洁、准确的 AI 助手。" },
-          { role: "user", content: message },
-        ],
-      });
-
-      return {
-        messages: response.structuredResponse,
-      };
-    } catch (error) {
-      throw new BadGatewayException("AI 服务请求失败", { cause: error });
+      return parsed
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .slice(0, 3);
+    } catch {
+      return [];
     }
   }
-  // --------------------------------------------------------------------------------------------------
 
-  // --------------------------------------------------------------------------------------------------
-  // 发起普通对话
-  async chat(message: string) {
-    try {
-      const response = await this.chatModel.invoke([
-        ["system", "你是一个简洁、准确的 AI 助手。"],
-        ["human", message],
-      ]);
+  private async createQuestionSuggestions(
+    model: ChatOpenAI,
+    userMessage: string,
+    assistantMessage: string,
+  ): Promise<string[]> {
+    const response = await model.invoke([
+      [
+        "system",
+        [
+          "只返回 JSON 字符串数组，包含 3 条用户下一步可能直接发送的话。",
+          "必须用用户本人语气，如“帮我…”“我想…”“能不能…”“请继续…”。",
+          "不要用旁观口吻，如“你可以问…”“是否需要…”“建议询问…”。",
+          "每条简短自然，可直接点击发送。",
+        ].join("\n"),
+      ],
+      [
+        "human",
+        `用户消息：${userMessage}\nAI回复：${assistantMessage}\n生成 3 条后续发送建议。`,
+      ],
+    ]);
 
-      return {
-        content: response.text,
-      };
-    } catch (error) {
-      throw new BadGatewayException("AI 服务请求失败", { cause: error });
+    return this.parseSuggestions(response.text);
+  }
+
+  private createPromptOptimizeMessages(
+    sourcePrompt: string,
+  ): Array<["system" | "human", string]> {
+    return [
+      [
+        "system",
+        [
+          "润色用户提供的人设与回复逻辑，使表达更清晰、通顺、自然。",
+          "只调整措辞和逻辑顺序，保留原意、角色、约束和信息量。",
+          "不要新增角色、任务、规则、示例或业务设定；不要扩写。",
+          "输出长度接近原文，最多不超过原文 1.2 倍；原文很短则保持同等长度。",
+          "保留原有 Markdown 结构；无结构时不要强行添加复杂结构。",
+          "只返回润色后的正文，不解释，不使用代码块。",
+        ].join("\n"),
+      ],
+      ["human", `请润色下面的人设与回复逻辑，不要扩写：\n\n${sourcePrompt}`],
+    ];
+  }
+
+  async optimizePrompt(appId: number, prompt: string) {
+    const sourcePrompt = prompt.trim();
+    if (!sourcePrompt) {
+      throw new BadRequestException("人设与回复逻辑不能为空");
     }
-  }
-  // --------------------------------------------------------------------------------------------------
 
-  // --------------------------------------------------------------------------------------------------
-  // 创建流式对话响应
-  createChatSseStream(message: string): Readable {
-    return Readable.from(this.streamChat(message));
+    const draft = await this.getDraft(appId);
+    const llm = await this.getConfiguredLlm(draft.config);
+    const model = this.createModel(llm, draft.config);
+    const response = await model.invoke(
+      this.createPromptOptimizeMessages(sourcePrompt),
+    );
+
+    const optimizedPrompt = response.text.trim();
+    if (!optimizedPrompt) {
+      throw new BadRequestException("模型未生成有效优化结果");
+    }
+
+    return { prompt: optimizedPrompt };
   }
 
-  private async *streamChat(message: string): AsyncGenerator<string> {
+  createPromptOptimizeSseStream(appId: number, prompt: string): Readable {
+    return Readable.from(this.streamPromptOptimize(appId, prompt));
+  }
+
+  private async *streamPromptOptimize(
+    appId: number,
+    prompt: string,
+  ): AsyncGenerator<string> {
+    const sourcePrompt = prompt.trim();
+
     try {
-      const stream = await this.chatModel.stream([
-        ["system", "你是一个简洁、准确的 AI 助手。"],
-        ["human", message],
-      ]);
+      if (!sourcePrompt) {
+        throw new BadRequestException("人设与回复逻辑不能为空");
+      }
+
+      const draft = await this.getDraft(appId);
+      const llm = await this.getConfiguredLlm(draft.config);
+      const model = this.createModel(llm, draft.config);
+      const stream = await model.stream(
+        this.createPromptOptimizeMessages(sourcePrompt),
+      );
 
       for await (const chunk of stream) {
         if (chunk.text) {
@@ -102,9 +209,67 @@ export class ChatService {
       const message = error instanceof Error ? error.message : String(error);
       const stack = error instanceof Error ? error.stack : undefined;
 
-      this.logger.error(`AI 流式服务请求失败: ${message}`, stack);
-      yield `event: error\ndata: ${JSON.stringify({ message: "AI 服务请求失败" })}\n\n`;
+      this.logger.error(`Prompt优化失败: ${message}`, stack);
+      yield `event: error\ndata: ${JSON.stringify({ message })}\n\n`;
     }
   }
-  // --------------------------------------------------------------------------------------------------
+
+  createAppDebugSseStream(appId: number, message: string): Readable {
+    return Readable.from(this.streamAppDebug(appId, message));
+  }
+
+  private async *streamAppDebug(
+    appId: number,
+    message: string,
+  ): AsyncGenerator<string> {
+    const startedAt = Date.now();
+    let output = "";
+
+    try {
+      const draft = await this.getDraft(appId);
+      const llm = await this.getConfiguredLlm(draft.config);
+      const model = this.createModel(llm, draft.config);
+      const stream = await model.stream(
+        this.createMessages(draft.config, message),
+      );
+
+      for await (const chunk of stream) {
+        if (chunk.text) {
+          output += chunk.text;
+          yield `data: ${JSON.stringify({ content: chunk.text })}\n\n`;
+        }
+      }
+
+      yield `event: meta\ndata: ${JSON.stringify({
+        elapsedMs: Date.now() - startedAt,
+        tokens: this.estimateTokens(message, output),
+      })}\n\n`;
+
+      if (draft.config.toggles?.questionSuggestions) {
+        let suggestions: string[] = [];
+        try {
+          suggestions = await this.createQuestionSuggestions(
+            model,
+            message,
+            output,
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          const stack = error instanceof Error ? error.stack : undefined;
+
+          this.logger.warn(`用户问题建议生成失败: ${message}`, stack);
+        }
+        yield `event: suggestions\ndata: ${JSON.stringify({ items: suggestions })}\n\n`;
+      }
+
+      yield "data: [DONE]\n\n";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? error.stack : undefined;
+
+      this.logger.error(`AI应用调试失败: ${message}`, stack);
+      yield `event: error\ndata: ${JSON.stringify({ message })}\n\n`;
+    }
+  }
 }

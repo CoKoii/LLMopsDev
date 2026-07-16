@@ -111,6 +111,7 @@ onBeforeUnmount(() => {
   .item {
     display: flex;
     flex-direction: column;
+    height: 16.8rem;
     padding: 1.6rem;
     background-color: var(--white);
     border-radius: 0.8rem;
@@ -135,6 +136,7 @@ onBeforeUnmount(() => {
         display: flex;
         align-items: center;
         gap: 1.2rem;
+        min-width: 0;
         img,
         .placeholder {
           width: 4rem;
@@ -157,14 +159,21 @@ onBeforeUnmount(() => {
           display: flex;
           flex-direction: column;
           gap: 0.4rem;
+          min-width: 0;
           .title {
+            overflow: hidden;
             font-size: 1.6rem;
             font-weight: 700;
             color: var(--font-active-color);
+            text-overflow: ellipsis;
+            white-space: nowrap;
           }
           .desc {
+            overflow: hidden;
             font-size: 1.2rem;
             color: var(--font-light-color);
+            text-overflow: ellipsis;
+            white-space: nowrap;
           }
         }
       }
@@ -236,17 +245,23 @@ onBeforeUnmount(() => {
       }
     }
     .content {
+      display: -webkit-box;
+      overflow: hidden;
       color: rgba(107, 114, 128, 1);
       line-height: 1.8rem;
       font-size: 1.4rem;
       min-height: 3.6rem;
+      max-height: 3.6rem;
       white-space: pre-line;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
     }
     .footer {
       display: flex;
       align-items: center;
       gap: 0.4rem;
-      margin-top: 1.2rem;
+      margin-top: auto;
+      padding-top: 1.2rem;
       img {
         width: 1.6rem;
         height: 1.6rem;

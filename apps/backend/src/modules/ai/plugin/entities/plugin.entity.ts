@@ -1,12 +1,5 @@
-import {
-  Column,
-  Entity,
-  ManyToMany,
-  PrimaryGeneratedColumn,
-  Relation,
-} from "typeorm";
+import { Column, Entity, PrimaryGeneratedColumn } from "typeorm";
 import { AuditableEntity } from "../../../../common/database/base.entity";
-import { AiApp } from "../../app/entities/app.entity";
 
 export interface PluginHeader {
   key: string;
@@ -41,6 +34,4 @@ export class Plugin extends AuditableEntity {
   @Column({ comment: "状态", default: true })
   status!: boolean;
 
-  @ManyToMany(() => AiApp, (app) => app.plugins)
-  apps!: Relation<AiApp[]>;
 }

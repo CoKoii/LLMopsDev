@@ -1,12 +1,5 @@
-import {
-  Column,
-  Entity,
-  OneToMany,
-  PrimaryGeneratedColumn,
-  Relation,
-} from "typeorm";
+import { Column, Entity, PrimaryGeneratedColumn } from "typeorm";
 import { AuditableEntity } from "../../../../common/database/base.entity";
-import { AiApp } from "../../app/entities/app.entity";
 
 @Entity({ name: "ai_llms", comment: "大模型" })
 export class Llm extends AuditableEntity {
@@ -24,7 +17,4 @@ export class Llm extends AuditableEntity {
 
   @Column({ comment: "API Key", length: 512 })
   apiKey!: string;
-
-  @OneToMany(() => AiApp, (app) => app.llm)
-  apps!: Relation<AiApp[]>;
 }

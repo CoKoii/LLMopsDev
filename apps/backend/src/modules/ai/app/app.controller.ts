@@ -14,6 +14,7 @@ import { CurrentUser } from "../../../common/auth/current-user.decorator";
 import { AppService } from "./app.service";
 import { CreateAppDto } from "./dto/create-app.dto";
 import { QueryAppsDto } from "./dto/query-apps.dto";
+import { UpdateAppDraftDto } from "./dto/update-app-draft.dto";
 import { UpdateAppDto } from "./dto/update-app.dto";
 
 @Controller("ai/apps")
@@ -41,6 +42,52 @@ export class AppController {
   @Get(":id")
   findOne(@Param("id", ParseIntPipe) id: number) {
     return this.appService.findOne(id);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 获取AI应用草稿版本
+  @Get(":id/draft")
+  getDraft(@Param("id", ParseIntPipe) id: number) {
+    return this.appService.getDraft(id);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 自动保存AI应用草稿版本
+  @Put(":id/draft")
+  updateDraft(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() updateAppDraftDto: UpdateAppDraftDto,
+  ) {
+    return this.appService.updateDraft(id, updateAppDraftDto);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 获取AI应用历史版本
+  @Get(":id/versions")
+  listVersions(@Param("id", ParseIntPipe) id: number) {
+    return this.appService.listVersions(id);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 发布AI应用版本
+  @Post(":id/versions/publish")
+  publishVersion(@Param("id", ParseIntPipe) id: number) {
+    return this.appService.publishVersion(id);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 恢复历史版本到草稿
+  @Post(":id/versions/:versionId/restore")
+  restoreVersion(
+    @Param("id", ParseIntPipe) id: number,
+    @Param("versionId", ParseIntPipe) versionId: number,
+  ) {
+    return this.appService.restoreVersion(id, versionId);
   }
   // -------------------------
 

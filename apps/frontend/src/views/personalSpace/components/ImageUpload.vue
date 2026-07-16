@@ -31,7 +31,6 @@ const handleFileChange = async (event: Event) => {
     const uploaded = await uploadFileApi(file)
     imageUrl.value = uploaded.url
     fileId.value = uploaded.id
-    message.success('图片上传成功')
   } finally {
     uploading.value = false
   }

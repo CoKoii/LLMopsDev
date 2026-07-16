@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { JwtModule } from "@nestjs/jwt";
 import { PassportModule } from "@nestjs/passport";
 import { TypeOrmModule } from "@nestjs/typeorm";
+import { FilesModule } from "../files/files.module";
 import { AuthSessionCleanupService } from "./auth/auth-session-cleanup.service";
 import { AuthSession } from "./auth/auth-session.entity";
 import { AuthController } from "./auth/auth.controller";
@@ -26,6 +27,7 @@ import { UsersService } from "./users/users.service";
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, Profile, Role, Permission, AuthSession]),
+    FilesModule,
     PassportModule,
     JwtModule.register({}),
   ],

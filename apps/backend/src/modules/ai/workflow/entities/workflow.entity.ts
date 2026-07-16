@@ -1,12 +1,5 @@
-import {
-  Column,
-  Entity,
-  ManyToMany,
-  PrimaryGeneratedColumn,
-  Relation,
-} from "typeorm";
+import { Column, Entity, PrimaryGeneratedColumn } from "typeorm";
 import { AuditableEntity } from "../../../../common/database/base.entity";
-import { AiApp } from "../../app/entities/app.entity";
 
 @Entity({ name: "ai_workflows", comment: "工作流" })
 export class Workflow extends AuditableEntity {
@@ -38,6 +31,4 @@ export class Workflow extends AuditableEntity {
   @Column({ comment: "状态", default: true })
   status!: boolean;
 
-  @ManyToMany(() => AiApp, (app) => app.workflows)
-  apps!: Relation<AiApp[]>;
 }

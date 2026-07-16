@@ -1,4 +1,5 @@
 import request from '../request'
+import { getAccessToken } from '@/utils/auth'
 
 export interface PageResult<T> {
   items: T[]
@@ -29,9 +30,46 @@ export interface AiAppItem {
   name: string
   image?: string | null
   description?: string | null
-  llmId?: number | null
-  llm?: LlmItem | null
   status: boolean
+  createdAt?: string
+  updatedAt?: string
+}
+
+export type AiAppVersionStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'
+
+export interface AiAppVersionConfig {
+  prompt?: string
+  llmId?: number | null
+  modelSettings?: {
+    temperature?: number
+    topP?: number
+    presencePenalty?: number
+    frequencyPenalty?: number
+  }
+  capabilities?: Array<{
+    key: string
+    title: string
+    description?: string
+    icon?: string
+    tone?: string
+  }>
+  pluginIds?: number[]
+  workflowIds?: number[]
+  knowledgeIds?: number[]
+  toggles?: Record<string, boolean>
+  openingStatement?: {
+    content?: string
+    questions?: string[]
+  }
+}
+
+export interface AiAppVersionItem {
+  id: number
+  appId: number
+  version: string
+  status: AiAppVersionStatus
+  config: AiAppVersionConfig
+  publishedAt?: string | null
   createdAt?: string
   updatedAt?: string
 }
@@ -82,7 +120,6 @@ export interface CreateAiAppPayload {
   image?: string
   imageFileId?: number
   description?: string
-  llmId?: number | null
   status?: boolean
 }
 
@@ -155,6 +192,196 @@ export const updateAiAppApi = async (id: number, payload: UpdateAiAppPayload) =>
 
 export const deleteAiAppApi = async (id: number) => {
   return request.delete(`/ai/apps/${id}`)
+}
+
+export const getAiAppDraftApi = async (id: number): Promise<AiAppVersionItem> => {
+  return request.get(`/ai/apps/${id}/draft`)
+}
+
+export const updateAiAppDraftApi = async (
+  id: number,
+  payload: { config: AiAppVersionConfig },
+): Promise<AiAppVersionItem> => {
+  return request.put(`/ai/apps/${id}/draft`, payload)
+}
+
+export const listAiAppVersionsApi = async (id: number): Promise<AiAppVersionItem[]> => {
+  return request.get(`/ai/apps/${id}/versions`)
+}
+
+export const publishAiAppVersionApi = async (id: number): Promise<AiAppVersionItem> => {
+  return request.post(`/ai/apps/${id}/versions/publish`)
+}
+
+export const restoreAiAppVersionApi = async (
+  appId: number,
+  versionId: number,
+): Promise<AiAppVersionItem> => {
+  return request.post(`/ai/apps/${appId}/versions/${versionId}/restore`)
+}
+
+export const optimizeAiAppPromptApi = async (
+  appId: number,
+  payload: { prompt: string },
+): Promise<{ prompt: string }> => {
+  return request.post(`/ai/apps/${appId}/prompt/optimize`, payload, { timeout: 60000 })
+}
+
+type StreamAiAppPromptOptimizeParams = {
+  appId: number
+  prompt: string
+  onContent: (content: string) => void
+  signal?: AbortSignal
+}
+
+export const streamAiAppPromptOptimizeApi = async ({
+  appId,
+  prompt,
+  onContent,
+  signal,
+}: StreamAiAppPromptOptimizeParams) => {
+  const baseURL = import.meta.env.VITE_API_BASE_URL || ''
+  const token = getAccessToken()
+  const response = await fetch(`${baseURL}/ai/apps/${appId}/prompt/optimize/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ prompt }),
+    signal,
+  })
+
+  if (!response.ok || !response.body) {
+    throw new Error('优化接口请求失败')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  const consumeEvent = (rawEvent: string) => {
+    const lines = rawEvent.split('\n')
+    const eventName = lines.find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message'
+    const data = lines
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trim())
+      .join('\n')
+
+    if (!data || data === '[DONE]') return
+
+    const payload = JSON.parse(data) as {
+      content?: string
+      message?: string
+    }
+    if (eventName === 'error') {
+      throw new Error(payload.message || '优化接口请求失败')
+    }
+    if (payload.content) {
+      onContent(payload.content)
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+    events.forEach(consumeEvent)
+  }
+
+  if (buffer) {
+    consumeEvent(buffer)
+  }
+}
+
+type StreamAiAppDebugParams = {
+  appId: number
+  message: string
+  onContent: (content: string) => void
+  onMeta?: (meta: { elapsedMs: number; tokens: number }) => void
+  onSuggestions?: (items: string[]) => void
+  onError?: (message: string) => void
+  signal?: AbortSignal
+}
+
+export const streamAiAppDebugApi = async ({
+  appId,
+  message,
+  onContent,
+  onMeta,
+  onSuggestions,
+  onError,
+  signal,
+}: StreamAiAppDebugParams) => {
+  const baseURL = import.meta.env.VITE_API_BASE_URL || ''
+  const token = getAccessToken()
+  const response = await fetch(`${baseURL}/ai/apps/${appId}/debug/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ message }),
+    signal,
+  })
+
+  if (!response.ok || !response.body) {
+    throw new Error('调试接口请求失败')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  const consumeEvent = (rawEvent: string) => {
+    const lines = rawEvent.split('\n')
+    const eventName = lines.find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message'
+    const data = lines
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trim())
+      .join('\n')
+
+    if (!data || data === '[DONE]') return
+
+    const payload = JSON.parse(data) as {
+      content?: string
+      elapsedMs?: number
+      tokens?: number
+      items?: string[]
+    }
+    if (eventName === 'error') {
+      onError?.((payload as { message?: string }).message || '调试接口请求失败')
+      return
+    }
+    if (eventName === 'suggestions') {
+      onSuggestions?.(Array.isArray(payload.items) ? payload.items : [])
+      return
+    }
+    if (eventName === 'meta' && payload.elapsedMs !== undefined && payload.tokens !== undefined) {
+      onMeta?.({ elapsedMs: payload.elapsedMs, tokens: payload.tokens })
+      return
+    }
+    if (payload.content) {
+      onContent(payload.content)
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+    events.forEach(consumeEvent)
+  }
+
+  if (buffer) {
+    consumeEvent(buffer)
+  }
 }
 
 export const listPluginsApi = async (params?: PageParams): Promise<PageResult<PluginItem>> => {

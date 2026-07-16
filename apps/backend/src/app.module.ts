@@ -7,7 +7,6 @@ import { PermissionsGuard } from "./common/auth/permissions.guard";
 import { RolesGuard } from "./common/auth/roles.guard";
 import { RedisModule } from "./common/cache/redis.module";
 import {
-  getAiEnvironmentFromProcess,
   loadEnvironmentFiles,
   resolveEnvFilePaths,
   validateEnvironment,
@@ -21,14 +20,10 @@ import { OssModule } from "./common/oss/oss.module";
 import { RequestContextInterceptor } from "./common/request-context/request-context.interceptor";
 import { RequestContextModule } from "./common/request-context/request-context.module";
 import { AiModule } from "./modules/ai/ai.module";
-import { ChatModule } from "./modules/ai/chat/chat.module";
 import { FilesModule } from "./modules/files/files.module";
 import { IamModule } from "./modules/iam/iam.module";
 
 loadEnvironmentFiles();
-const aiChatModuleImports = getAiEnvironmentFromProcess().enabled
-  ? [ChatModule]
-  : [];
 const coreModules = [
   ConfigModule.forRoot({
     isGlobal: true,
@@ -42,7 +37,7 @@ const coreModules = [
   DatabaseModule,
   RedisModule,
 ];
-const optionalModules = [AppMailerModule, OssModule, ...aiChatModuleImports];
+const optionalModules = [AppMailerModule, OssModule];
 const businessModules = [IamModule, FilesModule, AiModule];
 
 @Module({
