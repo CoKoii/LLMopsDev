@@ -26,6 +26,24 @@ export const getUserInfoApi = async () => {
   return request.get('/profiles/me')
 }
 
+export type UpdateCurrentProfileParams = {
+  nickname: string
+}
+
+export const updateCurrentProfileApi = async (params: UpdateCurrentProfileParams) => {
+  return request.put('/profiles/me', params)
+}
+
+export type ChangeCurrentPasswordParams = {
+  currentPassword: string
+  newPassword: string
+  confirmPassword: string
+}
+
+export const changeCurrentPasswordApi = async (params: ChangeCurrentPasswordParams) => {
+  return request.put('/profiles/me/password', params)
+}
+
 // 刷新accessToken接口
 export type RefreshResponse = {
   accessToken: string

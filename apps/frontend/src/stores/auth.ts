@@ -16,13 +16,17 @@ export const useAuthStore = defineStore(
     const refreshToken = ref()
     const userInfo = ref()
     // 获取用户信息函数
-    const getUserInfo = async () => {
-      if (userInfo.value) {
+    const getUserInfo = async (force = false) => {
+      if (userInfo.value && !force) {
         return userInfo.value
       }
       const userInfoRes = await getUserInfoApi()
       userInfo.value = userInfoRes
       return userInfoRes
+    }
+
+    const setUserInfo = (info: unknown) => {
+      userInfo.value = info
     }
 
     // 登录函数
@@ -73,6 +77,7 @@ export const useAuthStore = defineStore(
       refreshToken,
       userInfo,
       getUserInfo,
+      setUserInfo,
       authLogin,
       authLogout,
       refreshAccessToken,
