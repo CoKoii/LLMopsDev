@@ -1,13 +1,22 @@
 <script setup lang="ts">
-import { changeCurrentPasswordApi, updateCurrentProfileApi } from '@/api'
+import { changeCurrentPasswordApi, updateCurrentProfileApi, uploadFileApi } from '@/api'
 import AppModal from '@/components/AppModal/AppModal.vue'
 import { mainRoutes } from '@/router/menus'
 import { useAuthStore } from '@/stores/auth'
-import ImageUpload from '@/views/personalSpace/components/ImageUpload.vue'
-import { LogoutOutlined, PlusOutlined, SettingOutlined } from '@antdv-next/icons'
-import { Button, Dropdown, Form, FormItem, Input, InputPassword, message } from 'antdv-next'
-import type { FormInstance, MenuProps } from 'antdv-next'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { EditOutlined, LogoutOutlined, PlusOutlined, SettingOutlined } from '@antdv-next/icons'
+import {
+  Avatar,
+  Button,
+  Dropdown,
+  Form,
+  FormItem,
+  Input,
+  InputPassword,
+  message,
+  Upload,
+} from 'antdv-next'
+import type { FormInstance, MenuProps, UploadProps } from 'antdv-next'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import type { RouteRecordNameGeneric, RouteRecordRaw } from 'vue-router'
 import { useRoute } from 'vue-router'
 
@@ -18,8 +27,8 @@ const profileFormRef = ref<FormInstance>()
 const passwordFormRef = ref<FormInstance>()
 const profileLoading = ref(false)
 const passwordLoading = ref(false)
+const avatarUploading = ref(false)
 const editingNickname = ref(false)
-const editingAvatar = ref(false)
 const editingPassword = ref(false)
 
 type CurrentUserInfo = {
@@ -32,8 +41,6 @@ type CurrentUserInfo = {
 
 const profileForm = reactive({
   nickname: '',
-  avatar: undefined as string | undefined,
-  avatarFileId: undefined as number | undefined,
 })
 
 const passwordForm = reactive({
@@ -49,6 +56,14 @@ const displayName = computed(
 const accountName = computed(() => currentUser.value?.username || '未绑定账号')
 const accountAvatar = computed(() => currentUser.value?.profile?.avatar || '')
 const accountInitial = computed(() => displayName.value.slice(0, 1) || '用')
+const showNewPassword = computed(() => Boolean(passwordForm.currentPassword))
+const showConfirmPassword = computed(() => Boolean(passwordForm.newPassword))
+const canSubmitPassword = computed(
+  () =>
+    Boolean(passwordForm.currentPassword) &&
+    Boolean(passwordForm.newPassword) &&
+    Boolean(passwordForm.confirmPassword),
+)
 
 const passwordRules = {
   currentPassword: [{ required: true, message: '请输入原密码' }],
@@ -104,8 +119,6 @@ function isMenuActive(item: RouteRecordRaw) {
 
 function syncProfileForm() {
   profileForm.nickname = displayName.value
-  profileForm.avatar = accountAvatar.value || undefined
-  profileForm.avatarFileId = undefined
 }
 
 function cancelEditNickname() {
@@ -114,9 +127,25 @@ function cancelEditNickname() {
   editingNickname.value = false
 }
 
-function cancelEditAvatar() {
-  syncProfileForm()
-  editingAvatar.value = false
+const beforeAvatarUpload: UploadProps['beforeUpload'] = async (file) => {
+  const imageFile = file as File
+
+  if (!imageFile.type.startsWith('image/')) {
+    message.error('请选择图片文件')
+    return false
+  }
+
+  avatarUploading.value = true
+  try {
+    const uploadedFile = await uploadFileApi(imageFile)
+    const updatedUser = await updateCurrentProfileApi({ avatarFileId: uploadedFile.id })
+    authStore.setUserInfo(updatedUser)
+    syncProfileForm()
+  } finally {
+    avatarUploading.value = false
+  }
+
+  return false
 }
 
 function resetPasswordForm() {
@@ -136,7 +165,6 @@ async function openAccountSettings() {
   syncProfileForm()
   resetPasswordForm()
   editingNickname.value = false
-  editingAvatar.value = false
   editingPassword.value = false
   accountSettingsOpen.value = true
 }
@@ -152,18 +180,12 @@ async function saveProfile() {
   profileForm.nickname = nickname
   await profileFormRef.value?.validate()
 
-  const payload = {
-    nickname,
-    ...(profileForm.avatarFileId !== undefined ? { avatarFileId: profileForm.avatarFileId } : {}),
-  }
-
   profileLoading.value = true
   try {
-    const updatedUser = await updateCurrentProfileApi(payload)
+    const updatedUser = await updateCurrentProfileApi({ nickname })
     authStore.setUserInfo(updatedUser)
     syncProfileForm()
     editingNickname.value = false
-    editingAvatar.value = false
     message.success('账号资料已更新')
   } finally {
     profileLoading.value = false
@@ -202,6 +224,27 @@ async function handleUserMenuClick({ key }: { key: string | number }) {
 onMounted(() => {
   void authStore.getUserInfo()
 })
+
+watch(
+  () => passwordForm.currentPassword,
+  (value) => {
+    if (value) return
+
+    passwordForm.newPassword = ''
+    passwordForm.confirmPassword = ''
+    passwordFormRef.value?.clearValidate()
+  },
+)
+
+watch(
+  () => passwordForm.newPassword,
+  (value) => {
+    if (value) return
+
+    passwordForm.confirmPassword = ''
+    passwordFormRef.value?.clearValidate()
+  },
+)
 </script>
 
 <template>
@@ -269,32 +312,36 @@ onMounted(() => {
           <h2 class="settings-main-title">账号设置</h2>
 
           <div class="settings-field">
-            <div class="field-label required">账号头像</div>
-            <div v-if="!editingAvatar" class="field-display">
-              <span class="settings-avatar-preview">
-                <img v-if="accountAvatar" :src="accountAvatar" alt="Avatar" />
-                <span v-else>{{ accountInitial }}</span>
-              </span>
-              <Button type="link" class="inline-action" @click="editingAvatar = true">
-                编辑
-              </Button>
-            </div>
-            <div v-else class="avatar-form">
-              <ImageUpload
-                v-model:url="profileForm.avatar"
-                v-model:file-id="profileForm.avatarFileId"
-              />
-              <Button @click="cancelEditAvatar">取消</Button>
-              <Button type="primary" :loading="profileLoading" @click="saveProfile">保存</Button>
+            <div class="field-label">账号头像</div>
+            <div class="avatar-setting-row">
+              <Upload
+                accept="image/*"
+                class="avatar-upload"
+                :show-upload-list="false"
+                :before-upload="beforeAvatarUpload"
+                :disabled="avatarUploading || profileLoading"
+              >
+                <Avatar :size="68" :src="accountAvatar || undefined" class="settings-avatar">
+                  <span v-if="!accountAvatar">{{ accountInitial }}</span>
+                </Avatar>
+              </Upload>
             </div>
           </div>
 
           <div class="settings-field">
-            <div class="field-label required">账号昵称</div>
+            <div class="field-label">账号昵称</div>
             <div v-if="!editingNickname" class="field-display">
               <span>{{ displayName }}</span>
-              <Button type="link" class="inline-action" @click="editingNickname = true">
-                编辑
+              <Button
+                type="link"
+                shape="circle"
+                class="inline-action"
+                title="编辑昵称"
+                @click="editingNickname = true"
+              >
+                <template #icon>
+                  <EditOutlined />
+                </template>
               </Button>
             </div>
             <Form
@@ -324,11 +371,19 @@ onMounted(() => {
           </div>
 
           <div class="settings-field">
-            <div class="field-label required">账号密码</div>
+            <div class="field-label">账号密码</div>
             <div v-if="!editingPassword" class="field-display">
               <span>已设置</span>
-              <Button type="link" class="inline-action" @click="editingPassword = true">
-                编辑
+              <Button
+                type="link"
+                shape="circle"
+                class="inline-action"
+                title="编辑密码"
+                @click="editingPassword = true"
+              >
+                <template #icon>
+                  <EditOutlined />
+                </template>
               </Button>
             </div>
             <Form
@@ -339,7 +394,12 @@ onMounted(() => {
               :model="passwordForm"
               :rules="passwordRules"
             >
-              <input class="hidden-username" autocomplete="username" :value="accountName" readonly />
+              <input
+                class="hidden-username"
+                autocomplete="username"
+                :value="accountName"
+                readonly
+              />
               <FormItem name="currentPassword">
                 <InputPassword
                   v-model:value="passwordForm.currentPassword"
@@ -347,14 +407,14 @@ onMounted(() => {
                   autocomplete="current-password"
                 />
               </FormItem>
-              <FormItem name="newPassword">
+              <FormItem v-if="showNewPassword" name="newPassword">
                 <InputPassword
                   v-model:value="passwordForm.newPassword"
                   placeholder="请输入新密码"
                   autocomplete="new-password"
                 />
               </FormItem>
-              <FormItem name="confirmPassword">
+              <FormItem v-if="showConfirmPassword" name="confirmPassword">
                 <InputPassword
                   v-model:value="passwordForm.confirmPassword"
                   placeholder="请再次输入新密码"
@@ -363,7 +423,12 @@ onMounted(() => {
               </FormItem>
               <div class="password-actions">
                 <Button @click="cancelEditPassword">取消</Button>
-                <Button type="primary" :loading="passwordLoading" @click="changePassword">
+                <Button
+                  type="primary"
+                  :loading="passwordLoading"
+                  :disabled="!canSubmitPassword"
+                  @click="changePassword"
+                >
                   保存
                 </Button>
               </div>

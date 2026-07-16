@@ -9,15 +9,7 @@ import {
   updateAiAppApi,
   type AiAppItem,
 } from '@/api'
-import {
-  Form,
-  FormItem,
-  Input,
-  message,
-  Modal,
-  TextArea,
-  type FormInstance,
-} from 'antdv-next'
+import { Form, FormItem, Input, message, Modal, TextArea, type FormInstance } from 'antdv-next'
 import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import ImageUpload from '../components/ImageUpload.vue'
@@ -49,13 +41,17 @@ const listItems = computed<ListBoxItem[]>(() =>
   records.value.map((item) => ({
     id: item.id,
     title: item.name,
-    description: 'AI 应用',
+    description: formatModelName(item),
     content: item.description || '暂无描述',
     image: item.image || undefined,
     footer: item.updatedAt ? `最近编辑 ${formatDate(item.updatedAt)}` : undefined,
     raw: item,
   })),
 )
+
+const formatModelName = (item: AiAppItem) => {
+  return item.model ? `${item.model.provider}·${item.model.modelName}` : '未选择模型'
+}
 
 const formatDate = (value: string) => {
   return new Date(value).toLocaleString('zh-CN', {

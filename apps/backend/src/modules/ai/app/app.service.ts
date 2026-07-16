@@ -1,12 +1,13 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { DataSource, Repository } from "typeorm";
+import { DataSource, In, Repository } from "typeorm";
 import { FilesService } from "../../files/files.service";
 import {
   createPageResult,
   type PageResult,
   resolvePageQuery,
 } from "../../../common/http/page-query.dto";
+import { Llm } from "../llm/entities/llm.entity";
 import { CreateAppDto } from "./dto/create-app.dto";
 import { QueryAppsDto } from "./dto/query-apps.dto";
 import { UpdateAppDraftDto } from "./dto/update-app-draft.dto";
@@ -19,6 +20,11 @@ import {
 import { AiApp } from "./entities/app.entity";
 
 const DRAFT_VERSION = "draft";
+
+type AppModelSummary = Pick<Llm, "id" | "provider" | "modelName">;
+type AppListItem = AiApp & {
+  model: AppModelSummary | null;
+};
 
 const createDefaultDraftConfig = (): AiAppVersionConfig => ({
   llmId: null,
@@ -42,6 +48,8 @@ export class AppService {
     private readonly appRepository: Repository<AiApp>,
     @InjectRepository(AiAppVersion)
     private readonly appVersionRepository: Repository<AiAppVersion>,
+    @InjectRepository(Llm)
+    private readonly llmRepository: Repository<Llm>,
     private readonly dataSource: DataSource,
     private readonly filesService: FilesService,
   ) {}
@@ -167,7 +175,7 @@ export class AppService {
 
   // --------------------------------------------------------------------------------------------------
   // 获取AI应用列表
-  async list(query: QueryAppsDto): Promise<PageResult<AiApp>> {
+  async list(query: QueryAppsDto): Promise<PageResult<AppListItem>> {
     const { page, pageSize, skip } = resolvePageQuery(query);
     const name = query.name?.trim();
     const queryBuilder = this.appRepository
@@ -183,8 +191,51 @@ export class AppService {
     }
 
     const [items, total] = await queryBuilder.getManyAndCount();
+    const appIds = items.map((item) => item.id);
+    const drafts = appIds.length
+      ? await this.appVersionRepository.find({
+          select: ["appId", "config"],
+          where: {
+            appId: In(appIds),
+            version: DRAFT_VERSION,
+            status: AiAppVersionStatus.DRAFT,
+          },
+        })
+      : [];
+    const draftByAppId = new Map(drafts.map((draft) => [draft.appId, draft]));
+    const llmIds = [
+      ...new Set(
+        drafts
+          .map((draft) => draft.config.llmId)
+          .filter((llmId): llmId is number => typeof llmId === "number"),
+      ),
+    ];
+    const llms = llmIds.length
+      ? await this.llmRepository.find({
+          select: ["id", "provider", "modelName"],
+          where: { id: In(llmIds) },
+        })
+      : [];
+    const llmById = new Map(llms.map((llm) => [llm.id, llm]));
+
     return createPageResult(
-      items.map((item) => this.withAccessibleImage(item)),
+      items.map((item) => {
+        const draft = draftByAppId.get(item.id);
+        const llm = draft?.config.llmId
+          ? llmById.get(draft.config.llmId)
+          : undefined;
+
+        return {
+          ...this.withAccessibleImage(item),
+          model: llm
+            ? {
+                id: llm.id,
+                provider: llm.provider,
+                modelName: llm.modelName,
+              }
+            : null,
+        };
+      }),
       total,
       page,
       pageSize,

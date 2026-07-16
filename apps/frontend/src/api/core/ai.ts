@@ -30,6 +30,7 @@ export interface AiAppItem {
   name: string
   image?: string | null
   description?: string | null
+  model?: Pick<LlmItem, 'id' | 'provider' | 'modelName'> | null
   status: boolean
   createdAt?: string
   updatedAt?: string
