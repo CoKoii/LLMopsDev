@@ -141,6 +141,10 @@ export const listAiAppsApi = async (params?: PageParams): Promise<PageResult<AiA
   return request.get('/ai/apps', { params })
 }
 
+export const getAiAppApi = async (id: number): Promise<AiAppItem> => {
+  return request.get(`/ai/apps/${id}`)
+}
+
 export const createAiAppApi = async (payload: CreateAiAppPayload) => {
   return request.post('/ai/apps', payload)
 }

@@ -8,6 +8,8 @@ export const mainRoutes: RouteRecordRaw[] = [
     meta: {
       title: '主页',
       icon: LayoutGrid,
+      pageTransition: 'workspace-rise',
+      shellKey: 'home',
     },
     component: () => import('../views/home/index.vue'),
   },
@@ -17,6 +19,8 @@ export const mainRoutes: RouteRecordRaw[] = [
     meta: {
       title: '个人空间',
       icon: User,
+      pageTransition: 'workspace-fade',
+      shellKey: 'personal-space',
     },
     component: () => import('../views/personalSpace/index.vue'),
     redirect: { name: 'personal-space-apps' },
@@ -26,6 +30,7 @@ export const mainRoutes: RouteRecordRaw[] = [
         name: 'personal-space-apps',
         meta: {
           title: 'AI应用',
+          pageTransition: 'workspace-fade',
         },
         component: () => import('../views/personalSpace/apps/index.vue'),
       },
@@ -34,6 +39,7 @@ export const mainRoutes: RouteRecordRaw[] = [
         name: 'personal-space-plugins',
         meta: {
           title: '插件',
+          pageTransition: 'workspace-fade',
         },
         component: () => import('../views/personalSpace/plugins/index.vue'),
       },
@@ -42,6 +48,7 @@ export const mainRoutes: RouteRecordRaw[] = [
         name: 'personal-space-workflows',
         meta: {
           title: '工作流',
+          pageTransition: 'workspace-fade',
         },
         component: () => import('../views/personalSpace/workflows/index.vue'),
       },
@@ -50,6 +57,7 @@ export const mainRoutes: RouteRecordRaw[] = [
         name: 'personal-space-knowledge',
         meta: {
           title: '知识库',
+          pageTransition: 'workspace-fade',
         },
         component: () => import('../views/personalSpace/knowledge/index.vue'),
       },
@@ -63,6 +71,8 @@ export const mainRoutes: RouteRecordRaw[] = [
       icon: Astroid,
       tag: '探索',
       activeMenu: 'apps',
+      pageTransition: 'workspace-fade',
+      shellKey: 'apps',
     },
     component: () => import('../views/apps/index.vue'),
   },
@@ -73,6 +83,8 @@ export const mainRoutes: RouteRecordRaw[] = [
       title: '插件广场',
       icon: Blocks,
       activeMenu: 'plugins',
+      pageTransition: 'workspace-fade',
+      shellKey: 'plugins',
     },
     component: () => import('../views/plugins/index.vue'),
   },
@@ -82,6 +94,8 @@ export const mainRoutes: RouteRecordRaw[] = [
     meta: {
       title: '开放API',
       icon: CodeXml,
+      pageTransition: 'workspace-fade',
+      shellKey: 'open-api',
     },
     component: () => import('../views/openAPI/index.vue'),
     redirect: { name: 'open-api-quick-start' },
@@ -91,6 +105,7 @@ export const mainRoutes: RouteRecordRaw[] = [
         name: 'open-api-quick-start',
         meta: {
           title: '快速开始',
+          pageTransition: 'workspace-fade',
         },
         component: () => import('../views/openAPI/quickStart/index.vue'),
       },
@@ -99,6 +114,7 @@ export const mainRoutes: RouteRecordRaw[] = [
         name: 'open-api-keys',
         meta: {
           title: '秘钥',
+          pageTransition: 'workspace-fade',
         },
         component: () => import('../views/openAPI/keys/index.vue'),
       },
@@ -110,6 +126,9 @@ export const routes: RouteRecordRaw[] = [
   {
     path: '/',
     component: () => import('../components/Layouts/SidebarLayout/SidebarLayout.vue'),
+    meta: {
+      appTransition: 'app-shell',
+    },
     children: mainRoutes,
   },
   {
@@ -117,7 +136,31 @@ export const routes: RouteRecordRaw[] = [
     name: 'login',
     meta: {
       title: '登录',
+      appTransition: 'app-shell',
     },
     component: () => import('../views/login/index.vue'),
+  },
+  {
+    path: '/apps/orchestration/:appId',
+    redirect: (to) => ({
+      name: 'app-orchestration',
+      params: {
+        appId: to.params.appId,
+        page: 'edit',
+      },
+    }),
+    meta: {
+      title: '应用编排',
+      appTransition: 'page-forward',
+    },
+  },
+  {
+    path: '/apps/orchestration/:appId/:page(edit|publish|stats)',
+    name: 'app-orchestration',
+    meta: {
+      title: '应用编排',
+      appTransition: 'page-forward',
+    },
+    component: () => import('../views/appOrchestration/index.vue'),
   },
 ]

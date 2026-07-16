@@ -233,7 +233,7 @@ onMounted(() => {
 
     <AppModal
       v-model:open="accountSettingsOpen"
-      width="70rem"
+      width="102.4rem"
       :footer="null"
       wrap-class-name="account-settings-modal"
     >

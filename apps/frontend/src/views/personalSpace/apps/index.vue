@@ -10,7 +10,6 @@ import {
   type AiAppItem,
 } from '@/api'
 import {
-  Button,
   Form,
   FormItem,
   Input,
@@ -20,6 +19,7 @@ import {
   type FormInstance,
 } from 'antdv-next'
 import { computed, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import ImageUpload from '../components/ImageUpload.vue'
 
 const props = defineProps<{
@@ -43,6 +43,7 @@ const createEmptyForm = () => ({
 
 const formModel = reactive(createEmptyForm())
 const modalTitle = computed(() => (editingId.value ? '编辑 AI 应用' : '创建 AI 应用'))
+const router = useRouter()
 
 const listItems = computed<ListBoxItem[]>(() =>
   records.value.map((item) => ({
@@ -107,6 +108,11 @@ const openEdit = async (item: ListBoxItem) => {
   modalOpen.value = true
 }
 
+const openOrchestration = (item: ListBoxItem) => {
+  const record = item.raw as AiAppItem
+  void router.push({ name: 'app-orchestration', params: { appId: record.id, page: 'edit' } })
+}
+
 const submit = async () => {
   await formRef.value?.validate()
   saving.value = true
@@ -169,7 +175,13 @@ watch(
 </script>
 
 <template>
-  <ListBox :items="listItems" :loading="loading" @edit="openEdit" @delete="confirmDelete" />
+  <ListBox
+    :items="listItems"
+    :loading="loading"
+    @open="openOrchestration"
+    @edit="openEdit"
+    @delete="confirmDelete"
+  />
 
   <AppModal
     v-model:open="modalOpen"
