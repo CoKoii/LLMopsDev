@@ -160,7 +160,7 @@ const displayMessages = computed<ChatMessage[]>(() =>
     footer:
       item.role === 'assistant' && !item.pending && item.elapsedMs !== undefined
         ? createAssistantFooter(
-            `${formatDuration(item.elapsedMs)} · ${formatTokens(item.tokens || 0)} Tokens`,
+            formatMessageMeta(item.elapsedMs, item.tokens),
             item.key === suggestionTargetMessageKey.value ? suggestedPrompts.value : [],
           )
         : undefined,
@@ -314,6 +314,14 @@ function formatDuration(value: number) {
 
 function formatTokens(value: number) {
   return value.toLocaleString('en-US')
+}
+
+function formatMessageMeta(elapsedMs: number, tokens?: number) {
+  const parts = [formatDuration(elapsedMs)]
+  if (tokens !== undefined) {
+    parts.push(`${formatTokens(tokens)} Tokens`)
+  }
+  return parts.join(' · ')
 }
 
 function createAssistantAvatar() {

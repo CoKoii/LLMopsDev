@@ -67,6 +67,7 @@ export class ChatService {
       apiKey: llm.apiKey,
       model: llm.modelName,
       maxRetries: 1,
+      streamUsage: true,
       temperature: settings.temperature,
       topP: settings.topP,
       frequencyPenalty: settings.frequencyPenalty,
@@ -85,13 +86,6 @@ export class ChatService {
     messages.push(["human", message]);
 
     return messages;
-  }
-
-  private estimateTokens(input: string, output: string): number {
-    return Math.max(
-      1,
-      Math.ceil((Array.from(input).length + Array.from(output).length) / 2),
-    );
   }
 
   private parseSuggestions(content: string): string[] {
@@ -224,6 +218,7 @@ export class ChatService {
   ): AsyncGenerator<string> {
     const startedAt = Date.now();
     let output = "";
+    let tokens: number | undefined;
 
     try {
       const draft = await this.getDraft(appId);
@@ -234,6 +229,7 @@ export class ChatService {
       );
 
       for await (const chunk of stream) {
+        tokens = chunk.usage_metadata?.total_tokens ?? tokens;
         if (chunk.text) {
           output += chunk.text;
           yield `data: ${JSON.stringify({ content: chunk.text })}\n\n`;
@@ -242,7 +238,7 @@ export class ChatService {
 
       yield `event: meta\ndata: ${JSON.stringify({
         elapsedMs: Date.now() - startedAt,
-        tokens: this.estimateTokens(message, output),
+        tokens,
       })}\n\n`;
 
       if (draft.config.toggles?.questionSuggestions) {

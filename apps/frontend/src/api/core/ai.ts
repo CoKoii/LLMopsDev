@@ -302,7 +302,7 @@ type StreamAiAppDebugParams = {
   appId: number
   message: string
   onContent: (content: string) => void
-  onMeta?: (meta: { elapsedMs: number; tokens: number }) => void
+  onMeta?: (meta: { elapsedMs: number; tokens?: number }) => void
   onSuggestions?: (items: string[]) => void
   onError?: (message: string) => void
   signal?: AbortSignal
@@ -361,7 +361,7 @@ export const streamAiAppDebugApi = async ({
       onSuggestions?.(Array.isArray(payload.items) ? payload.items : [])
       return
     }
-    if (eventName === 'meta' && payload.elapsedMs !== undefined && payload.tokens !== undefined) {
+    if (eventName === 'meta' && payload.elapsedMs !== undefined) {
       onMeta?.({ elapsedMs: payload.elapsedMs, tokens: payload.tokens })
       return
     }
