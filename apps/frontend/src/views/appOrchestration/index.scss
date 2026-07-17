@@ -597,6 +597,23 @@
   margin: 1.2rem 0 0.8rem;
 }
 
+.opening-question-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.opening-question-remove {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  color: var(--color-text-muted);
+}
+
+.opening-question-remove:hover,
+.opening-question-remove:focus-visible {
+  color: var(--color-primary);
+}
+
 .capability-list,
 .relation-list {
   display: grid;
@@ -714,6 +731,46 @@
   overflow-wrap: anywhere;
   font-size: 2.8rem;
   line-height: 3.6rem;
+}
+
+.chat-preview__opening {
+  max-width: min(42rem, 100%);
+  margin: 0;
+  color: var(--color-text);
+  font-size: 1.4rem;
+  line-height: 2.2rem;
+  white-space: pre-wrap;
+}
+
+.chat-preview__opening-questions {
+  display: flex;
+  max-width: min(42rem, 100%);
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.chat-preview__opening-questions button {
+  min-height: 3.6rem;
+  max-width: 100%;
+  padding: 0.7rem var(--space-3);
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 1.3rem;
+  line-height: 1.8rem;
+  text-align: left;
+  background: var(--color-bg-panel);
+  border: 0.1rem solid var(--color-border-light);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.chat-preview__opening-questions button:hover,
+.chat-preview__opening-questions button:focus-visible {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  outline: 0;
 }
 
 .stop-button {

@@ -23,6 +23,8 @@ export type CapabilityItem = {
   tone: string
 }
 
+export const openingQuestionLimit = 3
+
 export const defaultPrompt = `# 角色
 你是一个智能聊天机器人，能够与用户进行各种话题的交流，包括但不限于生活、工作、学习、娱乐等。
 
@@ -99,6 +101,8 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
   const promptContent = ref(defaultPrompt)
   const selectedLlmId = ref<number | null>(null)
   const capabilities = ref<CapabilityItem[]>(createInitialCapabilities())
+  const openingStatementContent = ref('')
+  const openingQuestions = ref<string[]>([''])
   const loading = ref(false)
   const publishing = ref(false)
   const savingDraft = ref(false)
@@ -114,9 +118,9 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
     frequencyPenalty: 0.1,
   })
   const toggleSettings = reactive<Record<(typeof configToggles)[number]['key'], boolean>>({
-    longTermMemory: true,
-    questionSuggestions: true,
-    voiceInput: true,
+    longTermMemory: false,
+    questionSuggestions: false,
+    voiceInput: false,
     voiceOutput: false,
   })
 
@@ -144,6 +148,13 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
     workflowIds: [],
     knowledgeIds: [],
     toggles: { ...toggleSettings },
+    openingStatement: {
+      content: openingStatementContent.value,
+      questions: openingQuestions.value
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .slice(0, openingQuestionLimit),
+    },
   })
 
   const hydrateDraft = (version: AiAppVersionItem) => {
@@ -165,10 +176,14 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
           tone: item.tone || '#eff6ff',
         }))
       : []
+    openingStatementContent.value = config.openingStatement?.content || ''
+    openingQuestions.value = config.openingStatement?.questions?.length
+      ? config.openingStatement.questions.slice(0, openingQuestionLimit)
+      : ['']
     Object.assign(toggleSettings, {
-      longTermMemory: config.toggles?.longTermMemory ?? true,
-      questionSuggestions: config.toggles?.questionSuggestions ?? true,
-      voiceInput: config.toggles?.voiceInput ?? true,
+      longTermMemory: config.toggles?.longTermMemory ?? false,
+      questionSuggestions: config.toggles?.questionSuggestions ?? false,
+      voiceInput: config.toggles?.voiceInput ?? false,
       voiceOutput: config.toggles?.voiceOutput ?? false,
     })
     appDraft.value = version
@@ -290,6 +305,8 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
     promptContent,
     selectedLlmId,
     capabilities,
+    openingStatementContent,
+    openingQuestions,
     settings,
     toggleSettings,
     loading,

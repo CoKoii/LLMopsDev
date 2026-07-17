@@ -34,9 +34,9 @@ const createDefaultDraftConfig = (): AiAppVersionConfig => ({
   workflowIds: [],
   knowledgeIds: [],
   toggles: {
-    longTermMemory: true,
-    questionSuggestions: true,
-    voiceInput: true,
+    longTermMemory: false,
+    questionSuggestions: false,
+    voiceInput: false,
     voiceOutput: false,
   },
 });

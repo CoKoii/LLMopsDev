@@ -58,6 +58,7 @@ import { computed, h, nextTick, onMounted, ref, type VNode } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   configToggles,
+  openingQuestionLimit,
   useAppOrchestrationDraft,
   type CapabilityItem,
 } from './useAppOrchestrationDraft'
@@ -96,6 +97,8 @@ const {
   promptContent,
   selectedLlmId,
   capabilities,
+  openingStatementContent,
+  openingQuestions,
   settings,
   toggleSettings,
   loading,
@@ -149,6 +152,9 @@ const chatRoles = computed<ChatRoles>(() => ({
   },
 }))
 const suggestedPrompts = computed(() => debugStore.getSuggestions(appId.value))
+const openingPresetQuestions = computed(() =>
+  openingQuestions.value.map((item) => item.trim()).filter(Boolean).slice(0, openingQuestionLimit),
+)
 const suggestionTargetMessageKey = computed(() => {
   return [...debugStore.getMessages(appId.value)]
     .reverse()
@@ -368,6 +374,18 @@ function addCapability(name: string) {
 
 function removeCapability(key: string) {
   capabilities.value = capabilities.value.filter((item) => item.key !== key)
+}
+
+function addOpeningQuestion() {
+  if (openingQuestions.value.length >= openingQuestionLimit) return
+  openingQuestions.value.push('')
+}
+
+function removeOpeningQuestion(index: number) {
+  openingQuestions.value.splice(index, 1)
+  if (openingQuestions.value.length === 0) {
+    openingQuestions.value.push('')
+  }
 }
 
 function submitSuggestedPrompt(content: string) {
@@ -731,16 +749,43 @@ onMounted(() => {
                   <ChevronDown :size="15" />
                   <h3>对话开场白</h3>
                 </div>
-                <Button type="text" size="small"
-                  ><template #icon><Plus :size="16" /></template
-                ></Button>
+                <Button
+                  type="text"
+                  size="small"
+                  :disabled="openingQuestions.length >= openingQuestionLimit"
+                  @click="addOpeningQuestion"
+                >
+                  <template #icon><Plus :size="16" /></template>
+                </Button>
               </div>
               <label class="config-section__label">开场白文案 <Info :size="13" /></label>
-              <TextArea placeholder="在此处填写 AI 应用的开场白" :rows="3" />
+              <TextArea
+                v-model:value="openingStatementContent"
+                placeholder="在此处填写 AI 应用的开场白"
+                :rows="3"
+              />
               <label class="config-section__label">开场白预设问题 <Info :size="13" /></label>
-              <Input placeholder="输入开场白引导问题">
-                <template #suffix><MinusCircle :size="15" /></template>
-              </Input>
+              <div class="opening-question-list">
+                <Input
+                  v-for="(_, index) in openingQuestions"
+                  :key="index"
+                  v-model:value="openingQuestions[index]"
+                  :maxlength="80"
+                  placeholder="输入开场白引导问题"
+                >
+                  <template #suffix>
+                    <Button
+                      type="text"
+                      size="small"
+                      class="opening-question-remove"
+                      :disabled="openingQuestions.length <= 1"
+                      @click="removeOpeningQuestion(index)"
+                    >
+                      <template #icon><MinusCircle :size="15" /></template>
+                    </Button>
+                  </template>
+                </Input>
+              </div>
             </div>
           </div>
         </section>
@@ -766,6 +811,19 @@ onMounted(() => {
                 <Bot v-else :size="24" />
               </div>
               <strong>{{ appName }}</strong>
+              <p v-if="openingStatementContent.trim()" class="chat-preview__opening">
+                {{ openingStatementContent }}
+              </p>
+              <div v-if="openingPresetQuestions.length" class="chat-preview__opening-questions">
+                <button
+                  v-for="question in openingPresetQuestions"
+                  :key="question"
+                  type="button"
+                  @click="submitSuggestedPrompt(question)"
+                >
+                  {{ question }}
+                </button>
+              </div>
             </div>
             <Bubble.List v-else :items="displayMessages" :roles="chatRoles">
               <template #message="{ item }">
