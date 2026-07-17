@@ -10,7 +10,6 @@ import type {
 } from "./oss.types";
 
 const trimTrailingSlash = (value: string) => value.replace(/\/$/, "");
-const DEFAULT_READ_EXPIRES_IN_SECONDS = 60 * 60;
 
 const requireEnabledConfig = (
   config: OssEnvironment,
@@ -94,17 +93,6 @@ export class OssService {
     };
   }
 
-  createReadUrl(objectKey: string) {
-    if (!this.client) {
-      return this.getPublicUrl(objectKey);
-    }
-
-    return this.client.signatureUrl(objectKey, {
-      method: "GET",
-      expires: DEFAULT_READ_EXPIRES_IN_SECONDS,
-    });
-  }
-
   getPublicUrl(objectKey: string) {
     if (this.config.publicBaseUrl) {
       return `${trimTrailingSlash(this.config.publicBaseUrl)}/${objectKey}`;
@@ -118,33 +106,12 @@ export class OssService {
     return `https://${this.config.bucket}.${host}/${objectKey}`;
   }
 
-  resolveObjectKey(value: string) {
-    if (!/^https?:\/\//i.test(value)) {
-      return value;
-    }
-
-    const url = new URL(value);
-    const publicBaseUrl = this.config.publicBaseUrl
-      ? trimTrailingSlash(this.config.publicBaseUrl)
-      : "";
-
-    if (publicBaseUrl && value.startsWith(`${publicBaseUrl}/`)) {
-      return decodeURIComponent(value.slice(publicBaseUrl.length + 1));
-    }
-
-    return decodeURIComponent(url.pathname.replace(/^\//, ""));
-  }
-
   createAccessibleUrl(value?: string | null) {
     if (!value) {
       return value;
     }
 
-    if (this.config.publicBaseUrl) {
-      return /^https?:\/\//i.test(value) ? value : this.getPublicUrl(value);
-    }
-
-    return this.createReadUrl(this.resolveObjectKey(value));
+    return /^https?:\/\//i.test(value) ? value : this.getPublicUrl(value);
   }
 
   async deleteObject(objectKey: string) {
