@@ -340,7 +340,7 @@
 }
 
 .model-settings {
-  width: 51.2rem;
+  width: 47.2rem;
   max-width: calc(100vw - 4.8rem);
 }
 
@@ -378,9 +378,9 @@
 }
 
 .model-settings__row {
-  grid-template-columns: 10.4rem minmax(19.2rem, 1fr) 9.6rem;
+  grid-template-columns: 8.8rem minmax(16.8rem, 1fr) 9.6rem;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .model-settings__row > span {
