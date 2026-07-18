@@ -779,6 +779,9 @@ onMounted(() => {
                           />
                         </div>
                       </label>
+                    </div>
+                    <div class="model-settings__group">
+                      <span>输入和输出设置</span>
                       <label class="model-settings__row">
                         <span>携带上下文轮数</span>
                         <Slider
