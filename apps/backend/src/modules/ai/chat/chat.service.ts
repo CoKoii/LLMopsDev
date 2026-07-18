@@ -1,3 +1,9 @@
+import { type StructuredToolInterface } from "@langchain/core/tools";
+import {
+  ToolMessage,
+  type BaseMessageLike,
+  type ToolCall,
+} from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import {
   BadRequestException,
@@ -15,6 +21,8 @@ import {
 } from "../app/entities/app-version.entity";
 import { AiApp } from "../app/entities/app.entity";
 import { Llm } from "../llm/entities/llm.entity";
+import { BuiltinPluginToolService } from "../plugin/builtin/builtin-plugin-tool.service";
+import { type DebugAppChatHistoryDto } from "./dto/debug-app-chat.dto";
 
 const DRAFT_VERSION = "draft";
 
@@ -29,6 +37,7 @@ export class ChatService {
     private readonly appVersionRepository: Repository<AiAppVersion>,
     @InjectRepository(Llm)
     private readonly llmRepository: Repository<Llm>,
+    private readonly builtinPluginToolService: BuiltinPluginToolService,
   ) {}
 
   private async getDraft(appId: number): Promise<AiAppVersion> {
@@ -76,16 +85,88 @@ export class ChatService {
     });
   }
 
-  private createMessages(config: AiAppVersionConfig, message: string) {
-    const messages: Array<["system" | "human", string]> = [];
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+  }
+
+  private createMessages(
+    config: AiAppVersionConfig,
+    message: string,
+    history: DebugAppChatHistoryDto[] = [],
+  ) {
+    const messages: BaseMessageLike[] = [];
     const prompt = config.prompt?.trim();
 
     if (prompt) {
       messages.push(["system", prompt]);
     }
+    for (const item of history) {
+      const content = item.content.trim();
+      if (!content) continue;
+      messages.push([item.role === "assistant" ? "ai" : "human", content]);
+    }
     messages.push(["human", message]);
 
     return messages;
+  }
+
+  private extractTotalTokens(usageMetadata: unknown) {
+    if (!this.isRecord(usageMetadata)) return undefined;
+    return typeof usageMetadata.total_tokens === "number"
+      ? usageMetadata.total_tokens
+      : undefined;
+  }
+
+  private sumTokens(...values: Array<number | undefined>) {
+    const numbers = values.filter(
+      (value): value is number => value !== undefined,
+    );
+    return numbers.length
+      ? numbers.reduce((total, value) => total + value, 0)
+      : undefined;
+  }
+
+  private async executeToolCalls(
+    toolCalls: ToolCall[],
+    toolMap: Map<string, StructuredToolInterface>,
+  ) {
+    const toolMessages: ToolMessage[] = [];
+
+    for (const toolCall of toolCalls) {
+      const selectedTool = toolMap.get(toolCall.name);
+      const toolCallId = toolCall.id ?? toolCall.name;
+
+      if (!selectedTool) {
+        toolMessages.push(
+          new ToolMessage({
+            content: `Tool ${toolCall.name} is not available.`,
+            name: toolCall.name,
+            status: "error",
+            tool_call_id: toolCallId,
+          }),
+        );
+        continue;
+      }
+
+      const result: unknown = await selectedTool.invoke({
+        type: "tool_call",
+        id: toolCallId,
+        name: toolCall.name,
+        args: toolCall.args,
+      });
+      toolMessages.push(
+        ToolMessage.isInstance(result)
+          ? result
+          : new ToolMessage({
+              content:
+                typeof result === "string" ? result : JSON.stringify(result),
+              name: toolCall.name,
+              tool_call_id: toolCallId,
+            }),
+      );
+    }
+
+    return toolMessages;
   }
 
   private parseSuggestions(content: string): string[] {
@@ -208,13 +289,18 @@ export class ChatService {
     }
   }
 
-  createAppDebugSseStream(appId: number, message: string): Readable {
-    return Readable.from(this.streamAppDebug(appId, message));
+  createAppDebugSseStream(
+    appId: number,
+    message: string,
+    history: DebugAppChatHistoryDto[] = [],
+  ): Readable {
+    return Readable.from(this.streamAppDebug(appId, message, history));
   }
 
   private async *streamAppDebug(
     appId: number,
     message: string,
+    history: DebugAppChatHistoryDto[] = [],
   ): AsyncGenerator<string> {
     const startedAt = Date.now();
     let output = "";
@@ -224,16 +310,49 @@ export class ChatService {
       const draft = await this.getDraft(appId);
       const llm = await this.getConfiguredLlm(draft.config);
       const model = this.createModel(llm, draft.config);
-      const stream = await model.stream(
-        this.createMessages(draft.config, message),
+      const messages = this.createMessages(draft.config, message, history);
+      const tools = await this.builtinPluginToolService.loadEnabledTools(
+        draft.config,
       );
+      const toolMap = new Map(tools.map((item) => [item.name, item]));
 
-      for await (const chunk of stream) {
-        tokens = chunk.usage_metadata?.total_tokens ?? tokens;
-        if (chunk.text) {
-          output += chunk.text;
-          yield `data: ${JSON.stringify({ content: chunk.text })}\n\n`;
+      let streamMessages = messages;
+      let toolCallTokens: number | undefined;
+      let finalResponseReady = false;
+
+      if (tools.length) {
+        const toolDecision = await model.bindTools(tools).invoke(messages);
+        toolCallTokens = this.extractTotalTokens(toolDecision.usage_metadata);
+
+        if (toolDecision.tool_calls?.length) {
+          streamMessages = [
+            ...messages,
+            toolDecision,
+            ...(await this.executeToolCalls(toolDecision.tool_calls, toolMap)),
+          ];
+        } else {
+          output = toolDecision.text;
+          tokens = toolCallTokens;
+          if (output) {
+            yield `data: ${JSON.stringify({ content: output })}\n\n`;
+          }
+          finalResponseReady = true;
         }
+      }
+
+      if (!finalResponseReady) {
+        const stream = await model.stream(streamMessages);
+        let responseTokens: number | undefined;
+
+        for await (const chunk of stream) {
+          responseTokens =
+            this.extractTotalTokens(chunk.usage_metadata) ?? responseTokens;
+          if (chunk.text) {
+            output += chunk.text;
+            yield `data: ${JSON.stringify({ content: chunk.text })}\n\n`;
+          }
+        }
+        tokens = this.sumTokens(toolCallTokens, responseTokens);
       }
 
       yield `event: meta\ndata: ${JSON.stringify({

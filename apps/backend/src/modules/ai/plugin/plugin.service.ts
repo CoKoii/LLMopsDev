@@ -1,7 +1,12 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { Brackets, Repository } from "typeorm";
 import { FilesService } from "../../files/files.service";
+import { RequestContextService } from "../../../common/request-context/request-context.service";
 import {
   createPageResult,
   type PageResult,
@@ -10,14 +15,28 @@ import {
 import { CreatePluginDto } from "./dto/create-plugin.dto";
 import { QueryPluginsDto } from "./dto/query-plugins.dto";
 import { UpdatePluginDto } from "./dto/update-plugin.dto";
-import { Plugin } from "./entities/plugin.entity";
+import { PluginCategory } from "./entities/plugin-category.entity";
+import { Plugin, type PluginHeader } from "./entities/plugin.entity";
+
+type PluginPayload = {
+  icon?: string | null;
+  name?: string;
+  description?: string | null;
+  category?: PluginCategory | null;
+  openapiSchema?: string;
+  headers?: PluginHeader[] | null;
+  status?: boolean;
+};
 
 @Injectable()
 export class PluginService {
   constructor(
     @InjectRepository(Plugin)
     private readonly pluginRepository: Repository<Plugin>,
+    @InjectRepository(PluginCategory)
+    private readonly pluginCategoryRepository: Repository<PluginCategory>,
     private readonly filesService: FilesService,
+    private readonly requestContext: RequestContextService,
   ) {}
 
   private withAccessibleIcon(plugin: Plugin): Plugin {
@@ -27,11 +46,24 @@ export class PluginService {
     };
   }
 
+  private isVisibleToCurrentUser(plugin: Plugin, scope: "mine" | "available") {
+    const userId = this.requestContext.getUserId();
+    if (scope === "mine") {
+      return userId !== undefined && plugin.createdBy === userId;
+    }
+
+    if (plugin.category?.key === "builtin") {
+      return true;
+    }
+
+    return userId !== undefined && plugin.createdBy === userId;
+  }
+
   private async buildPluginPayload(
     dto: CreatePluginDto | UpdatePluginDto,
     userId: number,
-  ): Promise<Partial<Plugin>> {
-    const payload: Partial<Plugin> = {};
+  ): Promise<PluginPayload> {
+    const payload: PluginPayload = {};
 
     if (dto.icon !== undefined) {
       payload.icon = dto.icon || null;
@@ -42,11 +74,25 @@ export class PluginService {
     if (dto.description !== undefined) {
       payload.description = dto.description || null;
     }
+    if (dto.categoryId !== undefined) {
+      const category: PluginCategory | null =
+        await this.pluginCategoryRepository.findOne({
+          where: { id: dto.categoryId },
+        });
+      if (!category) throw new NotFoundException("插件分类不存在");
+      if (category.key === "builtin") {
+        throw new BadRequestException("内置分类仅系统插件可用");
+      }
+      payload.category = category;
+    }
     if (dto.openapiSchema !== undefined) {
       payload.openapiSchema = dto.openapiSchema;
     }
     if (dto.headers !== undefined) {
-      payload.headers = dto.headers;
+      payload.headers = dto.headers.map((header) => ({
+        key: header.key,
+        value: header.value,
+      }));
     }
     if (dto.status !== undefined) {
       payload.status = dto.status;
@@ -57,6 +103,30 @@ export class PluginService {
     }
 
     return payload;
+  }
+
+  private applyPluginPayload(plugin: Plugin, payload: PluginPayload) {
+    if (payload.icon !== undefined) {
+      plugin.icon = payload.icon;
+    }
+    if (payload.name !== undefined) {
+      plugin.name = payload.name;
+    }
+    if (payload.description !== undefined) {
+      plugin.description = payload.description;
+    }
+    if (payload.category !== undefined) {
+      plugin.category = payload.category;
+    }
+    if (payload.openapiSchema !== undefined) {
+      plugin.openapiSchema = payload.openapiSchema;
+    }
+    if (payload.headers !== undefined) {
+      plugin.headers = payload.headers;
+    }
+    if (payload.status !== undefined) {
+      plugin.status = payload.status;
+    }
   }
 
   // --------------------------------------------------------------------------------------------------
@@ -76,8 +146,11 @@ export class PluginService {
   async list(query: QueryPluginsDto): Promise<PageResult<Plugin>> {
     const { page, pageSize, skip } = resolvePageQuery(query);
     const name = query.name?.trim();
+    const scope = query.scope ?? "available";
+    const userId = this.requestContext.getUserId();
     const queryBuilder = this.pluginRepository
       .createQueryBuilder("plugin")
+      .leftJoinAndSelect("plugin.category", "category")
       .orderBy("plugin.id", "DESC")
       .skip(skip)
       .take(pageSize);
@@ -88,7 +161,40 @@ export class PluginService {
       });
     }
 
-    const [items, total] = await queryBuilder.getManyAndCount();
+    if (scope === "mine") {
+      if (userId === undefined) {
+        return createPageResult([], 0, page, pageSize);
+      }
+      queryBuilder.andWhere("plugin.createdBy = :userId", { userId });
+      queryBuilder.andWhere(
+        new Brackets((qb) => {
+          qb.where("category.key IS NULL").orWhere(
+            "category.key <> :builtinKey",
+            {
+              builtinKey: "builtin",
+            },
+          );
+        }),
+      );
+    } else {
+      if (userId === undefined) {
+        queryBuilder.andWhere("category.key = :builtinKey", {
+          builtinKey: "builtin",
+        });
+      } else {
+        queryBuilder.andWhere(
+          new Brackets((qb) => {
+            qb.where("plugin.createdBy = :userId", { userId }).orWhere(
+              "category.key = :builtinKey",
+              { builtinKey: "builtin" },
+            );
+          }),
+        );
+      }
+    }
+
+    const [items, total]: [Plugin[], number] =
+      await queryBuilder.getManyAndCount();
     return createPageResult(
       items.map((item) => this.withAccessibleIcon(item)),
       total,
@@ -101,8 +207,14 @@ export class PluginService {
   // --------------------------------------------------------------------------------------------------
   // 获取插件详情
   async findOne(id: number) {
-    const plugin = await this.pluginRepository.findOne({ where: { id } });
+    const plugin: Plugin | null = await this.pluginRepository.findOne({
+      where: { id },
+      relations: { category: true },
+    });
     if (!plugin) throw new NotFoundException("插件不存在");
+    if (!this.isVisibleToCurrentUser(plugin, "available")) {
+      throw new NotFoundException("插件不存在");
+    }
     return this.withAccessibleIcon(plugin);
   }
   // --------------------------------------------------------------------------------------------------
@@ -110,11 +222,18 @@ export class PluginService {
   // --------------------------------------------------------------------------------------------------
   // 更新插件
   async update(id: number, updatePluginDto: UpdatePluginDto, userId: number) {
-    const plugin = await this.pluginRepository.preload({
-      id,
-      ...(await this.buildPluginPayload(updatePluginDto, userId)),
+    const plugin: Plugin | null = await this.pluginRepository.findOne({
+      where: { id },
+      relations: { category: true },
     });
     if (!plugin) throw new NotFoundException("插件不存在");
+    if (plugin.category?.key === "builtin" || plugin.createdBy !== userId) {
+      throw new NotFoundException("插件不存在");
+    }
+    this.applyPluginPayload(
+      plugin,
+      await this.buildPluginPayload(updatePluginDto, userId),
+    );
     await this.pluginRepository.save(plugin);
     return { success: true };
   }
@@ -123,8 +242,19 @@ export class PluginService {
   // --------------------------------------------------------------------------------------------------
   // 删除插件
   async remove(id: number) {
-    const plugin = await this.pluginRepository.findOne({ where: { id } });
+    const plugin: Plugin | null = await this.pluginRepository.findOne({
+      where: { id },
+      relations: { category: true },
+    });
     if (!plugin) throw new NotFoundException("插件不存在");
+    const userId = this.requestContext.getUserId();
+    if (
+      userId === undefined ||
+      plugin.category?.key === "builtin" ||
+      plugin.createdBy !== userId
+    ) {
+      throw new NotFoundException("插件不存在");
+    }
     await this.pluginRepository.softRemove(plugin);
     return { success: true };
   }

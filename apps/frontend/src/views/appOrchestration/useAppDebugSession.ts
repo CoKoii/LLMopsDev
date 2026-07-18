@@ -2,17 +2,39 @@ import { streamAiAppDebugApi } from '@/api'
 import { useAppDebugStore } from '@/stores/appDebug'
 import { nextTick, onBeforeUnmount, ref, type Ref } from 'vue'
 
-export function useAppDebugSession(appId: Ref<number>, saveDraftNow: () => Promise<void>) {
+type ContextSettings = {
+  contextRounds: number
+}
+
+export function useAppDebugSession(
+  appId: Ref<number>,
+  saveDraftNow: () => Promise<void>,
+  settings: ContextSettings,
+) {
   const debugStore = useAppDebugStore()
   const senderValue = ref('')
   const responding = ref(false)
   let debugAbortController: AbortController | undefined
+
+  const buildHistory = () => {
+    const contextRounds = Math.min(100, Math.max(1, Math.floor(settings.contextRounds || 10)))
+
+    return debugStore
+      .getMessages(appId.value)
+      .filter((item) => !item.pending && item.content.trim())
+      .map((item) => ({
+        role: item.role,
+        content: item.content.trim(),
+      }))
+      .slice(-(contextRounds * 2))
+  }
 
   const submitMessage = async (value: string, scrollToBottom: () => Promise<void>) => {
     const content = value.trim()
     if (!content || responding.value) return
 
     const key = Date.now()
+    const history = buildHistory()
     debugStore.setSuggestions(appId.value, [])
     debugStore.pushMessage(appId.value, {
       key: `u-${key}`,
@@ -35,6 +57,7 @@ export function useAppDebugSession(appId: Ref<number>, saveDraftNow: () => Promi
       await streamAiAppDebugApi({
         appId: appId.value,
         message: content,
+        history,
         signal: debugAbortController.signal,
         onContent: async (chunk) => {
           const target = debugStore

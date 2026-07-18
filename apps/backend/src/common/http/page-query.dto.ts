@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { IsInt, IsOptional, Max, Min } from "class-validator";
+import { IsInt, IsOptional, Min } from "class-validator";
 
 export const DEFAULT_PAGE = 1;
 export const DEFAULT_PAGE_SIZE = 20;
@@ -15,7 +15,6 @@ export class PageQueryDto {
   @Type(() => Number)
   @IsInt({ message: "每页条数必须为整数" })
   @Min(1, { message: "每页条数最小为1" })
-  @Max(100, { message: "每页条数最大为100" })
   pageSize?: number;
 }
 

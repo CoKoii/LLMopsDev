@@ -30,7 +30,7 @@ export class ChatController {
     @Body() dto: DebugAppChatDto,
   ): StreamableFile {
     return new StreamableFile(
-      this.chatService.createAppDebugSseStream(id, dto.message),
+      this.chatService.createAppDebugSseStream(id, dto.message, dto.history),
       {
         type: "text/event-stream; charset=utf-8",
       },

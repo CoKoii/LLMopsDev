@@ -88,7 +88,8 @@ export class ProfilesService {
     currentUser.profile = {
       ...(currentUser.profile ?? { nickname: currentUser.username }),
       nickname,
-      avatar: avatar === undefined ? currentUser.profile?.avatar : avatar || null,
+      avatar:
+        avatar === undefined ? currentUser.profile?.avatar : avatar || null,
     };
 
     await this.userRepository.save(currentUser);

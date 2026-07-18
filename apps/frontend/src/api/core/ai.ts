@@ -13,6 +13,7 @@ export interface PageParams {
   page?: number
   pageSize?: number
   name?: string
+  scope?: 'mine' | 'available'
 }
 
 export interface LlmItem {
@@ -46,6 +47,7 @@ export interface AiAppVersionConfig {
     topP?: number
     presencePenalty?: number
     frequencyPenalty?: number
+    contextRounds?: number
   }
   capabilities?: Array<{
     key: string
@@ -64,12 +66,21 @@ export interface AiAppVersionConfig {
   }
 }
 
+export interface AppVersionPluginItem {
+  id: number
+  icon?: string | null
+  name: string
+  description?: string | null
+  category?: PluginCategoryItem | null
+}
+
 export interface AiAppVersionItem {
   id: number
   appId: number
   version: string
   status: AiAppVersionStatus
   config: AiAppVersionConfig
+  plugins?: AppVersionPluginItem[]
   publishedAt?: string | null
   createdAt?: string
   updatedAt?: string
@@ -80,11 +91,21 @@ export interface PluginHeader {
   value: string
 }
 
+export interface PluginCategoryItem {
+  id: number
+  key: string
+  name: string
+  sort: number
+  createdAt?: string
+  updatedAt?: string
+}
+
 export interface PluginItem {
   id: number
   icon?: string | null
   name: string
   description?: string | null
+  category?: PluginCategoryItem | null
   openapiSchema: string
   headers?: PluginHeader[] | null
   status: boolean
@@ -131,6 +152,7 @@ export interface CreatePluginPayload {
   iconFileId?: number
   name: string
   description?: string
+  categoryId?: number
   openapiSchema: string
   headers?: PluginHeader[]
   status?: boolean
@@ -301,6 +323,10 @@ export const streamAiAppPromptOptimizeApi = async ({
 type StreamAiAppDebugParams = {
   appId: number
   message: string
+  history?: Array<{
+    role: 'user' | 'assistant'
+    content: string
+  }>
   onContent: (content: string) => void
   onMeta?: (meta: { elapsedMs: number; tokens?: number }) => void
   onSuggestions?: (items: string[]) => void
@@ -311,6 +337,7 @@ type StreamAiAppDebugParams = {
 export const streamAiAppDebugApi = async ({
   appId,
   message,
+  history,
   onContent,
   onMeta,
   onSuggestions,
@@ -325,7 +352,7 @@ export const streamAiAppDebugApi = async ({
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, history }),
     signal,
   })
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useAuthStore } from '@/stores/auth'
+import { listPluginsApi, type AppVersionPluginItem, type PluginItem } from '@/api'
 import { renderMarkdown } from '@/utils/markdown'
 import {
   BadgeDollarSign,
@@ -82,6 +83,10 @@ const promptOptimizeSource = ref('')
 const promptOptimizeResult = ref('')
 const chatListRef = ref<HTMLElement>()
 const promptOptimizeResultRef = ref<HTMLElement>()
+const pluginCatalog = ref<PluginItem[]>([])
+const pluginCatalogLoading = ref(false)
+const activePluginScopeKey = ref<'custom' | 'builtin'>('builtin')
+const activePluginCategoryKey = ref('all')
 let promptOptimizeAbortController: AbortController | undefined
 const pageTabs = [
   { page: 'edit', label: '编辑' },
@@ -97,18 +102,21 @@ const {
   promptContent,
   selectedLlmId,
   capabilities,
+  pluginIds,
   openingStatementContent,
   openingQuestions,
   settings,
   toggleSettings,
   loading,
   publishing,
+  publishedVersionsLoading,
   optimizingPrompt,
   lastSavedAt,
   modelOptions,
   selectedModelLabel,
   autoSaveText,
   loadApp,
+  loadPublishedVersions,
   saveDraftNow,
   publishVersion,
   restoreVersion,
@@ -121,7 +129,7 @@ const {
   submitMessage: submitDebugMessage,
   stopResponse,
   clearChat,
-} = useAppDebugSession(appId, saveDraftNow)
+} = useAppDebugSession(appId, saveDraftNow, settings)
 const isPageTab = (page: unknown): page is PageTab => {
   return typeof page === 'string' && pageTabs.some((item) => item.page === page)
 }
@@ -152,6 +160,7 @@ const chatRoles = computed<ChatRoles>(() => ({
   },
 }))
 const suggestedPrompts = computed(() => debugStore.getSuggestions(appId.value))
+const selectedPluginIds = computed(() => new Set(pluginIds.value))
 const openingPresetQuestions = computed(() =>
   openingQuestions.value.map((item) => item.trim()).filter(Boolean).slice(0, openingQuestionLimit),
 )
@@ -175,22 +184,103 @@ const displayMessages = computed<ChatMessage[]>(() =>
 const promptOptimizeDisplay = computed(
   () => promptOptimizeResult.value || (optimizingPrompt.value ? '正在生成优化版本...' : '暂无优化结果'),
 )
-const pluginGroups = [
-  {
-    title: 'Google',
-    items: [
-      '谷歌搜索',
-      'DuckDuckGo AI聊天',
-      'DuckDuckGo 图片搜索',
-      'DuckDuckGo 搜索',
-      'DuckDuckGo 翻译',
-    ],
-  },
-  {
-    title: 'SerperApi',
-    items: ['Google Serper API', 'Google Jobs API', 'Google News API', 'YouTube 脚本 API'],
-  },
-]
+const pluginSourceOptions = [
+  { key: 'custom', name: '自定义插件' },
+  { key: 'builtin', name: '内置' },
+] as const
+const activePluginSourceName = computed(
+  () => pluginSourceOptions.find((item) => item.key === activePluginScopeKey.value)?.name || '内置',
+)
+const selectedPlugins = computed<AppVersionPluginItem[]>(() => {
+  const pluginLookup = new Map<number, AppVersionPluginItem>()
+  for (const item of appDraft.value?.plugins ?? []) {
+    pluginLookup.set(item.id, item)
+  }
+  for (const item of pluginCatalog.value) {
+    pluginLookup.set(item.id, item)
+  }
+  return pluginIds.value
+    .map((id) => pluginLookup.get(id))
+    .filter((item): item is AppVersionPluginItem => item !== undefined)
+})
+const sourcePluginCatalog = computed(() =>
+  pluginCatalog.value.filter((item) => {
+    if (activePluginScopeKey.value === 'builtin') {
+      return item.category?.key === 'builtin'
+    }
+    return item.category?.key !== 'builtin'
+  }),
+)
+const pluginCategoryOptions = computed(() => {
+  const categories = new Map<
+    string,
+    {
+      key: string
+      name: string
+      sort: number
+      count: number
+    }
+  >()
+
+  for (const item of pluginCatalog.value) {
+    const category = item.category
+    const key = category?.key || 'uncategorized'
+    const name = category?.name || '未分类'
+    const sort = category?.sort ?? 999
+    const current = categories.get(key)
+    categories.set(key, {
+      key,
+      name,
+      sort,
+      count: (current?.count ?? 0) + 1,
+    })
+  }
+
+  return [
+    { key: 'all', name: '全部', sort: -1, count: pluginCatalog.value.length },
+    ...[...categories.values()].sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name)),
+  ]
+})
+const pluginGroups = computed(() => {
+  const filtered = sourcePluginCatalog.value.filter((item) => {
+    const categoryKey = item.category?.key || 'uncategorized'
+    return activePluginCategoryKey.value === 'all' || categoryKey === activePluginCategoryKey.value
+  })
+  const groups = new Map<
+    string,
+    {
+      key: string
+      title: string
+      sort: number
+      items: PluginItem[]
+    }
+  >()
+
+  for (const item of filtered) {
+    const category = item.category
+    const key = category?.key || 'uncategorized'
+    const title = category?.name || '未分类'
+    const sort = category?.sort ?? 999
+    const current = groups.get(key)
+    if (current) {
+      current.items.push(item)
+      continue
+    }
+    groups.set(key, {
+      key,
+      title,
+      sort,
+      items: [item],
+    })
+  }
+
+  return [...groups.values()]
+    .sort((a, b) => a.sort - b.sort || a.title.localeCompare(b.title))
+    .map((group) => ({
+      ...group,
+      items: group.items.sort((a, b) => a.name.localeCompare(b.name)),
+    }))
+})
 const publishChannels = [
   {
     key: 'web',
@@ -356,24 +446,72 @@ function getCapabilityIcon(item: CapabilityItem) {
   return Bot
 }
 
-function addCapability(name: string) {
-  const key = name.replace(/\s+/g, '-')
-  if (capabilities.value.some((item) => item.key === key)) {
-    message.info('插件已添加')
-    return
-  }
-  capabilities.value.push({
-    key,
-    title: name,
-    description: '内置插件能力',
-    icon: 'globe',
-    tone: '#eff6ff',
-  })
-  message.success('插件已添加')
+function getPluginSourceIcon(key: string) {
+  return key === 'builtin' ? Globe2 : Database
+}
+
+function getPluginCategoryIcon(key: string) {
+  if (key === 'all') return Database
+  if (key === 'uncategorized') return BookOpen
+  return Workflow
 }
 
 function removeCapability(key: string) {
   capabilities.value = capabilities.value.filter((item) => item.key !== key)
+}
+
+async function loadPluginCatalog() {
+  pluginCatalogLoading.value = true
+  try {
+    const result = await listPluginsApi({
+      page: 1,
+      pageSize: 200,
+      scope: 'available',
+    })
+    pluginCatalog.value = result.items
+    if (
+      activePluginScopeKey.value === 'builtin' &&
+      !pluginCatalog.value.some((item) => item.category?.key === 'builtin')
+    ) {
+      activePluginScopeKey.value = 'custom'
+    }
+    if (
+      activePluginCategoryKey.value !== 'all' &&
+      !pluginCategoryOptions.value.some((item) => item.key === activePluginCategoryKey.value)
+    ) {
+      activePluginCategoryKey.value = 'all'
+    }
+  } finally {
+    pluginCatalogLoading.value = false
+  }
+}
+
+function openPluginModal() {
+  pluginModalOpen.value = true
+  void loadPluginCatalog()
+}
+
+function switchPluginScope(key: 'custom' | 'builtin') {
+  activePluginScopeKey.value = key
+}
+
+function togglePluginSelection(id: number) {
+  const next = new Set(pluginIds.value)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    next.add(id)
+  }
+  pluginIds.value = [...next]
+}
+
+function removeSelectedPlugin(id: number) {
+  pluginIds.value = pluginIds.value.filter((item) => item !== id)
+}
+
+function openPublishHistory() {
+  publishHistoryOpen.value = true
+  void loadPublishedVersions()
 }
 
 function addOpeningQuestion() {
@@ -527,7 +665,7 @@ onMounted(() => {
       </div>
 
       <div class="workspace-topbar__actions">
-        <Button shape="circle" aria-label="历史版本" @click="publishHistoryOpen = true">
+        <Button shape="circle" aria-label="历史版本" @click="openPublishHistory">
           <template #icon><History :size="18" /></template>
         </Button>
         <div class="publish-action">
@@ -641,6 +779,24 @@ onMounted(() => {
                           />
                         </div>
                       </label>
+                      <label class="model-settings__row">
+                        <span>携带上下文轮数</span>
+                        <Slider
+                          v-model:value="settings.contextRounds"
+                          :min="1"
+                          :max="100"
+                          :step="1"
+                        />
+                        <div class="model-settings__number">
+                          <InputNumber
+                            v-model:value="settings.contextRounds"
+                            :min="1"
+                            :max="100"
+                            :step="1"
+                            :precision="0"
+                          />
+                        </div>
+                      </label>
                     </div>
                   </section>
                 </template>
@@ -673,9 +829,37 @@ onMounted(() => {
                   <ChevronDown :size="15" />
                   <h3>扩展插件</h3>
                 </div>
-                <Button type="text" size="small" @click="pluginModalOpen = true">
+                <Button type="text" size="small" @click="openPluginModal">
                   <template #icon><Plus :size="16" /></template>
                 </Button>
+              </div>
+              <div v-if="selectedPlugins.length" class="selected-plugin-list">
+                <article
+                  v-for="item in selectedPlugins"
+                  :key="item.id"
+                  class="capability-item"
+                >
+                  <div class="capability-item__icon" :class="{ 'has-image': item.icon }">
+                    <img v-if="item.icon" :src="item.icon" alt="" />
+                    <component
+                      v-else
+                      :is="item.category?.key === 'builtin' ? Globe2 : Database"
+                      :size="13"
+                    />
+                  </div>
+                  <div>
+                    <h4>{{ item.name }}</h4>
+                    <p>{{ item.description || '暂无描述' }}</p>
+                  </div>
+                  <div class="capability-item__actions">
+                    <Button type="text" size="small">
+                      <template #icon><Settings :size="14" /></template>
+                    </Button>
+                    <Button type="text" size="small" @click="removeSelectedPlugin(item.id)">
+                      <template #icon><Trash2 :size="14" /></template>
+                    </Button>
+                  </div>
+                </article>
               </div>
               <div class="capability-list">
                 <article v-for="item in capabilities" :key="item.key" class="capability-item">
@@ -798,7 +982,7 @@ onMounted(() => {
                 <template #icon><Trash2 :size="15" /></template>
                 清空对话
               </Button>
-              <Button type="link" size="small" @click="publishHistoryOpen = true">
+              <Button type="link" size="small" @click="openPublishHistory">
                 <template #icon><Save :size="15" /></template>
                 长期记忆
               </Button>
@@ -982,47 +1166,45 @@ onMounted(() => {
             aria-labelledby="pluginModalTitle"
           >
             <aside class="plugin-modal__sidebar">
-              <h2 id="pluginModalTitle">添加插件</h2>
+              <h2 id="pluginModalTitle">选择插件</h2>
               <Button type="primary" block>
                 <template #icon><Plus :size="15" /></template>
                 创建自定义插件
               </Button>
 
               <div class="plugin-modal__nav">
-                <button class="plugin-modal__nav-item" type="button">
-                  <Database :size="15" />
-                  <span>自定义插件</span>
-                </button>
-                <button class="plugin-modal__nav-item is-active" type="button">
-                  <Globe2 :size="15" />
-                  <span>内置</span>
+                <button
+                  v-for="scope in pluginSourceOptions"
+                  :key="scope.key"
+                  class="plugin-modal__nav-item"
+                  :class="{ 'is-active': activePluginScopeKey === scope.key }"
+                  type="button"
+                  @click="switchPluginScope(scope.key)"
+                >
+                  <component :is="getPluginSourceIcon(scope.key)" :size="15" />
+                  <span>{{ scope.name }}</span>
                 </button>
               </div>
 
               <div class="plugin-modal__category-title">类别</div>
               <div class="plugin-modal__nav">
-                <button class="plugin-modal__nav-item is-active" type="button">
-                  <Database :size="15" />
-                  <span>全部</span>
-                </button>
-                <button class="plugin-modal__nav-item" type="button">
-                  <Globe2 :size="15" />
-                  <span>搜索</span>
-                </button>
-                <button class="plugin-modal__nav-item" type="button">
-                  <BookOpen :size="15" />
-                  <span>天气</span>
-                </button>
-                <button class="plugin-modal__nav-item" type="button">
-                  <Workflow :size="15" />
-                  <span>旅行</span>
+                <button
+                  v-for="category in pluginCategoryOptions"
+                  :key="category.key"
+                  class="plugin-modal__nav-item"
+                  :class="{ 'is-active': activePluginCategoryKey === category.key }"
+                  type="button"
+                  @click="activePluginCategoryKey = category.key"
+                >
+                  <component :is="getPluginCategoryIcon(category.key)" :size="15" />
+                  <span>{{ category.name }}</span>
                 </button>
               </div>
             </aside>
 
             <section class="plugin-modal__content">
               <div class="plugin-modal__header">
-                <h3>内置插件</h3>
+                <h3>{{ activePluginSourceName }}</h3>
                 <button
                   class="side-modal__close"
                   type="button"
@@ -1034,20 +1216,42 @@ onMounted(() => {
               </div>
 
               <div class="plugin-modal__list">
+                <div v-if="pluginCatalogLoading">正在加载插件...</div>
+                <div v-else-if="pluginGroups.length === 0">
+                  当前分类下没有可选插件
+                </div>
                 <section
                   v-for="group in pluginGroups"
-                  :key="group.title"
+                  :key="group.key"
                   class="plugin-modal__group"
                 >
                   <h4>{{ group.title }}</h4>
-                  <article v-for="name in group.items" :key="name" class="plugin-modal__item">
-                    <div class="plugin-modal__item-icon">
-                      <Globe2 :size="18" />
+                  <article
+                    v-for="item in group.items"
+                    :key="item.id"
+                    class="plugin-modal__item"
+                    :class="{ 'is-selected': selectedPluginIds.has(item.id) }"
+                  >
+                    <div class="plugin-modal__item-icon" :class="{ 'has-image': item.icon }">
+                      <img v-if="item.icon" :src="item.icon" alt="" />
+                      <component
+                        v-else
+                        :is="item.category?.key === 'builtin' ? Globe2 : Database"
+                        :size="18"
+                      />
                     </div>
-                    <strong>{{ name }}</strong>
-                    <Button class="plugin-modal__add" size="small" @click="addCapability(name)">
-                      <template #icon><Plus :size="14" /></template>
-                      添加
+                    <strong>{{ item.name }}</strong>
+                    <Button
+                      class="plugin-modal__add"
+                      size="small"
+                      :type="selectedPluginIds.has(item.id) ? 'default' : 'primary'"
+                      @click="togglePluginSelection(item.id)"
+                    >
+                      <template #icon>
+                        <CircleCheck v-if="selectedPluginIds.has(item.id)" :size="14" />
+                        <Plus v-else :size="14" />
+                      </template>
+                      {{ selectedPluginIds.has(item.id) ? '移除' : '添加' }}
                     </Button>
                   </article>
                 </section>
@@ -1081,7 +1285,9 @@ onMounted(() => {
         </p>
         <p class="publish-history__count">共计 {{ publishedVersions.length }} 条发布记录</p>
         <div class="publish-history__list">
+          <div v-if="publishedVersionsLoading">正在加载历史版本...</div>
           <article
+            v-else
             v-for="(item, index) in publishedVersions"
             :key="item.id"
             class="publish-history__item"

@@ -1,5 +1,13 @@
-import { Column, Entity, PrimaryGeneratedColumn } from "typeorm";
+import {
+  Column,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  type Relation,
+} from "typeorm";
 import { AuditableEntity } from "../../../../common/database/base.entity";
+import { PluginCategory } from "./plugin-category.entity";
 
 export interface PluginHeader {
   key: string;
@@ -34,4 +42,7 @@ export class Plugin extends AuditableEntity {
   @Column({ comment: "状态", default: true })
   status!: boolean;
 
+  @ManyToOne(() => PluginCategory, { nullable: true, onDelete: "SET NULL" })
+  @JoinColumn({ name: "categoryId" })
+  category?: Relation<PluginCategory> | null;
 }

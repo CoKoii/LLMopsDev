@@ -97,10 +97,12 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
   const appDetail = ref<AiAppItem>()
   const appDraft = ref<AiAppVersionItem>()
   const publishedVersions = ref<AiAppVersionItem[]>([])
+  const publishedVersionsLoading = ref(false)
   const llms = ref<LlmItem[]>([])
   const promptContent = ref(defaultPrompt)
   const selectedLlmId = ref<number | null>(null)
   const capabilities = ref<CapabilityItem[]>(createInitialCapabilities())
+  const pluginIds = ref<number[]>([])
   const openingStatementContent = ref('')
   const openingQuestions = ref<string[]>([''])
   const loading = ref(false)
@@ -116,6 +118,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
     topP: 0.48,
     presencePenalty: 0.1,
     frequencyPenalty: 0.1,
+    contextRounds: 10,
   })
   const toggleSettings = reactive<Record<(typeof configToggles)[number]['key'], boolean>>({
     longTermMemory: false,
@@ -144,9 +147,9 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
     llmId: selectedLlmId.value,
     modelSettings: { ...settings },
     capabilities: capabilities.value.map((item) => ({ ...item })),
-    pluginIds: [],
     workflowIds: [],
     knowledgeIds: [],
+    pluginIds: [...new Set(pluginIds.value)],
     toggles: { ...toggleSettings },
     openingStatement: {
       content: openingStatementContent.value,
@@ -166,6 +169,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
       topP: config.modelSettings?.topP ?? 0.48,
       presencePenalty: config.modelSettings?.presencePenalty ?? 0.1,
       frequencyPenalty: config.modelSettings?.frequencyPenalty ?? 0.1,
+      contextRounds: config.modelSettings?.contextRounds ?? 10,
     })
     capabilities.value = config.capabilities?.length
       ? config.capabilities.map((item) => ({
@@ -176,6 +180,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
           tone: item.tone || '#eff6ff',
         }))
       : []
+    pluginIds.value = config.pluginIds?.length ? [...new Set(config.pluginIds)] : []
     openingStatementContent.value = config.openingStatement?.content || ''
     openingQuestions.value = config.openingStatement?.questions?.length
       ? config.openingStatement.questions.slice(0, openingQuestionLimit)
@@ -221,15 +226,13 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
     loading.value = true
     draftReady.value = false
     try {
-      const [app, draft, llmResult, versions] = await Promise.all([
+      const [app, draft, llmResult] = await Promise.all([
         getAiAppApi(appId.value),
         getAiAppDraftApi(appId.value),
         listLlmsApi({ page: 1, pageSize: 100 }),
-        listAiAppVersionsApi(appId.value),
       ])
       appDetail.value = app
       llms.value = llmResult.items
-      publishedVersions.value = versions
       hydrateDraft(draft)
       await nextTick()
       draftReady.value = true
@@ -240,12 +243,22 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
     }
   }
 
+  const loadPublishedVersions = async () => {
+    if (!Number.isFinite(appId.value)) return
+    publishedVersionsLoading.value = true
+    try {
+      publishedVersions.value = await listAiAppVersionsApi(appId.value)
+    } finally {
+      publishedVersionsLoading.value = false
+    }
+  }
+
   const publishVersion = async () => {
     publishing.value = true
     try {
       await saveDraftNow()
       await publishAiAppVersionApi(appId.value)
-      publishedVersions.value = await listAiAppVersionsApi(appId.value)
+      await loadPublishedVersions()
       message.success('版本已保存')
     } finally {
       publishing.value = false
@@ -305,18 +318,21 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
     promptContent,
     selectedLlmId,
     capabilities,
+    pluginIds,
     openingStatementContent,
     openingQuestions,
     settings,
     toggleSettings,
     loading,
     publishing,
+    publishedVersionsLoading,
     optimizingPrompt,
     lastSavedAt,
     modelOptions,
     selectedModelLabel,
     autoSaveText,
     loadApp,
+    loadPublishedVersions,
     saveDraftNow,
     publishVersion,
     restoreVersion,

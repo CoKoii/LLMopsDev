@@ -80,6 +80,7 @@ const loadList = async () => {
       page: 1,
       pageSize: 100,
       name: props.searchValue,
+      scope: 'mine',
     })
     records.value = result.items
   } finally {

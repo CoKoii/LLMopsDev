@@ -8,6 +8,7 @@ import {
   resolvePageQuery,
 } from "../../../common/http/page-query.dto";
 import { Llm } from "../llm/entities/llm.entity";
+import { Plugin } from "../plugin/entities/plugin.entity";
 import { CreateAppDto } from "./dto/create-app.dto";
 import { QueryAppsDto } from "./dto/query-apps.dto";
 import { UpdateAppDraftDto } from "./dto/update-app-draft.dto";
@@ -24,6 +25,20 @@ const DRAFT_VERSION = "draft";
 type AppModelSummary = Pick<Llm, "id" | "provider" | "modelName">;
 type AppListItem = AiApp & {
   model: AppModelSummary | null;
+};
+type AppVersionPluginSummary = Pick<
+  Plugin,
+  "id" | "icon" | "name" | "description"
+> & {
+  category?: {
+    id: number;
+    key: string;
+    name: string;
+    sort: number;
+  } | null;
+};
+type AppVersionItem = AiAppVersion & {
+  plugins: AppVersionPluginSummary[];
 };
 
 const createDefaultDraftConfig = (): AiAppVersionConfig => ({
@@ -50,6 +65,8 @@ export class AppService {
     private readonly appVersionRepository: Repository<AiAppVersion>,
     @InjectRepository(Llm)
     private readonly llmRepository: Repository<Llm>,
+    @InjectRepository(Plugin)
+    private readonly pluginRepository: Repository<Plugin>,
     private readonly dataSource: DataSource,
     private readonly filesService: FilesService,
   ) {}
@@ -58,6 +75,56 @@ export class AppService {
     return {
       ...app,
       image: this.filesService.createAccessibleUrl(app.image),
+    };
+  }
+
+  private withAccessiblePluginImage(plugin: Plugin): AppVersionPluginSummary {
+    return {
+      id: plugin.id,
+      icon: this.filesService.createAccessibleUrl(plugin.icon),
+      name: plugin.name,
+      description: plugin.description,
+      category: plugin.category
+        ? {
+            id: plugin.category.id,
+            key: plugin.category.key,
+            name: plugin.category.name,
+            sort: plugin.category.sort,
+          }
+        : null,
+    };
+  }
+
+  private async loadVersionPlugins(
+    config: AiAppVersionConfig,
+  ): Promise<AppVersionPluginSummary[]> {
+    const pluginIds = [...new Set(config.pluginIds ?? [])];
+    if (!pluginIds.length) return [];
+
+    const plugins = await this.pluginRepository.find({
+      where: { id: In(pluginIds) },
+      relations: { category: true },
+    });
+    const pluginMap = new Map(
+      plugins.map((plugin) => [
+        plugin.id,
+        this.withAccessiblePluginImage(plugin),
+      ]),
+    );
+
+    return pluginIds
+      .map((id) => pluginMap.get(id))
+      .filter(
+        (plugin): plugin is AppVersionPluginSummary => plugin !== undefined,
+      );
+  }
+
+  private async withVersionPlugins(
+    version: AiAppVersion,
+  ): Promise<AppVersionItem> {
+    return {
+      ...version,
+      plugins: await this.loadVersionPlugins(version.config),
     };
   }
 
@@ -254,7 +321,7 @@ export class AppService {
   // --------------------------------------------------------------------------------------------------
   // 获取AI应用草稿版本
   async getDraft(id: number) {
-    return this.ensureDraftVersion(id);
+    return this.withVersionPlugins(await this.ensureDraftVersion(id));
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -263,7 +330,7 @@ export class AppService {
   async updateDraft(id: number, dto: UpdateAppDraftDto) {
     const draft = await this.ensureDraftVersion(id);
     draft.config = this.mergeConfig(draft.config, dto.config);
-    return this.appVersionRepository.save(draft);
+    return this.withVersionPlugins(await this.appVersionRepository.save(draft));
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -271,13 +338,16 @@ export class AppService {
   // 获取AI应用历史版本
   async listVersions(id: number) {
     await this.ensureApp(id);
-    return this.appVersionRepository.find({
+    const versions = await this.appVersionRepository.find({
       where: [
         { appId: id, status: AiAppVersionStatus.PUBLISHED },
         { appId: id, status: AiAppVersionStatus.ARCHIVED },
       ],
       order: { id: "DESC" },
     });
+    return Promise.all(
+      versions.map((version) => this.withVersionPlugins(version)),
+    );
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -288,14 +358,16 @@ export class AppService {
     const publishedVersions = await this.listVersions(id);
     const version = this.getNextPublishedVersion(publishedVersions);
 
-    return this.appVersionRepository.save(
-      this.appVersionRepository.create({
-        appId: id,
-        version,
-        status: AiAppVersionStatus.PUBLISHED,
-        config: draft.config,
-        publishedAt: new Date(),
-      }),
+    return this.withVersionPlugins(
+      await this.appVersionRepository.save(
+        this.appVersionRepository.create({
+          appId: id,
+          version,
+          status: AiAppVersionStatus.PUBLISHED,
+          config: draft.config,
+          publishedAt: new Date(),
+        }),
+      ),
     );
   }
   // --------------------------------------------------------------------------------------------------
@@ -312,7 +384,7 @@ export class AppService {
 
     const draft = await this.ensureDraftVersion(id);
     draft.config = target.config;
-    return this.appVersionRepository.save(draft);
+    return this.withVersionPlugins(await this.appVersionRepository.save(draft));
   }
   // --------------------------------------------------------------------------------------------------
 

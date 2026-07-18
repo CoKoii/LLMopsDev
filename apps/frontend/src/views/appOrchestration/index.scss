@@ -597,6 +597,12 @@
   margin: 1.2rem 0 0.8rem;
 }
 
+.selected-plugin-list {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: 0.8rem;
+}
+
 .opening-question-list {
   display: grid;
   gap: var(--space-2);
@@ -649,6 +655,17 @@
   overflow: hidden;
   color: var(--color-text);
   border-radius: var(--radius-sm);
+}
+
+.capability-item__icon.has-image {
+  background: var(--color-bg-panel);
+}
+
+.capability-item__icon :deep(img) {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .capability-item h4 {
@@ -1388,6 +1405,8 @@
 }
 
 .plugin-modal__group {
+  display: grid;
+  gap: var(--space-1);
   margin-bottom: var(--space-3);
 }
 
@@ -1426,6 +1445,7 @@
 
 .plugin-modal__item:hover .plugin-modal__add,
 .plugin-modal__item:focus-within .plugin-modal__add,
+.plugin-modal__item.is-selected .plugin-modal__add,
 .plugin-modal__add:disabled {
   opacity: 1;
 }
@@ -1435,8 +1455,20 @@
   width: 2.8rem;
   height: 2.8rem;
   place-items: center;
+  overflow: hidden;
   color: var(--color-text);
   border-radius: 50%;
+}
+
+.plugin-modal__item-icon.has-image {
+  background: var(--color-bg-panel);
+}
+
+.plugin-modal__item-icon :deep(img) {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .plugin-modal__item strong {

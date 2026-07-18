@@ -24,6 +24,7 @@ export type AiAppVersionConfig = {
     topP?: number;
     presencePenalty?: number;
     frequencyPenalty?: number;
+    contextRounds?: number;
   };
   capabilities?: Array<{
     key: string;

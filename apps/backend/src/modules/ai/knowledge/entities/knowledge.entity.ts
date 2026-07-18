@@ -27,5 +27,4 @@ export class Knowledge extends AuditableEntity {
 
   @Column({ comment: "状态", default: true })
   status!: boolean;
-
 }
