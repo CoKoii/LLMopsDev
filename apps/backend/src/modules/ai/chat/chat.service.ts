@@ -1,10 +1,6 @@
-import { type StructuredToolInterface } from "@langchain/core/tools";
-import {
-  ToolMessage,
-  type BaseMessageLike,
-  type ToolCall,
-} from "@langchain/core/messages";
+import { type BaseMessageLike } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
+import { createAgent } from "langchain";
 import {
   BadRequestException,
   Injectable,
@@ -21,7 +17,7 @@ import {
 } from "../app/entities/app-version.entity";
 import { AiApp } from "../app/entities/app.entity";
 import { Llm } from "../llm/entities/llm.entity";
-import { BuiltinPluginToolService } from "../plugin/builtin/builtin-plugin-tool.service";
+import { PluginToolService } from "../plugin/plugin-tool.service";
 import { type DebugAppChatHistoryDto } from "./dto/debug-app-chat.dto";
 
 const DRAFT_VERSION = "draft";
@@ -37,7 +33,7 @@ export class ChatService {
     private readonly appVersionRepository: Repository<AiAppVersion>,
     @InjectRepository(Llm)
     private readonly llmRepository: Repository<Llm>,
-    private readonly builtinPluginToolService: BuiltinPluginToolService,
+    private readonly pluginToolService: PluginToolService,
   ) {}
 
   private async getDraft(appId: number): Promise<AiAppVersion> {
@@ -90,16 +86,10 @@ export class ChatService {
   }
 
   private createMessages(
-    config: AiAppVersionConfig,
     message: string,
     history: DebugAppChatHistoryDto[] = [],
   ) {
     const messages: BaseMessageLike[] = [];
-    const prompt = config.prompt?.trim();
-
-    if (prompt) {
-      messages.push(["system", prompt]);
-    }
     for (const item of history) {
       const content = item.content.trim();
       if (!content) continue;
@@ -108,65 +98,6 @@ export class ChatService {
     messages.push(["human", message]);
 
     return messages;
-  }
-
-  private extractTotalTokens(usageMetadata: unknown) {
-    if (!this.isRecord(usageMetadata)) return undefined;
-    return typeof usageMetadata.total_tokens === "number"
-      ? usageMetadata.total_tokens
-      : undefined;
-  }
-
-  private sumTokens(...values: Array<number | undefined>) {
-    const numbers = values.filter(
-      (value): value is number => value !== undefined,
-    );
-    return numbers.length
-      ? numbers.reduce((total, value) => total + value, 0)
-      : undefined;
-  }
-
-  private async executeToolCalls(
-    toolCalls: ToolCall[],
-    toolMap: Map<string, StructuredToolInterface>,
-  ) {
-    const toolMessages: ToolMessage[] = [];
-
-    for (const toolCall of toolCalls) {
-      const selectedTool = toolMap.get(toolCall.name);
-      const toolCallId = toolCall.id ?? toolCall.name;
-
-      if (!selectedTool) {
-        toolMessages.push(
-          new ToolMessage({
-            content: `Tool ${toolCall.name} is not available.`,
-            name: toolCall.name,
-            status: "error",
-            tool_call_id: toolCallId,
-          }),
-        );
-        continue;
-      }
-
-      const result: unknown = await selectedTool.invoke({
-        type: "tool_call",
-        id: toolCallId,
-        name: toolCall.name,
-        args: toolCall.args,
-      });
-      toolMessages.push(
-        ToolMessage.isInstance(result)
-          ? result
-          : new ToolMessage({
-              content:
-                typeof result === "string" ? result : JSON.stringify(result),
-              name: toolCall.name,
-              tool_call_id: toolCallId,
-            }),
-      );
-    }
-
-    return toolMessages;
   }
 
   private parseSuggestions(content: string): string[] {
@@ -228,6 +159,57 @@ export class ChatService {
       ],
       ["human", `请润色下面的人设与回复逻辑，不要扩写：\n\n${sourcePrompt}`],
     ];
+  }
+
+  private contentToText(content: unknown): string {
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return "";
+
+    return content
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (!this.isRecord(item)) return "";
+        if (typeof item.text === "string") return item.text;
+        if (typeof item.content === "string") return item.content;
+        return "";
+      })
+      .join("");
+  }
+
+  private hasMessageTypeGetter(
+    value: unknown,
+  ): value is { _getType: () => string } {
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      "_getType" in value &&
+      typeof value._getType === "function"
+    );
+  }
+
+  private getLastAssistantText(messages: unknown) {
+    if (!Array.isArray(messages)) return "";
+
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const item: unknown = messages[index];
+      if (!this.isRecord(item)) continue;
+      const id = this.isRecord(item.id) ? item.id : undefined;
+      const role =
+        typeof item.role === "string"
+          ? item.role
+          : this.hasMessageTypeGetter(item)
+            ? item._getType()
+            : typeof id?.[2] === "string"
+              ? id[2]
+              : undefined;
+      if (role !== "ai" && role !== "assistant" && role !== "AIMessage") {
+        continue;
+      }
+
+      return this.contentToText(item.content);
+    }
+
+    return "";
   }
 
   async optimizePrompt(appId: number, prompt: string) {
@@ -304,60 +286,27 @@ export class ChatService {
   ): AsyncGenerator<string> {
     const startedAt = Date.now();
     let output = "";
-    let tokens: number | undefined;
 
     try {
       const draft = await this.getDraft(appId);
       const llm = await this.getConfiguredLlm(draft.config);
       const model = this.createModel(llm, draft.config);
-      const messages = this.createMessages(draft.config, message, history);
-      const tools = await this.builtinPluginToolService.loadEnabledTools(
-        draft.config,
-      );
-      const toolMap = new Map(tools.map((item) => [item.name, item]));
+      const messages = this.createMessages(message, history);
+      const tools = await this.pluginToolService.loadEnabledTools(draft.config);
 
-      let streamMessages = messages;
-      let toolCallTokens: number | undefined;
-      let finalResponseReady = false;
-
-      if (tools.length) {
-        const toolDecision = await model.bindTools(tools).invoke(messages);
-        toolCallTokens = this.extractTotalTokens(toolDecision.usage_metadata);
-
-        if (toolDecision.tool_calls?.length) {
-          streamMessages = [
-            ...messages,
-            toolDecision,
-            ...(await this.executeToolCalls(toolDecision.tool_calls, toolMap)),
-          ];
-        } else {
-          output = toolDecision.text;
-          tokens = toolCallTokens;
-          if (output) {
-            yield `data: ${JSON.stringify({ content: output })}\n\n`;
-          }
-          finalResponseReady = true;
-        }
-      }
-
-      if (!finalResponseReady) {
-        const stream = await model.stream(streamMessages);
-        let responseTokens: number | undefined;
-
-        for await (const chunk of stream) {
-          responseTokens =
-            this.extractTotalTokens(chunk.usage_metadata) ?? responseTokens;
-          if (chunk.text) {
-            output += chunk.text;
-            yield `data: ${JSON.stringify({ content: chunk.text })}\n\n`;
-          }
-        }
-        tokens = this.sumTokens(toolCallTokens, responseTokens);
+      const agent = createAgent({
+        model,
+        tools,
+        systemPrompt: draft.config.prompt?.trim() || undefined,
+      });
+      const result = await agent.invoke({ messages });
+      output = this.getLastAssistantText(result.messages);
+      if (output) {
+        yield `data: ${JSON.stringify({ content: output })}\n\n`;
       }
 
       yield `event: meta\ndata: ${JSON.stringify({
         elapsedMs: Date.now() - startedAt,
-        tokens,
       })}\n\n`;
 
       if (draft.config.toggles?.questionSuggestions) {
