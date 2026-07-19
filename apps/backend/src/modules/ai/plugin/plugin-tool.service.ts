@@ -4,7 +4,6 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { isIP } from "node:net";
 import { In, Repository } from "typeorm";
 import { z } from "zod";
-import { RequestContextService } from "../../../common/request-context/request-context.service";
 import { type AiAppVersionConfig } from "../app/entities/app-version.entity";
 import { Plugin, type PluginHeader } from "./entities/plugin.entity";
 
@@ -20,6 +19,11 @@ const HTTP_METHODS = new Set([
 ]);
 const MAX_TOOL_RESPONSE_LENGTH = 20000;
 const TOOL_TIMEOUT_MS = 20000;
+const TOOL_RESPONSE_COMPACT_OPTIONS = [
+  { arrayItems: 20, objectKeys: 40, stringLength: 1000, depth: 6 },
+  { arrayItems: 12, objectKeys: 30, stringLength: 600, depth: 5 },
+  { arrayItems: 6, objectKeys: 20, stringLength: 300, depth: 4 },
+];
 
 type OpenApiDocument = {
   servers?: Array<{ url?: unknown }>;
@@ -75,12 +79,26 @@ type RequestBodyConfig = {
   schema?: unknown;
 };
 
+type ToolResponsePayload = {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  body: unknown;
+  truncated?: boolean;
+};
+
+type ToolResponseCompactOptions = {
+  arrayItems: number;
+  objectKeys: number;
+  stringLength: number;
+  depth: number;
+};
+
 @Injectable()
 export class PluginToolService {
   constructor(
     @InjectRepository(Plugin)
     private readonly pluginRepository: Repository<Plugin>,
-    private readonly requestContext: RequestContextService,
   ) {}
 
   private isRecord(value: unknown): value is Record<string, unknown> {
@@ -623,22 +641,73 @@ export class PluginToolService {
     return params.toString();
   }
 
+  private compactToolResponseValue(
+    value: unknown,
+    options: ToolResponseCompactOptions,
+    depth = 0,
+  ): unknown {
+    if (typeof value === "string") {
+      return value.length > options.stringLength
+        ? `${value.slice(0, options.stringLength)}...`
+        : value;
+    }
+    if (typeof value !== "object" || value === null) return value;
+    if (depth >= options.depth) return "[Truncated]";
+
+    if (Array.isArray(value)) {
+      return value
+        .slice(0, options.arrayItems)
+        .map((item) => this.compactToolResponseValue(item, options, depth + 1));
+    }
+
+    const output: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value).slice(
+      0,
+      options.objectKeys,
+    )) {
+      output[key] = this.compactToolResponseValue(item, options, depth + 1);
+    }
+
+    return output;
+  }
+
+  private serializeToolResponse(payload: ToolResponsePayload) {
+    const serialized = JSON.stringify(payload);
+    if (serialized.length <= MAX_TOOL_RESPONSE_LENGTH) return serialized;
+
+    for (const options of TOOL_RESPONSE_COMPACT_OPTIONS) {
+      const compacted = JSON.stringify({
+        ...payload,
+        truncated: true,
+        body: this.compactToolResponseValue(payload.body, options),
+      });
+      if (compacted.length <= MAX_TOOL_RESPONSE_LENGTH) return compacted;
+    }
+
+    return JSON.stringify({
+      ok: payload.ok,
+      status: payload.status,
+      statusText: payload.statusText,
+      truncated: true,
+      body:
+        typeof payload.body === "string"
+          ? `${payload.body.slice(0, MAX_TOOL_RESPONSE_LENGTH / 2)}...`
+          : "[Response body is too large]",
+    });
+  }
+
   private async parseToolResponse(response: Response) {
     const contentType = response.headers.get("content-type") ?? "";
     const body = contentType.includes("application/json")
       ? await response.json()
       : await response.text();
-    const payload = {
+
+    return this.serializeToolResponse({
       ok: response.ok,
       status: response.status,
       statusText: response.statusText,
       body,
-    };
-    const serialized = JSON.stringify(payload);
-
-    return serialized.length > MAX_TOOL_RESPONSE_LENGTH
-      ? `${serialized.slice(0, MAX_TOOL_RESPONSE_LENGTH)}...`
-      : serialized;
+    });
   }
 
   private createOpenApiTool(
@@ -668,16 +737,15 @@ export class PluginToolService {
     );
   }
 
-  private isVisibleForExecution(plugin: Plugin, userId?: number) {
+  private isVisibleForExecution(plugin: Plugin, userId: number) {
     if (plugin.category?.key === "builtin") return true;
-    return userId !== undefined && plugin.createdBy === userId;
+    return plugin.createdBy === userId;
   }
 
-  async loadEnabledTools(config: AiAppVersionConfig) {
+  async loadEnabledTools(config: AiAppVersionConfig, userId: number) {
     const pluginIds = [...new Set(config.pluginIds ?? [])];
     if (!pluginIds.length) return [];
 
-    const userId = this.requestContext.getUserId();
     const plugins = await this.pluginRepository.find({
       where: { id: In(pluginIds) },
       relations: { category: true },

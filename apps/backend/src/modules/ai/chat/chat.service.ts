@@ -85,6 +85,16 @@ export class ChatService {
     return typeof value === "object" && value !== null;
   }
 
+  private getNumber(value: Record<string, unknown> | undefined, key: string) {
+    const item = value?.[key];
+    return typeof item === "number" ? item : undefined;
+  }
+
+  private getRecord(value: Record<string, unknown> | undefined, key: string) {
+    const item = value?.[key];
+    return this.isRecord(item) ? item : undefined;
+  }
+
   private createMessages(
     message: string,
     history: DebugAppChatHistoryDto[] = [],
@@ -212,6 +222,42 @@ export class ChatService {
     return "";
   }
 
+  private getMessageTokenCount(message: unknown) {
+    if (!this.isRecord(message)) return undefined;
+
+    const usageMetadata = this.getRecord(message, "usage_metadata");
+    const usageTotal =
+      this.getNumber(usageMetadata, "total_tokens") ??
+      this.getNumber(usageMetadata, "totalTokens");
+    if (usageTotal !== undefined) return usageTotal;
+
+    const responseMetadata = this.getRecord(message, "response_metadata");
+    const tokenUsage = this.getRecord(responseMetadata, "tokenUsage");
+    const responseUsage = this.getRecord(responseMetadata, "usage");
+
+    return (
+      this.getNumber(tokenUsage, "totalTokens") ??
+      this.getNumber(tokenUsage, "total_tokens") ??
+      this.getNumber(responseUsage, "total_tokens") ??
+      this.getNumber(responseUsage, "totalTokens")
+    );
+  }
+
+  private getTotalTokens(messages: unknown) {
+    if (!Array.isArray(messages)) return undefined;
+
+    let total = 0;
+    let hasUsage = false;
+    for (const message of messages) {
+      const count = this.getMessageTokenCount(message);
+      if (count === undefined) continue;
+      total += count;
+      hasUsage = true;
+    }
+
+    return hasUsage ? total : undefined;
+  }
+
   async optimizePrompt(appId: number, prompt: string) {
     const sourcePrompt = prompt.trim();
     if (!sourcePrompt) {
@@ -274,14 +320,16 @@ export class ChatService {
   createAppDebugSseStream(
     appId: number,
     message: string,
+    userId: number,
     history: DebugAppChatHistoryDto[] = [],
   ): Readable {
-    return Readable.from(this.streamAppDebug(appId, message, history));
+    return Readable.from(this.streamAppDebug(appId, message, userId, history));
   }
 
   private async *streamAppDebug(
     appId: number,
     message: string,
+    userId: number,
     history: DebugAppChatHistoryDto[] = [],
   ): AsyncGenerator<string> {
     const startedAt = Date.now();
@@ -292,7 +340,10 @@ export class ChatService {
       const llm = await this.getConfiguredLlm(draft.config);
       const model = this.createModel(llm, draft.config);
       const messages = this.createMessages(message, history);
-      const tools = await this.pluginToolService.loadEnabledTools(draft.config);
+      const tools = await this.pluginToolService.loadEnabledTools(
+        draft.config,
+        userId,
+      );
 
       const agent = createAgent({
         model,
@@ -301,12 +352,14 @@ export class ChatService {
       });
       const result = await agent.invoke({ messages });
       output = this.getLastAssistantText(result.messages);
+      const tokens = this.getTotalTokens(result.messages);
       if (output) {
         yield `data: ${JSON.stringify({ content: output })}\n\n`;
       }
 
       yield `event: meta\ndata: ${JSON.stringify({
         elapsedMs: Date.now() - startedAt,
+        tokens,
       })}\n\n`;
 
       if (draft.config.toggles?.questionSuggestions) {

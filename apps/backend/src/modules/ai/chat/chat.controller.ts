@@ -10,6 +10,8 @@ import {
   StreamableFile,
 } from "@nestjs/common";
 import { SkipResponseWrap } from "../../../common/http/skip-response-wrap.decorator";
+import type { AuthUser } from "../../../common/auth/auth-user";
+import { CurrentUser } from "../../../common/auth/current-user.decorator";
 import { ChatService } from "./chat.service";
 import { DebugAppChatDto } from "./dto/debug-app-chat.dto";
 import { OptimizeAppPromptDto } from "./dto/optimize-app-prompt.dto";
@@ -28,9 +30,15 @@ export class ChatController {
   debugStream(
     @Param("id", ParseIntPipe) id: number,
     @Body() dto: DebugAppChatDto,
+    @CurrentUser() user: AuthUser,
   ): StreamableFile {
     return new StreamableFile(
-      this.chatService.createAppDebugSseStream(id, dto.message, dto.history),
+      this.chatService.createAppDebugSseStream(
+        id,
+        dto.message,
+        user.userId,
+        dto.history,
+      ),
       {
         type: "text/event-stream; charset=utf-8",
       },
