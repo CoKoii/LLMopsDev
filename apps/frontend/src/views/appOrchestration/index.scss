@@ -555,6 +555,10 @@
   border-bottom: 0.1rem solid var(--color-border-light);
 }
 
+.app-orchestration__config-scroll > .config-section:last-child {
+  border-bottom: 0;
+}
+
 .config-section__head,
 .config-section__head > div {
   display: flex;
