@@ -1,98 +1,41 @@
-import { type BaseMessageLike } from "@langchain/core/messages";
+import { AIMessage, type BaseMessageLike } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
-import { createAgent } from "langchain";
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from "@nestjs/common";
-import { InjectRepository } from "@nestjs/typeorm";
+import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { Readable } from "node:stream";
-import { Repository } from "typeorm";
-import {
-  AiAppVersion,
-  AiAppVersionStatus,
-  type AiAppVersionConfig,
-} from "../app/entities/app-version.entity";
-import { AiApp } from "../app/entities/app.entity";
-import { Llm } from "../llm/entities/llm.entity";
-import { PluginToolService } from "../plugin/plugin-tool.service";
+import { AiRuntimeService } from "./ai-runtime.service";
 import { type DebugAppChatHistoryDto } from "./dto/debug-app-chat.dto";
 
-const DRAFT_VERSION = "draft";
+const SSE_DONE = "data: [DONE]\n\n";
+const PROMPT_OPTIMIZE_SYSTEM_PROMPT = [
+  "润色用户提供的人设与回复逻辑，使表达更清晰、通顺、自然。",
+  "只调整措辞和逻辑顺序，保留原意、角色、约束和信息量。",
+  "不要新增角色、任务、规则、示例或业务设定；不要扩写。",
+  "输出长度接近原文，最多不超过原文 1.2 倍；原文很短则保持同等长度。",
+  "保留原有 Markdown 结构；无结构时不要强行添加复杂结构。",
+  "只返回润色后的正文，不解释，不使用代码块。",
+].join("\n");
+const QUESTION_SUGGESTION_SYSTEM_PROMPT = [
+  "只返回 JSON 字符串数组，包含 3 条用户下一步可能直接发送的话。",
+  "必须用用户本人语气，如“帮我…”“我想…”“能不能…”“请继续…”。",
+  "不要用旁观口吻，如“你可以问…”“是否需要…”“建议询问…”。",
+  "每条简短自然，可直接点击发送。",
+].join("\n");
+
+type SseEvent =
+  | { content: string }
+  | { message: string }
+  | { elapsedMs: number; tokens?: number }
+  | { items: string[] };
 
 @Injectable()
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
 
-  constructor(
-    @InjectRepository(AiApp)
-    private readonly appRepository: Repository<AiApp>,
-    @InjectRepository(AiAppVersion)
-    private readonly appVersionRepository: Repository<AiAppVersion>,
-    @InjectRepository(Llm)
-    private readonly llmRepository: Repository<Llm>,
-    private readonly pluginToolService: PluginToolService,
-  ) {}
+  constructor(private readonly aiRuntimeService: AiRuntimeService) {}
 
-  private async getDraft(appId: number): Promise<AiAppVersion> {
-    const app = await this.appRepository.findOne({ where: { id: appId } });
-    if (!app) throw new NotFoundException("AI应用不存在");
-
-    const draft = await this.appVersionRepository.findOne({
-      where: {
-        appId,
-        version: DRAFT_VERSION,
-        status: AiAppVersionStatus.DRAFT,
-      },
-    });
-    if (!draft) throw new NotFoundException("AI应用草稿不存在");
-
-    return draft;
-  }
-
-  private async getConfiguredLlm(config: AiAppVersionConfig): Promise<Llm> {
-    if (!config.llmId) {
-      throw new BadRequestException("请先选择模型");
-    }
-
-    const llm = await this.llmRepository.findOne({
-      where: { id: config.llmId },
-    });
-    if (!llm) throw new BadRequestException("模型不存在");
-
-    return llm;
-  }
-
-  private createModel(llm: Llm, config: AiAppVersionConfig): ChatOpenAI {
-    const settings = config.modelSettings ?? {};
-
-    return new ChatOpenAI({
-      apiKey: llm.apiKey,
-      model: llm.modelName,
-      maxRetries: 1,
-      streamUsage: true,
-      temperature: settings.temperature,
-      topP: settings.topP,
-      frequencyPenalty: settings.frequencyPenalty,
-      presencePenalty: settings.presencePenalty,
-      configuration: { baseURL: llm.url },
-    });
-  }
-
-  private isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null;
-  }
-
-  private getNumber(value: Record<string, unknown> | undefined, key: string) {
-    const item = value?.[key];
-    return typeof item === "number" ? item : undefined;
-  }
-
-  private getRecord(value: Record<string, unknown> | undefined, key: string) {
-    const item = value?.[key];
-    return this.isRecord(item) ? item : undefined;
+  private sse(data: SseEvent, event?: string) {
+    const prefix = event ? `event: ${event}\n` : "";
+    return `${prefix}data: ${JSON.stringify(data)}\n\n`;
   }
 
   private createMessages(
@@ -134,15 +77,7 @@ export class ChatService {
     assistantMessage: string,
   ): Promise<string[]> {
     const response = await model.invoke([
-      [
-        "system",
-        [
-          "只返回 JSON 字符串数组，包含 3 条用户下一步可能直接发送的话。",
-          "必须用用户本人语气，如“帮我…”“我想…”“能不能…”“请继续…”。",
-          "不要用旁观口吻，如“你可以问…”“是否需要…”“建议询问…”。",
-          "每条简短自然，可直接点击发送。",
-        ].join("\n"),
-      ],
+      ["system", QUESTION_SUGGESTION_SYSTEM_PROMPT],
       [
         "human",
         `用户消息：${userMessage}\nAI回复：${assistantMessage}\n生成 3 条后续发送建议。`,
@@ -156,106 +91,20 @@ export class ChatService {
     sourcePrompt: string,
   ): Array<["system" | "human", string]> {
     return [
-      [
-        "system",
-        [
-          "润色用户提供的人设与回复逻辑，使表达更清晰、通顺、自然。",
-          "只调整措辞和逻辑顺序，保留原意、角色、约束和信息量。",
-          "不要新增角色、任务、规则、示例或业务设定；不要扩写。",
-          "输出长度接近原文，最多不超过原文 1.2 倍；原文很短则保持同等长度。",
-          "保留原有 Markdown 结构；无结构时不要强行添加复杂结构。",
-          "只返回润色后的正文，不解释，不使用代码块。",
-        ].join("\n"),
-      ],
+      ["system", PROMPT_OPTIMIZE_SYSTEM_PROMPT],
       ["human", `请润色下面的人设与回复逻辑，不要扩写：\n\n${sourcePrompt}`],
     ];
   }
 
-  private contentToText(content: unknown): string {
-    if (typeof content === "string") return content;
-    if (!Array.isArray(content)) return "";
+  private getTotalTokens(messages: BaseMessageLike[]) {
+    const tokens = messages
+      .filter((message) => AIMessage.isInstance(message))
+      .reduce(
+        (total, message) => total + (message.usage_metadata?.total_tokens ?? 0),
+        0,
+      );
 
-    return content
-      .map((item) => {
-        if (typeof item === "string") return item;
-        if (!this.isRecord(item)) return "";
-        if (typeof item.text === "string") return item.text;
-        if (typeof item.content === "string") return item.content;
-        return "";
-      })
-      .join("");
-  }
-
-  private hasMessageTypeGetter(
-    value: unknown,
-  ): value is { _getType: () => string } {
-    return (
-      typeof value === "object" &&
-      value !== null &&
-      "_getType" in value &&
-      typeof value._getType === "function"
-    );
-  }
-
-  private getLastAssistantText(messages: unknown) {
-    if (!Array.isArray(messages)) return "";
-
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const item: unknown = messages[index];
-      if (!this.isRecord(item)) continue;
-      const id = this.isRecord(item.id) ? item.id : undefined;
-      const role =
-        typeof item.role === "string"
-          ? item.role
-          : this.hasMessageTypeGetter(item)
-            ? item._getType()
-            : typeof id?.[2] === "string"
-              ? id[2]
-              : undefined;
-      if (role !== "ai" && role !== "assistant" && role !== "AIMessage") {
-        continue;
-      }
-
-      return this.contentToText(item.content);
-    }
-
-    return "";
-  }
-
-  private getMessageTokenCount(message: unknown) {
-    if (!this.isRecord(message)) return undefined;
-
-    const usageMetadata = this.getRecord(message, "usage_metadata");
-    const usageTotal =
-      this.getNumber(usageMetadata, "total_tokens") ??
-      this.getNumber(usageMetadata, "totalTokens");
-    if (usageTotal !== undefined) return usageTotal;
-
-    const responseMetadata = this.getRecord(message, "response_metadata");
-    const tokenUsage = this.getRecord(responseMetadata, "tokenUsage");
-    const responseUsage = this.getRecord(responseMetadata, "usage");
-
-    return (
-      this.getNumber(tokenUsage, "totalTokens") ??
-      this.getNumber(tokenUsage, "total_tokens") ??
-      this.getNumber(responseUsage, "total_tokens") ??
-      this.getNumber(responseUsage, "totalTokens")
-    );
-  }
-
-  private getTotalTokens(messages: unknown) {
-    if (!Array.isArray(messages)) return undefined;
-
-    let total = 0;
-    let hasUsage = false;
-    for (const message of messages) {
-      const count = this.getMessageTokenCount(message);
-      if (count === undefined) continue;
-      total += count;
-      hasUsage = true;
-    }
-
-    return hasUsage ? total : undefined;
+    return tokens || undefined;
   }
 
   async optimizePrompt(appId: number, prompt: string) {
@@ -264,9 +113,8 @@ export class ChatService {
       throw new BadRequestException("人设与回复逻辑不能为空");
     }
 
-    const draft = await this.getDraft(appId);
-    const llm = await this.getConfiguredLlm(draft.config);
-    const model = this.createModel(llm, draft.config);
+    const draft = await this.aiRuntimeService.getDraft(appId);
+    const model = await this.aiRuntimeService.createModel(draft.config);
     const response = await model.invoke(
       this.createPromptOptimizeMessages(sourcePrompt),
     );
@@ -294,26 +142,25 @@ export class ChatService {
         throw new BadRequestException("人设与回复逻辑不能为空");
       }
 
-      const draft = await this.getDraft(appId);
-      const llm = await this.getConfiguredLlm(draft.config);
-      const model = this.createModel(llm, draft.config);
+      const draft = await this.aiRuntimeService.getDraft(appId);
+      const model = await this.aiRuntimeService.createModel(draft.config);
       const stream = await model.stream(
         this.createPromptOptimizeMessages(sourcePrompt),
       );
 
       for await (const chunk of stream) {
         if (chunk.text) {
-          yield `data: ${JSON.stringify({ content: chunk.text })}\n\n`;
+          yield this.sse({ content: chunk.text });
         }
       }
 
-      yield "data: [DONE]\n\n";
+      yield SSE_DONE;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const stack = error instanceof Error ? error.stack : undefined;
 
       this.logger.error(`Prompt优化失败: ${message}`, stack);
-      yield `event: error\ndata: ${JSON.stringify({ message })}\n\n`;
+      yield this.sse({ message }, "error");
     }
   }
 
@@ -336,31 +183,30 @@ export class ChatService {
     let output = "";
 
     try {
-      const draft = await this.getDraft(appId);
-      const llm = await this.getConfiguredLlm(draft.config);
-      const model = this.createModel(llm, draft.config);
-      const messages = this.createMessages(message, history);
-      const tools = await this.pluginToolService.loadEnabledTools(
-        draft.config,
+      const { agent, draft, model } = await this.aiRuntimeService.createAgent(
+        appId,
         userId,
       );
+      const messages = this.createMessages(message, history);
 
-      const agent = createAgent({
-        model,
-        tools,
-        systemPrompt: draft.config.prompt?.trim() || undefined,
-      });
-      const result = await agent.invoke({ messages });
-      output = this.getLastAssistantText(result.messages);
-      const tokens = this.getTotalTokens(result.messages);
-      if (output) {
-        yield `data: ${JSON.stringify({ content: output })}\n\n`;
+      const run = await agent.streamEvents({ messages }, { version: "v3" });
+
+      for await (const item of run.messages) {
+        for await (const content of item.text) {
+          output += content;
+          yield this.sse({ content });
+        }
       }
+      const result = await run.output;
+      const tokens = this.getTotalTokens(result.messages);
 
-      yield `event: meta\ndata: ${JSON.stringify({
-        elapsedMs: Date.now() - startedAt,
-        tokens,
-      })}\n\n`;
+      yield this.sse(
+        {
+          elapsedMs: Date.now() - startedAt,
+          tokens,
+        },
+        "meta",
+      );
 
       if (draft.config.toggles?.questionSuggestions) {
         let suggestions: string[] = [];
@@ -377,16 +223,16 @@ export class ChatService {
 
           this.logger.warn(`用户问题建议生成失败: ${message}`, stack);
         }
-        yield `event: suggestions\ndata: ${JSON.stringify({ items: suggestions })}\n\n`;
+        yield this.sse({ items: suggestions }, "suggestions");
       }
 
-      yield "data: [DONE]\n\n";
+      yield SSE_DONE;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const stack = error instanceof Error ? error.stack : undefined;
 
       this.logger.error(`AI应用调试失败: ${message}`, stack);
-      yield `event: error\ndata: ${JSON.stringify({ message })}\n\n`;
+      yield this.sse({ message }, "error");
     }
   }
 }
