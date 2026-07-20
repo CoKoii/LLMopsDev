@@ -712,6 +712,7 @@
   min-height: 0;
   padding: 2.8rem 2.4rem;
   overflow-y: auto;
+  background: #f8fafc;
 }
 
 .chat-preview__empty {
@@ -1126,7 +1127,7 @@
   overflow-wrap: anywhere;
   color: inherit;
   font-size: 1.4rem;
-  line-height: 2.2rem;
+  line-height: 2.3rem;
 }
 
 :global(.chat-markdown > :first-child) {
@@ -1137,38 +1138,90 @@
   margin-bottom: 0;
 }
 
+:global(.chat-markdown h1),
+:global(.chat-markdown h2),
+:global(.chat-markdown h3),
+:global(.chat-markdown h4) {
+  margin: 1.4rem 0 0.8rem;
+  color: var(--color-text-strong);
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+:global(.chat-markdown h1),
+:global(.chat-markdown h2) {
+  padding-bottom: 0.8rem;
+  font-size: 1.8rem;
+  line-height: 2.6rem;
+  border-bottom: 0.1rem solid var(--color-border-light);
+}
+
+:global(.chat-markdown h3) {
+  font-size: 1.6rem;
+  line-height: 2.4rem;
+}
+
+:global(.chat-markdown h4) {
+  font-size: 1.4rem;
+  line-height: 2.2rem;
+}
+
 :global(.chat-markdown p),
 :global(.chat-markdown ul),
 :global(.chat-markdown ol),
 :global(.chat-markdown blockquote),
 :global(.chat-markdown pre),
 :global(.chat-markdown table) {
-  margin: 0.8rem 0;
+  margin: 0.9rem 0;
+}
+
+:global(.chat-markdown p) {
+  color: var(--color-text);
 }
 
 :global(.chat-markdown ul),
 :global(.chat-markdown ol) {
-  padding-left: 2rem;
+  padding-left: 1.8rem;
+}
+
+:global(.chat-markdown li) {
+  padding-left: 0.2rem;
 }
 
 :global(.chat-markdown li + li) {
-  margin-top: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+:global(.chat-markdown li::marker) {
+  color: var(--color-text-muted);
+}
+
+:global(.chat-markdown strong) {
+  color: var(--color-text-strong);
+  font-weight: 650;
+}
+
+:global(.chat-markdown hr) {
+  height: 0.1rem;
+  margin: 1.4rem 0;
+  background: var(--color-border-light);
+  border: 0;
 }
 
 :global(.chat-markdown code) {
-  padding: 0.15rem 0.4rem;
+  padding: 0.16rem 0.48rem;
   color: var(--color-text-strong);
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  font-size: 1.25rem;
-  background: rgba(15, 23, 42, 0.08);
+  font-size: 1.24rem;
+  background: rgba(15, 23, 42, 0.06);
   border-radius: 0.4rem;
 }
 
 :global(.chat-markdown pre) {
   max-width: 100%;
-  padding: 1rem 1.2rem;
+  padding: 1.2rem 1.4rem;
   overflow-x: auto;
-  background: #111827;
+  background: #101827;
   border-radius: var(--radius-sm);
 }
 
@@ -1182,9 +1235,16 @@
 }
 
 :global(.chat-markdown blockquote) {
-  padding-left: 1rem;
+  margin: 1rem 0;
+  padding: 0.8rem 1rem;
   color: var(--color-text-muted);
-  border-left: 0.3rem solid var(--color-border);
+  background: rgba(248, 250, 252, 0.78);
+  border-left: 0.3rem solid var(--color-primary);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+:global(.chat-markdown blockquote p) {
+  color: inherit;
 }
 
 :global(.chat-markdown a) {
@@ -1197,16 +1257,48 @@
 }
 
 :global(.chat-markdown table) {
-  display: block;
+  display: table;
+  width: 100%;
   max-width: 100%;
   overflow-x: auto;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: var(--color-text);
+  font-size: 1.3rem;
+  line-height: 2rem;
+  table-layout: auto;
+  white-space: normal;
+  border: 0.1rem solid var(--color-border-light);
+  border-radius: var(--radius-sm);
 }
 
 :global(.chat-markdown th),
 :global(.chat-markdown td) {
-  padding: 0.5rem 0.7rem;
-  border: 0.1rem solid var(--color-border-light);
+  padding: 0.7rem 1rem;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  border: 0;
+  border-right: 0.1rem solid var(--color-border-light);
+  border-bottom: 0.1rem solid var(--color-border-light);
+}
+
+:global(.chat-markdown th) {
+  color: var(--color-text-strong);
+  font-weight: 600;
+  background: var(--color-bg-soft);
+}
+
+:global(.chat-markdown tbody tr:nth-child(even) td) {
+  background: rgba(248, 250, 252, 0.62);
+}
+
+:global(.chat-markdown tr > :last-child) {
+  border-right: 0;
+}
+
+:global(.chat-markdown tbody tr:last-child td) {
+  border-bottom: 0;
 }
 
 :global(.chat-message-footer) {
