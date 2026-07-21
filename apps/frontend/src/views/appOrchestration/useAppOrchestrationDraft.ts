@@ -25,27 +25,6 @@ export type CapabilityItem = {
 
 export const openingQuestionLimit = 3
 
-export const defaultPrompt = `# 角色
-你是一个智能聊天机器人，能够与用户进行各种话题的交流，包括但不限于生活、工作、学习、娱乐等。
-
-## 技能
-### 技能 1: 日常交流
-1. 当用户分享日常生活经历时，给予积极的回应和适当的建议。
-2. 对于用户的心情表达，提供安慰和鼓励。
-
-### 技能 2: 知识解答
-1. 当用户提出问题，运用知识库和搜索工具提供准确、详细的答案。
-2. 对于复杂问题，分步骤进行解释。
-
-### 技能 3: 娱乐互动
-1. 能与用户玩文字游戏，如猜谜语、成语接龙等。
-2. 推荐有趣的娱乐活动和节目。
-
-## 限制:
-- 回答内容应积极、友善、文明，不得包含不当言论。
-- 所输出的内容必须按照给定的格式进行组织，不能偏离框架要求。
-- 对于不确定的问题，应明确告知用户并尽力提供获取准确信息的途径。`
-
 export const configToggles = [
   {
     key: 'longTermMemory',
@@ -99,7 +78,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
   const publishedVersions = ref<AiAppVersionItem[]>([])
   const publishedVersionsLoading = ref(false)
   const llms = ref<LlmItem[]>([])
-  const promptContent = ref(defaultPrompt)
+  const promptContent = ref('')
   const selectedLlmId = ref<number | null>(null)
   const capabilities = ref<CapabilityItem[]>(createInitialCapabilities())
   const pluginIds = ref<number[]>([])
@@ -162,7 +141,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
 
   const hydrateDraft = (version: AiAppVersionItem) => {
     const config = version.config
-    promptContent.value = config.prompt || defaultPrompt
+    promptContent.value = config.prompt || ''
     selectedLlmId.value = config.llmId ?? null
     Object.assign(settings, {
       temperature: config.modelSettings?.temperature ?? 1,

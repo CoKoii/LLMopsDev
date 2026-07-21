@@ -162,7 +162,10 @@ const chatRoles = computed<ChatRoles>(() => ({
 const suggestedPrompts = computed(() => debugStore.getSuggestions(appId.value))
 const selectedPluginIds = computed(() => new Set(pluginIds.value))
 const openingPresetQuestions = computed(() =>
-  openingQuestions.value.map((item) => item.trim()).filter(Boolean).slice(0, openingQuestionLimit),
+  openingQuestions.value
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, openingQuestionLimit),
 )
 const suggestionTargetMessageKey = computed(() => {
   return [...debugStore.getMessages(appId.value)]
@@ -182,7 +185,8 @@ const displayMessages = computed<ChatMessage[]>(() =>
   })),
 )
 const promptOptimizeDisplay = computed(
-  () => promptOptimizeResult.value || (optimizingPrompt.value ? '正在生成优化版本...' : '暂无优化结果'),
+  () =>
+    promptOptimizeResult.value || (optimizingPrompt.value ? '正在生成优化版本...' : '暂无优化结果'),
 )
 const pluginSourceOptions = [
   { key: 'custom', name: '自定义插件' },
@@ -819,7 +823,11 @@ onMounted(() => {
                 优化
               </Button>
             </div>
-            <TextArea v-model:value="promptContent" class="app-orchestration__prompt-editor" />
+            <TextArea
+              v-model:value="promptContent"
+              class="app-orchestration__prompt-editor"
+              placeholder="描述 AI 应用的角色定位、任务范围和回复规则"
+            />
           </div>
         </section>
 
@@ -837,11 +845,7 @@ onMounted(() => {
                 </Button>
               </div>
               <div v-if="selectedPlugins.length" class="selected-plugin-list">
-                <article
-                  v-for="item in selectedPlugins"
-                  :key="item.id"
-                  class="capability-item"
-                >
+                <article v-for="item in selectedPlugins" :key="item.id" class="capability-item">
                   <div class="capability-item__icon" :class="{ 'has-image': item.icon }">
                     <img v-if="item.icon" :src="item.icon" alt="" />
                     <component
@@ -1220,14 +1224,8 @@ onMounted(() => {
 
               <div class="plugin-modal__list">
                 <div v-if="pluginCatalogLoading">正在加载插件...</div>
-                <div v-else-if="pluginGroups.length === 0">
-                  当前分类下没有可选插件
-                </div>
-                <section
-                  v-for="group in pluginGroups"
-                  :key="group.key"
-                  class="plugin-modal__group"
-                >
+                <div v-else-if="pluginGroups.length === 0">当前分类下没有可选插件</div>
+                <section v-for="group in pluginGroups" :key="group.key" class="plugin-modal__group">
                   <h4>{{ group.title }}</h4>
                   <article
                     v-for="item in group.items"
@@ -1335,14 +1333,20 @@ onMounted(() => {
             <Tag v-if="optimizingPrompt" color="processing">生成中</Tag>
             <Tag v-else-if="promptOptimizeResult" color="success">可应用</Tag>
           </header>
-          <pre ref="promptOptimizeResultRef" :class="{ 'is-empty': !promptOptimizeResult && optimizingPrompt }">{{ promptOptimizeDisplay }}</pre>
+          <pre
+            ref="promptOptimizeResultRef"
+            :class="{ 'is-empty': !promptOptimizeResult && optimizingPrompt }"
+            >{{ promptOptimizeDisplay }}</pre
+          >
         </section>
       </div>
 
       <footer class="prompt-optimize__actions">
         <Button @click="closePromptOptimize">取消</Button>
         <div class="prompt-optimize__primary-actions">
-          <Button :loading="optimizingPrompt" @click="regeneratePromptOptimization">重新生成</Button>
+          <Button :loading="optimizingPrompt" @click="regeneratePromptOptimization"
+            >重新生成</Button
+          >
           <Button
             type="primary"
             :disabled="!promptOptimizeResult || optimizingPrompt"
