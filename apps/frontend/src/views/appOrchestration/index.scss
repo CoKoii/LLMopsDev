@@ -1597,8 +1597,11 @@
   place-items: center;
   overflow: hidden;
   color: var(--color-white);
-  background: var(--color-primary);
   border-radius: var(--radius-md);
+}
+
+.publish-history__icon:not(.has-image) {
+  background: var(--color-primary);
 }
 
 .publish-history__icon :deep(img) {

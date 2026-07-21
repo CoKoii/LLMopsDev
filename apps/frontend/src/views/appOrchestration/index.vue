@@ -1274,7 +1274,7 @@ onMounted(() => {
     >
       <div class="publish-history">
         <div class="publish-history__app">
-          <div class="publish-history__icon">
+          <div class="publish-history__icon" :class="{ 'has-image': appAvatar }">
             <img v-if="appAvatar" :src="appAvatar" alt="" />
             <Bot v-else :size="18" />
           </div>
