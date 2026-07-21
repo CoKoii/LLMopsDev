@@ -17,6 +17,7 @@ import { QueryPluginsDto } from "./dto/query-plugins.dto";
 import { UpdatePluginDto } from "./dto/update-plugin.dto";
 import { PluginCategory } from "./entities/plugin-category.entity";
 import { Plugin, type PluginHeader } from "./entities/plugin.entity";
+import { validatePluginOpenApiSchema } from "./openapi-schema.validator";
 
 type PluginPayload = {
   icon?: string | null;
@@ -59,6 +60,29 @@ export class PluginService {
     return userId !== undefined && plugin.createdBy === userId;
   }
 
+  private validateOpenApiSchema(openapiSchema: string) {
+    const errors = validatePluginOpenApiSchema(openapiSchema);
+    if (errors.length) {
+      throw new BadRequestException(
+        `OpenAPI Schema不完整：${errors.join("；")}`,
+      );
+    }
+  }
+
+  private normalizeHeaders(headers: PluginHeader[]) {
+    return headers.map((header, index) => {
+      const key = header.key.trim();
+      const value = header.value.trim();
+      if (!key || !value) {
+        throw new BadRequestException(
+          `Headers第${index + 1}项的Key和Value都必须填写`,
+        );
+      }
+
+      return { key, value };
+    });
+  }
+
   private async buildPluginPayload(
     dto: CreatePluginDto | UpdatePluginDto,
     userId: number,
@@ -86,13 +110,11 @@ export class PluginService {
       payload.category = category;
     }
     if (dto.openapiSchema !== undefined) {
+      this.validateOpenApiSchema(dto.openapiSchema);
       payload.openapiSchema = dto.openapiSchema;
     }
     if (dto.headers !== undefined) {
-      payload.headers = dto.headers.map((header) => ({
-        key: header.key,
-        value: header.value,
-      }));
+      payload.headers = this.normalizeHeaders(dto.headers);
     }
     if (dto.status !== undefined) {
       payload.status = dto.status;
