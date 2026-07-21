@@ -712,7 +712,7 @@
   min-height: 0;
   padding: 2.8rem 2.4rem;
   overflow-y: auto;
-  background: #f8fafc;
+  background: var(--color-bg-panel);
 }
 
 .chat-preview__empty {
