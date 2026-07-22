@@ -17,7 +17,6 @@ const HTTP_METHODS = new Set([
   "head",
   "options",
 ]);
-const MAX_TOOL_RESPONSE_LENGTH = 20000;
 const TOOL_TIMEOUT_MS = 20000;
 
 type OpenApiDocument = {
@@ -82,7 +81,7 @@ export class PluginToolService {
   ) {}
 
   private isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null;
+    return typeof value === "object" && value !== null && !Array.isArray(value);
   }
 
   private formatSystemEnvironment() {
@@ -632,11 +631,7 @@ export class PluginToolService {
       statusText: response.statusText,
       body,
     };
-    const serialized = JSON.stringify(payload);
-
-    return serialized.length > MAX_TOOL_RESPONSE_LENGTH
-      ? `${serialized.slice(0, MAX_TOOL_RESPONSE_LENGTH)}...`
-      : serialized;
+    return JSON.stringify(payload);
   }
 
   private createOpenApiTool(

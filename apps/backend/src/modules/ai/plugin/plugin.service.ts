@@ -19,16 +19,6 @@ import { PluginCategory } from "./entities/plugin-category.entity";
 import { Plugin, type PluginHeader } from "./entities/plugin.entity";
 import { validatePluginOpenApiSchema } from "./openapi-schema.validator";
 
-type PluginPayload = {
-  icon?: string | null;
-  name?: string;
-  description?: string | null;
-  category?: PluginCategory | null;
-  openapiSchema?: string;
-  headers?: PluginHeader[] | null;
-  status?: boolean;
-};
-
 @Injectable()
 export class PluginService {
   constructor(
@@ -86,8 +76,8 @@ export class PluginService {
   private async buildPluginPayload(
     dto: CreatePluginDto | UpdatePluginDto,
     userId: number,
-  ): Promise<PluginPayload> {
-    const payload: PluginPayload = {};
+  ): Promise<Partial<Plugin>> {
+    const payload: Partial<Plugin> = {};
 
     if (dto.icon !== undefined) {
       payload.icon = dto.icon || null;
@@ -125,30 +115,6 @@ export class PluginService {
     }
 
     return payload;
-  }
-
-  private applyPluginPayload(plugin: Plugin, payload: PluginPayload) {
-    if (payload.icon !== undefined) {
-      plugin.icon = payload.icon;
-    }
-    if (payload.name !== undefined) {
-      plugin.name = payload.name;
-    }
-    if (payload.description !== undefined) {
-      plugin.description = payload.description;
-    }
-    if (payload.category !== undefined) {
-      plugin.category = payload.category;
-    }
-    if (payload.openapiSchema !== undefined) {
-      plugin.openapiSchema = payload.openapiSchema;
-    }
-    if (payload.headers !== undefined) {
-      plugin.headers = payload.headers;
-    }
-    if (payload.status !== undefined) {
-      plugin.status = payload.status;
-    }
   }
 
   // --------------------------------------------------------------------------------------------------
@@ -252,7 +218,7 @@ export class PluginService {
     if (plugin.category?.key === "builtin" || plugin.createdBy !== userId) {
       throw new NotFoundException("插件不存在");
     }
-    this.applyPluginPayload(
+    Object.assign(
       plugin,
       await this.buildPluginPayload(updatePluginDto, userId),
     );

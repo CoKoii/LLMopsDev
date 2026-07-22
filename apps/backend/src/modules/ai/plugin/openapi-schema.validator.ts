@@ -157,25 +157,26 @@ const validateRequestBody = (
   }
 
   const content = requestBody.content;
-  const contentType = REQUEST_BODY_CONTENT_TYPES.find((item) =>
-    isRecord(content[item]),
+  const matchedEntry = REQUEST_BODY_CONTENT_TYPES.map((contentType) => ({
+    contentType,
+    mediaType: content[contentType],
+  })).find(
+    (
+      entry,
+    ): entry is { contentType: string; mediaType: Record<string, unknown> } =>
+      isRecord(entry.mediaType),
   );
-  if (!contentType) {
+  if (!matchedEntry) {
     errors.push(
       `${path}.content 必须包含 application/json 或 application/x-www-form-urlencoded`,
     );
     return;
   }
 
-  const mediaType = content[contentType];
-  if (!isRecord(mediaType)) {
-    errors.push(`${path}.content.${contentType} 必须是对象`);
-    return;
-  }
   validateSchema(
-    mediaType.schema,
+    matchedEntry.mediaType.schema,
     document,
-    `${path}.content.${contentType}`,
+    `${path}.content.${matchedEntry.contentType}`,
     errors,
   );
 };
