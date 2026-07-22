@@ -81,10 +81,14 @@ onBeforeUnmount(() => {
           <button
             class="more"
             type="button"
+            aria-haspopup="menu"
+            :aria-expanded="activeActionId === item.id"
+            aria-label="更多操作"
+            title="更多操作"
             :class="{ active: activeActionId === item.id }"
             @click="toggleActions(item)"
           >
-            <ellipsis class="icon" />
+            <Ellipsis class="icon" />
           </button>
           <div class="action-menu" v-if="activeActionId === item.id">
             <button
@@ -127,16 +131,6 @@ onBeforeUnmount(() => {
     border-radius: 0.8rem;
     border: 1px solid var(--border-color);
     cursor: pointer;
-    &:hover {
-      .head {
-        .more {
-          .icon {
-            opacity: 1;
-            visibility: visible;
-          }
-        }
-      }
-    }
     .head {
       display: flex;
       justify-content: space-between;
@@ -197,21 +191,32 @@ onBeforeUnmount(() => {
           border: 0;
           border-radius: 0.8rem;
           background: transparent;
-          transition: background-color 0.12s ease;
           display: flex;
           justify-content: center;
           align-items: center;
+          transition: background-color 0.12s ease;
 
           &:hover,
           &.active {
             background-color: var(--touch-bg);
           }
 
+          &.active {
+            .icon {
+              opacity: 1;
+              visibility: visible;
+            }
+          }
+
           .icon {
-            opacity: 0.72;
+            opacity: 0;
+            visibility: hidden;
             width: 1.6rem;
             height: 1.6rem;
             color: var(--font-light-color);
+            transition:
+              opacity 0.12s ease,
+              visibility 0.12s ease;
           }
         }
 
@@ -267,17 +272,31 @@ onBeforeUnmount(() => {
         }
       }
     }
+    &:hover,
+    &:focus-within {
+      .head {
+        .actions {
+          .more {
+            .icon {
+              opacity: 1;
+              visibility: visible;
+            }
+          }
+        }
+      }
+    }
     .content {
       display: -webkit-box;
       overflow: hidden;
       color: rgba(107, 114, 128, 1);
       line-height: 1.8rem;
       font-size: 1.4rem;
-      min-height: 3.6rem;
-      max-height: 3.6rem;
+      min-height: 5.4rem;
+      max-height: 5.4rem;
       white-space: pre-line;
       -webkit-box-orient: vertical;
-      -webkit-line-clamp: 2;
+      -webkit-line-clamp: 3;
+      line-clamp: 3;
     }
     .footer {
       display: flex;
@@ -289,6 +308,7 @@ onBeforeUnmount(() => {
         width: 1.6rem;
         height: 1.6rem;
         border-radius: 50%;
+        object-fit: cover;
       }
       span {
         font-size: 1.2rem;

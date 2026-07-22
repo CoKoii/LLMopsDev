@@ -33,6 +33,8 @@ import ImageUpload from '../components/ImageUpload.vue'
 const props = defineProps<{
   searchValue?: string
   createKey?: number
+  creatorAvatar?: string
+  creatorName?: string
 }>()
 
 const records = ref<PluginItem[]>([])
@@ -70,13 +72,19 @@ const listItems = computed<ListBoxItem[]>(() =>
   records.value.map((item) => ({
     id: item.id,
     title: item.name,
-    description: item.published ? '已发布' : '未发布',
+    description: formatPluginDescription(item),
     content: item.description || item.openapiSchema,
     image: item.icon || undefined,
+    authorImage: props.creatorAvatar || undefined,
     footer: item.updatedAt ? `最近编辑 ${formatDate(item.updatedAt)}` : undefined,
     raw: item,
   })),
 )
+
+const formatPluginDescription = (item: PluginItem) => {
+  return `作者 ${props.creatorName || '用户'} · ${parseOpenApiTools(item.openapiSchema).length} 插件`
+}
+
 const pluginActions = (item: ListBoxItem): ListBoxAction[] => {
   const record = item.raw as PluginItem
   return [

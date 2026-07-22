@@ -1,10 +1,20 @@
 <script setup lang="ts">
 import ListPage from '@/components/ListPage/ListPage.vue'
-import { computed, ref, watch } from 'vue'
+import { useAuthStore } from '@/stores/auth'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { personalSpaceListPage } from './listPage'
 
+interface CurrentUserInfo {
+  username?: string
+  profile?: {
+    nickname?: string | null
+    avatar?: string | null
+  }
+}
+
 const route = useRoute()
+const authStore = useAuthStore()
 const searchValue = ref('')
 const createKey = ref(0)
 
@@ -16,6 +26,13 @@ const createTextMap: Record<string, string> = {
 }
 
 const createText = computed(() => createTextMap[String(route.name)] ?? '创建')
+const creatorAvatar = computed(
+  () => (authStore.userInfo as CurrentUserInfo | undefined)?.profile?.avatar || '',
+)
+const creatorName = computed(() => {
+  const userInfo = authStore.userInfo as CurrentUserInfo | undefined
+  return userInfo?.profile?.nickname || userInfo?.username || '用户'
+})
 
 watch(
   () => route.name,
@@ -23,6 +40,10 @@ watch(
     searchValue.value = ''
   },
 )
+
+onMounted(() => {
+  void authStore.getUserInfo()
+})
 </script>
 
 <template>
@@ -35,7 +56,13 @@ watch(
     <RouterView v-slot="{ Component }">
       <Transition name="personal-space-tab" mode="out-in">
         <div :key="route.name" class="personal-space-tab-panel">
-          <component :is="Component" :search-value="searchValue" :create-key="createKey" />
+          <component
+            :is="Component"
+            :search-value="searchValue"
+            :create-key="createKey"
+            :creator-avatar="creatorAvatar"
+            :creator-name="creatorName"
+          />
         </div>
       </Transition>
     </RouterView>

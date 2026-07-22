@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import ListBox from '@/components/ListBox/ListBox.vue'
-import type { ListBoxItem } from '@/components/ListBox/types'
+import type { ListBoxAction, ListBoxItem } from '@/components/ListBox/types'
 import AppModal from '@/components/AppModal/AppModal.vue'
 import {
   createAiAppApi,
@@ -17,6 +17,7 @@ import ImageUpload from '../components/ImageUpload.vue'
 const props = defineProps<{
   searchValue?: string
   createKey?: number
+  creatorAvatar?: string
 }>()
 
 const records = ref<AiAppItem[]>([])
@@ -36,6 +37,10 @@ const createEmptyForm = () => ({
 const formModel = reactive(createEmptyForm())
 const modalTitle = computed(() => (editingId.value ? '编辑 AI 应用' : '创建 AI 应用'))
 const router = useRouter()
+const appActions: ListBoxAction[] = [
+  { key: 'edit', label: '编辑' },
+  { key: 'delete', label: '删除', danger: true },
+]
 
 const listItems = computed<ListBoxItem[]>(() =>
   records.value.map((item) => ({
@@ -44,6 +49,7 @@ const listItems = computed<ListBoxItem[]>(() =>
     description: formatModelName(item),
     content: item.description || '暂无描述',
     image: item.image || undefined,
+    authorImage: props.creatorAvatar || undefined,
     footer: item.updatedAt ? `最近编辑 ${formatDate(item.updatedAt)}` : undefined,
     raw: item,
   })),
@@ -170,6 +176,7 @@ watch(
   <ListBox
     :items="listItems"
     :loading="loading"
+    :actions="appActions"
     @open="openOrchestration"
     @edit="openEdit"
     @delete="confirmDelete"

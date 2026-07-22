@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import ListBox from '@/components/ListBox/ListBox.vue'
-import type { ListBoxItem } from '@/components/ListBox/types'
+import type { ListBoxAction, ListBoxItem } from '@/components/ListBox/types'
 import AppModal from '@/components/AppModal/AppModal.vue'
 import {
   createKnowledgeApi,
@@ -16,6 +16,7 @@ import ImageUpload from '../components/ImageUpload.vue'
 const props = defineProps<{
   searchValue?: string
   createKey?: number
+  creatorAvatar?: string
 }>()
 
 const records = ref<KnowledgeItem[]>([])
@@ -34,6 +35,10 @@ const createEmptyForm = () => ({
 
 const formModel = reactive(createEmptyForm())
 const modalTitle = computed(() => (editingId.value ? '编辑知识库' : '创建知识库'))
+const knowledgeActions: ListBoxAction[] = [
+  { key: 'edit', label: '编辑' },
+  { key: 'delete', label: '删除', danger: true },
+]
 const listItems = computed<ListBoxItem[]>(() =>
   records.value.map((item) => ({
     id: item.id,
@@ -41,6 +46,7 @@ const listItems = computed<ListBoxItem[]>(() =>
     description: `知识库 · ${item.status ? '已启用' : '已停用'}`,
     content: item.description || '暂无描述',
     image: item.icon || undefined,
+    authorImage: props.creatorAvatar || undefined,
     footer: item.updatedAt ? `最近编辑 ${formatDate(item.updatedAt)}` : undefined,
     raw: item,
   })),
@@ -155,7 +161,13 @@ watch(
 </script>
 
 <template>
-  <ListBox :items="listItems" :loading="loading" @edit="openEdit" @delete="confirmDelete" />
+  <ListBox
+    :items="listItems"
+    :loading="loading"
+    :actions="knowledgeActions"
+    @edit="openEdit"
+    @delete="confirmDelete"
+  />
 
   <AppModal
     v-model:open="modalOpen"
