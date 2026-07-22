@@ -72,6 +72,7 @@ export interface AppVersionPluginItem {
   name: string
   description?: string | null
   category?: PluginCategoryItem | null
+  published?: boolean
 }
 
 export interface AiAppVersionItem {
@@ -109,6 +110,7 @@ export interface PluginItem {
   openapiSchema: string
   headers?: PluginHeader[] | null
   status: boolean
+  published: boolean
   createdAt?: string
   updatedAt?: string
 }
@@ -156,6 +158,7 @@ export interface CreatePluginPayload {
   openapiSchema: string
   headers?: PluginHeader[]
   status?: boolean
+  published?: boolean
 }
 
 export type UpdatePluginPayload = Partial<CreatePluginPayload>

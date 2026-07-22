@@ -42,6 +42,9 @@ export class Plugin extends AuditableEntity {
   @Column({ comment: "状态", default: true })
   status!: boolean;
 
+  @Column({ comment: "是否发布", default: false })
+  published!: boolean;
+
   @ManyToOne(() => PluginCategory, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "categoryId" })
   category?: Relation<PluginCategory> | null;

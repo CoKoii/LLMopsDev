@@ -7,7 +7,6 @@ import { z } from "zod";
 import { type AiAppVersionConfig } from "../app/entities/app-version.entity";
 import { Plugin, type PluginHeader } from "./entities/plugin.entity";
 
-const SYSTEM_ENVIRONMENT_OPERATION_ID = "getSystemEnvironment";
 const HTTP_METHODS = new Set([
   "get",
   "post",
@@ -82,49 +81,6 @@ export class PluginToolService {
 
   private isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
-  }
-
-  private formatSystemEnvironment() {
-    const now = new Date();
-    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-    const weekday = new Intl.DateTimeFormat("zh-CN", {
-      weekday: "long",
-      timeZone,
-    }).format(now);
-    const dateParts = new Intl.DateTimeFormat("en-CA", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      timeZone,
-    }).formatToParts(now);
-    const timeParts = new Intl.DateTimeFormat("en-GB", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-      timeZone,
-    }).formatToParts(now);
-    const getPart = (parts: Intl.DateTimeFormatPart[], type: string) =>
-      parts.find((part) => part.type === type)?.value ?? "";
-    const date = `${getPart(dateParts, "year")}-${getPart(dateParts, "month")}-${getPart(dateParts, "day")}`;
-    const time = `${getPart(timeParts, "hour")}:${getPart(timeParts, "minute")}:${getPart(timeParts, "second")}`;
-
-    return {
-      datetime: `${date} ${time}`,
-      date,
-      time,
-      weekday,
-      timezone: timeZone,
-    };
-  }
-
-  private createSystemEnvironmentTool(): StructuredToolInterface {
-    return tool(() => JSON.stringify(this.formatSystemEnvironment()), {
-      name: SYSTEM_ENVIRONMENT_OPERATION_ID,
-      description:
-        "查询当前时间、日期、星期、时区等系统环境基础信息。仅当用户询问当前时间、日期、星期或时区时调用。",
-      schema: z.object({}),
-    });
   }
 
   private parseOpenApiSchema(plugin: Plugin): OpenApiDocument | null {
@@ -662,8 +618,7 @@ export class PluginToolService {
   }
 
   private isVisibleForExecution(plugin: Plugin, userId: number) {
-    if (plugin.category?.key === "builtin") return true;
-    return plugin.createdBy === userId;
+    return plugin.published || plugin.createdBy === userId;
   }
 
   async loadEnabledTools(config: AiAppVersionConfig, userId: number) {
@@ -672,7 +627,6 @@ export class PluginToolService {
 
     const plugins = await this.pluginRepository.find({
       where: { id: In(pluginIds) },
-      relations: { category: true },
     });
     const tools = new Map<string, StructuredToolInterface>();
     const definitions = plugins
@@ -690,17 +644,6 @@ export class PluginToolService {
     }
 
     for (const definition of definitions) {
-      if (
-        definition.plugin.category?.key === "builtin" &&
-        definition.operationId === SYSTEM_ENVIRONMENT_OPERATION_ID
-      ) {
-        tools.set(
-          SYSTEM_ENVIRONMENT_OPERATION_ID,
-          this.createSystemEnvironmentTool(),
-        );
-        continue;
-      }
-
       if (!definition.baseUrl) continue;
 
       const toolName =

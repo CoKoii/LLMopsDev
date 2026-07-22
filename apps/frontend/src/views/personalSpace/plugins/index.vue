@@ -17,6 +17,7 @@ import {
   Input,
   message,
   Modal,
+  Switch,
   TextArea,
   type FormInstance,
 } from 'antdv-next'
@@ -43,6 +44,7 @@ const createEmptyForm = () => ({
   description: '',
   openapiSchema: '',
   headers: [{ key: '', value: '' }] as PluginHeader[],
+  published: false,
 })
 
 const formModel = reactive(createEmptyForm())
@@ -51,7 +53,7 @@ const listItems = computed<ListBoxItem[]>(() =>
   records.value.map((item) => ({
     id: item.id,
     title: item.name,
-    description: item.status ? '已启用' : '已停用',
+    description: item.published ? '已发布' : '未发布',
     content: item.description || item.openapiSchema,
     image: item.icon || undefined,
     footer: item.updatedAt ? `最近编辑 ${formatDate(item.updatedAt)}` : undefined,
@@ -103,6 +105,7 @@ const openEdit = (item: ListBoxItem) => {
     name: record.name,
     description: record.description || '',
     openapiSchema: record.openapiSchema,
+    published: record.published,
     headers: record.headers?.length
       ? record.headers.map((header) => ({ ...header }))
       : [{ key: '', value: '' }],
@@ -141,6 +144,7 @@ const submit = async () => {
       description: formModel.description,
       openapiSchema: formModel.openapiSchema,
       headers: normalizeHeaders(),
+      published: formModel.published,
     }
 
     if (editingId.value) {
@@ -229,6 +233,9 @@ watch(
           :rows="3"
           show-count
         />
+      </FormItem>
+      <FormItem label="是否发布" name="published">
+        <Switch v-model:checked="formModel.published" />
       </FormItem>
       <FormItem
         label="OpenAPI Schema"

@@ -154,7 +154,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
       ? config.capabilities.map((item) => ({
           key: item.key,
           title: item.title,
-          description: item.description || '内置插件能力',
+          description: item.description || '插件能力',
           icon: item.icon || 'globe',
           tone: item.tone || '#eff6ff',
         }))

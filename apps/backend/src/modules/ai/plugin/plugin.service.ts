@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Brackets, Repository } from "typeorm";
+import { Repository } from "typeorm";
 import { FilesService } from "../../files/files.service";
 import { RequestContextService } from "../../../common/request-context/request-context.service";
 import {
@@ -37,17 +37,11 @@ export class PluginService {
     };
   }
 
-  private isVisibleToCurrentUser(plugin: Plugin, scope: "mine" | "available") {
+  private isReadableByCurrentUser(plugin: Plugin) {
     const userId = this.requestContext.getUserId();
-    if (scope === "mine") {
-      return userId !== undefined && plugin.createdBy === userId;
-    }
-
-    if (plugin.category?.key === "builtin") {
-      return true;
-    }
-
-    return userId !== undefined && plugin.createdBy === userId;
+    return (
+      plugin.published || (userId !== undefined && plugin.createdBy === userId)
+    );
   }
 
   private validateOpenApiSchema(openapiSchema: string) {
@@ -94,9 +88,6 @@ export class PluginService {
           where: { id: dto.categoryId },
         });
       if (!category) throw new NotFoundException("插件分类不存在");
-      if (category.key === "builtin") {
-        throw new BadRequestException("内置分类仅系统插件可用");
-      }
       payload.category = category;
     }
     if (dto.openapiSchema !== undefined) {
@@ -108,6 +99,9 @@ export class PluginService {
     }
     if (dto.status !== undefined) {
       payload.status = dto.status;
+    }
+    if (dto.published !== undefined) {
+      payload.published = dto.published;
     }
     if (dto.iconFileId !== undefined) {
       const file = await this.filesService.markUsed(dto.iconFileId, userId);
@@ -149,36 +143,15 @@ export class PluginService {
       });
     }
 
+    if (scope === "mine" && userId === undefined) {
+      return createPageResult([], 0, page, pageSize);
+    }
     if (scope === "mine") {
-      if (userId === undefined) {
-        return createPageResult([], 0, page, pageSize);
-      }
       queryBuilder.andWhere("plugin.createdBy = :userId", { userId });
-      queryBuilder.andWhere(
-        new Brackets((qb) => {
-          qb.where("category.key IS NULL").orWhere(
-            "category.key <> :builtinKey",
-            {
-              builtinKey: "builtin",
-            },
-          );
-        }),
-      );
     } else {
-      if (userId === undefined) {
-        queryBuilder.andWhere("category.key = :builtinKey", {
-          builtinKey: "builtin",
-        });
-      } else {
-        queryBuilder.andWhere(
-          new Brackets((qb) => {
-            qb.where("plugin.createdBy = :userId", { userId }).orWhere(
-              "category.key = :builtinKey",
-              { builtinKey: "builtin" },
-            );
-          }),
-        );
-      }
+      queryBuilder.andWhere("plugin.published = :published", {
+        published: true,
+      });
     }
 
     const [items, total]: [Plugin[], number] =
@@ -200,7 +173,7 @@ export class PluginService {
       relations: { category: true },
     });
     if (!plugin) throw new NotFoundException("插件不存在");
-    if (!this.isVisibleToCurrentUser(plugin, "available")) {
+    if (!this.isReadableByCurrentUser(plugin)) {
       throw new NotFoundException("插件不存在");
     }
     return this.withAccessibleIcon(plugin);
@@ -215,7 +188,7 @@ export class PluginService {
       relations: { category: true },
     });
     if (!plugin) throw new NotFoundException("插件不存在");
-    if (plugin.category?.key === "builtin" || plugin.createdBy !== userId) {
+    if (plugin.createdBy !== userId) {
       throw new NotFoundException("插件不存在");
     }
     Object.assign(
@@ -236,11 +209,7 @@ export class PluginService {
     });
     if (!plugin) throw new NotFoundException("插件不存在");
     const userId = this.requestContext.getUserId();
-    if (
-      userId === undefined ||
-      plugin.category?.key === "builtin" ||
-      plugin.createdBy !== userId
-    ) {
+    if (userId === undefined || plugin.createdBy !== userId) {
       throw new NotFoundException("插件不存在");
     }
     await this.pluginRepository.softRemove(plugin);

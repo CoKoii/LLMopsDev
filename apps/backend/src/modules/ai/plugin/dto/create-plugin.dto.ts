@@ -57,4 +57,8 @@ export class CreatePluginDto {
   @IsOptional()
   @IsBoolean({ message: "状态必须为布尔值" })
   status?: boolean;
+
+  @IsOptional()
+  @IsBoolean({ message: "是否发布必须为布尔值" })
+  published?: boolean;
 }

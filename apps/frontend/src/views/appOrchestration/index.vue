@@ -83,9 +83,10 @@ const promptOptimizeSource = ref('')
 const promptOptimizeResult = ref('')
 const chatListRef = ref<HTMLElement>()
 const promptOptimizeResultRef = ref<HTMLElement>()
-const pluginCatalog = ref<PluginItem[]>([])
+const myPluginCatalog = ref<PluginItem[]>([])
+const publishedPluginCatalog = ref<PluginItem[]>([])
 const pluginCatalogLoading = ref(false)
-const activePluginScopeKey = ref<'custom' | 'builtin'>('builtin')
+const activePluginSourceKey = ref<PluginSourceKey>('custom')
 const activePluginCategoryKey = ref('all')
 let promptOptimizeAbortController: AbortController | undefined
 const pageTabs = [
@@ -94,6 +95,13 @@ const pageTabs = [
   { page: 'stats', label: '统计分析' },
 ] as const
 type PageTab = (typeof pageTabs)[number]['page']
+type PluginSourceKey = 'custom' | 'category'
+type PluginCategoryOption = {
+  key: string
+  name: string
+  sort: number
+  count: number
+}
 const appId = computed(() => Number(route.params.appId))
 const {
   appDetail,
@@ -188,45 +196,43 @@ const promptOptimizeDisplay = computed(
   () =>
     promptOptimizeResult.value || (optimizingPrompt.value ? '正在生成优化版本...' : '暂无优化结果'),
 )
-const pluginSourceOptions = [
-  { key: 'custom', name: '自定义插件' },
-  { key: 'builtin', name: '内置' },
-] as const
-const activePluginSourceName = computed(
-  () => pluginSourceOptions.find((item) => item.key === activePluginScopeKey.value)?.name || '内置',
-)
 const selectedPlugins = computed<AppVersionPluginItem[]>(() => {
   const pluginLookup = new Map<number, AppVersionPluginItem>()
   for (const item of appDraft.value?.plugins ?? []) {
     pluginLookup.set(item.id, item)
   }
-  for (const item of pluginCatalog.value) {
+  for (const item of myPluginCatalog.value) {
+    pluginLookup.set(item.id, item)
+  }
+  for (const item of publishedPluginCatalog.value) {
     pluginLookup.set(item.id, item)
   }
   return pluginIds.value
     .map((id) => pluginLookup.get(id))
     .filter((item): item is AppVersionPluginItem => item !== undefined)
 })
-const sourcePluginCatalog = computed(() =>
-  pluginCatalog.value.filter((item) => {
-    if (activePluginScopeKey.value === 'builtin') {
-      return item.category?.key === 'builtin'
-    }
-    return item.category?.key !== 'builtin'
-  }),
+const pluginCategoryOptions = computed(() =>
+  buildPluginCategoryOptions(publishedPluginCatalog.value),
 )
-const pluginCategoryOptions = computed(() => {
-  const categories = new Map<
-    string,
-    {
-      key: string
-      name: string
-      sort: number
-      count: number
-    }
-  >()
+const visiblePluginCatalog = computed(() => {
+  if (activePluginSourceKey.value === 'custom') return myPluginCatalog.value
 
-  for (const item of pluginCatalog.value) {
+  return publishedPluginCatalog.value.filter((item) => {
+    const categoryKey = item.category?.key || 'uncategorized'
+    return activePluginCategoryKey.value === 'all' || categoryKey === activePluginCategoryKey.value
+  })
+})
+const pluginGroups = computed(() => buildPluginGroups(visiblePluginCatalog.value))
+const activePluginSourceName = computed(() =>
+  activePluginSourceKey.value === 'custom' ? '自定义插件' : '已发布插件',
+)
+const pluginEmptyText = computed(() =>
+  activePluginSourceKey.value === 'custom' ? '暂无自定义插件' : '当前分类下没有已发布插件',
+)
+function buildPluginCategoryOptions(plugins: PluginItem[]): PluginCategoryOption[] {
+  const categories = new Map<string, PluginCategoryOption>()
+
+  for (const item of plugins) {
     const category = item.category
     const key = category?.key || 'uncategorized'
     const name = category?.name || '未分类'
@@ -241,15 +247,12 @@ const pluginCategoryOptions = computed(() => {
   }
 
   return [
-    { key: 'all', name: '全部', sort: -1, count: pluginCatalog.value.length },
+    { key: 'all', name: '全部', sort: -1, count: plugins.length },
     ...[...categories.values()].sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name)),
   ]
-})
-const pluginGroups = computed(() => {
-  const filtered = sourcePluginCatalog.value.filter((item) => {
-    const categoryKey = item.category?.key || 'uncategorized'
-    return activePluginCategoryKey.value === 'all' || categoryKey === activePluginCategoryKey.value
-  })
+}
+
+function buildPluginGroups(plugins: PluginItem[]) {
   const groups = new Map<
     string,
     {
@@ -260,7 +263,7 @@ const pluginGroups = computed(() => {
     }
   >()
 
-  for (const item of filtered) {
+  for (const item of plugins) {
     const category = item.category
     const key = category?.key || 'uncategorized'
     const title = category?.name || '未分类'
@@ -284,7 +287,7 @@ const pluginGroups = computed(() => {
       ...group,
       items: group.items.sort((a, b) => a.name.localeCompare(b.name)),
     }))
-})
+}
 const publishChannels = [
   {
     key: 'web',
@@ -450,10 +453,6 @@ function getCapabilityIcon(item: CapabilityItem) {
   return Bot
 }
 
-function getPluginSourceIcon(key: string) {
-  return key === 'builtin' ? Globe2 : Database
-}
-
 function getPluginCategoryIcon(key: string) {
   if (key === 'all') return Database
   if (key === 'uncategorized') return BookOpen
@@ -467,18 +466,20 @@ function removeCapability(key: string) {
 async function loadPluginCatalog() {
   pluginCatalogLoading.value = true
   try {
-    const result = await listPluginsApi({
-      page: 1,
-      pageSize: 200,
-      scope: 'available',
-    })
-    pluginCatalog.value = result.items
-    if (
-      activePluginScopeKey.value === 'builtin' &&
-      !pluginCatalog.value.some((item) => item.category?.key === 'builtin')
-    ) {
-      activePluginScopeKey.value = 'custom'
-    }
+    const [mineResult, availableResult] = await Promise.all([
+      listPluginsApi({
+        page: 1,
+        pageSize: 200,
+        scope: 'mine',
+      }),
+      listPluginsApi({
+        page: 1,
+        pageSize: 200,
+        scope: 'available',
+      }),
+    ])
+    myPluginCatalog.value = mineResult.items
+    publishedPluginCatalog.value = availableResult.items
     if (
       activePluginCategoryKey.value !== 'all' &&
       !pluginCategoryOptions.value.some((item) => item.key === activePluginCategoryKey.value)
@@ -495,8 +496,13 @@ function openPluginModal() {
   void loadPluginCatalog()
 }
 
-function switchPluginScope(key: 'custom' | 'builtin') {
-  activePluginScopeKey.value = key
+function selectPluginSource(key: PluginSourceKey) {
+  activePluginSourceKey.value = key
+}
+
+function selectPluginCategory(key: string) {
+  activePluginSourceKey.value = 'category'
+  activePluginCategoryKey.value = key
 }
 
 function togglePluginSelection(id: number) {
@@ -848,11 +854,7 @@ onMounted(() => {
                 <article v-for="item in selectedPlugins" :key="item.id" class="capability-item">
                   <div class="capability-item__icon" :class="{ 'has-image': item.icon }">
                     <img v-if="item.icon" :src="item.icon" alt="" />
-                    <component
-                      v-else
-                      :is="item.category?.key === 'builtin' ? Globe2 : Database"
-                      :size="13"
-                    />
+                    <Database v-else :size="13" />
                   </div>
                   <div>
                     <h4>{{ item.name }}</h4>
@@ -1181,15 +1183,13 @@ onMounted(() => {
 
               <div class="plugin-modal__nav">
                 <button
-                  v-for="scope in pluginSourceOptions"
-                  :key="scope.key"
                   class="plugin-modal__nav-item"
-                  :class="{ 'is-active': activePluginScopeKey === scope.key }"
+                  :class="{ 'is-active': activePluginSourceKey === 'custom' }"
                   type="button"
-                  @click="switchPluginScope(scope.key)"
+                  @click="selectPluginSource('custom')"
                 >
-                  <component :is="getPluginSourceIcon(scope.key)" :size="15" />
-                  <span>{{ scope.name }}</span>
+                  <Database :size="15" />
+                  <span>自定义插件</span>
                 </button>
               </div>
 
@@ -1199,9 +1199,13 @@ onMounted(() => {
                   v-for="category in pluginCategoryOptions"
                   :key="category.key"
                   class="plugin-modal__nav-item"
-                  :class="{ 'is-active': activePluginCategoryKey === category.key }"
+                  :class="{
+                    'is-active':
+                      activePluginSourceKey === 'category' &&
+                      activePluginCategoryKey === category.key,
+                  }"
                   type="button"
-                  @click="activePluginCategoryKey = category.key"
+                  @click="selectPluginCategory(category.key)"
                 >
                   <component :is="getPluginCategoryIcon(category.key)" :size="15" />
                   <span>{{ category.name }}</span>
@@ -1224,7 +1228,7 @@ onMounted(() => {
 
               <div class="plugin-modal__list">
                 <div v-if="pluginCatalogLoading">正在加载插件...</div>
-                <div v-else-if="pluginGroups.length === 0">当前分类下没有可选插件</div>
+                <div v-else-if="pluginGroups.length === 0">{{ pluginEmptyText }}</div>
                 <section v-for="group in pluginGroups" :key="group.key" class="plugin-modal__group">
                   <h4>{{ group.title }}</h4>
                   <article
@@ -1235,11 +1239,7 @@ onMounted(() => {
                   >
                     <div class="plugin-modal__item-icon" :class="{ 'has-image': item.icon }">
                       <img v-if="item.icon" :src="item.icon" alt="" />
-                      <component
-                        v-else
-                        :is="item.category?.key === 'builtin' ? Globe2 : Database"
-                        :size="18"
-                      />
+                      <Database v-else :size="18" />
                     </div>
                     <strong>{{ item.name }}</strong>
                     <Button

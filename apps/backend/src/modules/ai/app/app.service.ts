@@ -36,6 +36,7 @@ type AppVersionPluginSummary = Pick<
     name: string;
     sort: number;
   } | null;
+  published?: boolean;
 };
 type AppVersionItem = AiAppVersion & {
   plugins: AppVersionPluginSummary[];
@@ -84,6 +85,7 @@ export class AppService {
       icon: this.filesService.createAccessibleUrl(plugin.icon),
       name: plugin.name,
       description: plugin.description,
+      published: plugin.published,
       category: plugin.category
         ? {
             id: plugin.category.id,
