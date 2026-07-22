@@ -17,6 +17,11 @@ import { Llm } from "../llm/entities/llm.entity";
 import { PluginToolService } from "../plugin/plugin-tool.service";
 
 const DRAFT_VERSION = "draft";
+const DEBUG_SYSTEM_PROMPT = [
+  "需要外部信息时，先调用可用工具获取依据。",
+  "通用知识可以直接回答；工具结果优先于自身知识。",
+  "工具不可用或信息不足时，不要捏造信息。",
+].join("\n");
 
 @Injectable()
 export class AiRuntimeService {
@@ -80,6 +85,9 @@ export class AiRuntimeService {
       draft.config,
       userId,
     );
+    const systemPrompt = [DEBUG_SYSTEM_PROMPT, draft.config.prompt?.trim()]
+      .filter(Boolean)
+      .join("\n\n");
 
     return {
       draft,
@@ -87,7 +95,7 @@ export class AiRuntimeService {
       agent: createAgent({
         model,
         tools,
-        systemPrompt: draft.config.prompt?.trim() || undefined,
+        systemPrompt,
       }),
     };
   }
