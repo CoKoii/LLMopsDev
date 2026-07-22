@@ -2,6 +2,7 @@ import { AIMessage, type BaseMessageLike } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { Readable } from "node:stream";
+import { z } from "zod";
 import { AiRuntimeService } from "./ai-runtime.service";
 import { type DebugAppChatHistoryDto } from "./dto/debug-app-chat.dto";
 
@@ -15,11 +16,17 @@ const PROMPT_OPTIMIZE_SYSTEM_PROMPT = [
   "只返回润色后的正文，不解释，不使用代码块。",
 ].join("\n");
 const QUESTION_SUGGESTION_SYSTEM_PROMPT = [
-  "只返回 JSON 字符串数组，包含 3 条用户下一步可能直接发送的话。",
-  "必须用用户本人语气，如“帮我…”“我想…”“能不能…”“请继续…”。",
-  "不要用旁观口吻，如“你可以问…”“是否需要…”“建议询问…”。",
-  "每条简短自然，可直接点击发送。",
+  "生成聊天输入框下方的快捷提问按钮。",
+  "内容要像用户下一步会直接发送的话。",
+  "优先生成具体、可点击的短命令。",
 ].join("\n");
+const QUESTION_SUGGESTION_MODEL = "qwen2.5:0.5b";
+const QUESTION_SUGGESTION_BASE_URL = "http://localhost:11434/v1";
+const QuestionSuggestionsSchema = z
+  .object({
+    suggestions: z.array(z.string().min(1)).length(3),
+  })
+  .strict();
 
 type SseEvent =
   | { content: string }
@@ -53,38 +60,31 @@ export class ChatService {
     return messages;
   }
 
-  private parseSuggestions(content: string): string[] {
-    const matched = /\[[\s\S]*\]/.exec(content);
-    if (!matched) return [];
-
-    try {
-      const parsed: unknown = JSON.parse(matched[0]);
-      if (!Array.isArray(parsed)) return [];
-
-      return parsed
-        .filter((item): item is string => typeof item === "string")
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .slice(0, 3);
-    } catch {
-      return [];
-    }
-  }
-
   private async createQuestionSuggestions(
-    model: ChatOpenAI,
     userMessage: string,
     assistantMessage: string,
   ): Promise<string[]> {
-    const response = await model.invoke([
+    const model = new ChatOpenAI({
+      apiKey: "ollama",
+      model: QUESTION_SUGGESTION_MODEL,
+      maxRetries: 0,
+      temperature: 1.5,
+      configuration: { baseURL: QUESTION_SUGGESTION_BASE_URL },
+    });
+    const structuredModel = model.withStructuredOutput(
+      QuestionSuggestionsSchema,
+      {
+        name: "QuestionSuggestions",
+        method: "jsonSchema",
+        strict: true,
+      },
+    );
+    const response = await structuredModel.invoke([
       ["system", QUESTION_SUGGESTION_SYSTEM_PROMPT],
-      [
-        "human",
-        `用户消息：${userMessage}\nAI回复：${assistantMessage}\n生成 3 条后续发送建议。`,
-      ],
+      ["human", `用户刚才说：${userMessage}\nAI刚才回复：${assistantMessage}`],
     ]);
 
-    return this.parseSuggestions(response.text);
+    return response.suggestions;
   }
 
   private createPromptOptimizeMessages(
@@ -183,7 +183,7 @@ export class ChatService {
     let output = "";
 
     try {
-      const { agent, draft, model } = await this.aiRuntimeService.createAgent(
+      const { agent, draft } = await this.aiRuntimeService.createAgent(
         appId,
         userId,
       );
@@ -211,11 +211,7 @@ export class ChatService {
       if (draft.config.toggles?.questionSuggestions) {
         let suggestions: string[] = [];
         try {
-          suggestions = await this.createQuestionSuggestions(
-            model,
-            message,
-            output,
-          );
+          suggestions = await this.createQuestionSuggestions(message, output);
         } catch (error) {
           const message =
             error instanceof Error ? error.message : String(error);

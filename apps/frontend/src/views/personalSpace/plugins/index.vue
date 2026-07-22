@@ -17,7 +17,6 @@ import {
   Input,
   message,
   Modal,
-  Switch,
   TextArea,
   type FormInstance,
 } from 'antdv-next'
@@ -25,11 +24,19 @@ import { Plus, Trash2 } from '@lucide/vue'
 import { computed, reactive, ref, watch } from 'vue'
 import ImageUpload from '../components/ImageUpload.vue'
 
+type ParsedTool = {
+  name: string
+  description: string
+  method: string
+  path: string
+}
+
 const props = defineProps<{
   searchValue?: string
   createKey?: number
 }>()
 
+const httpMethods = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options'])
 const records = ref<PluginItem[]>([])
 const loading = ref(false)
 const saving = ref(false)
@@ -44,11 +51,11 @@ const createEmptyForm = () => ({
   description: '',
   openapiSchema: '',
   headers: [{ key: '', value: '' }] as PluginHeader[],
-  published: false,
 })
 
 const formModel = reactive(createEmptyForm())
 const modalTitle = computed(() => (editingId.value ? '编辑插件' : '新建插件'))
+const parsedTools = computed<ParsedTool[]>(() => parseOpenApiTools(formModel.openapiSchema))
 const listItems = computed<ListBoxItem[]>(() =>
   records.value.map((item) => ({
     id: item.id,
@@ -68,6 +75,50 @@ const formatDate = (value: string) => {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const parseOpenApiTools = (source: string): ParsedTool[] => {
+  if (!source.trim()) return []
+
+  try {
+    const document: unknown = JSON.parse(source)
+    if (!isRecord(document) || !isRecord(document.paths)) return []
+
+    const tools: ParsedTool[] = []
+    for (const [path, pathConfig] of Object.entries(document.paths)) {
+      if (!isRecord(pathConfig)) continue
+
+      for (const [method, operation] of Object.entries(pathConfig)) {
+        const normalizedMethod = method.toLowerCase()
+        if (!httpMethods.has(normalizedMethod) || !isRecord(operation)) continue
+
+        const operationId =
+          typeof operation.operationId === 'string' && operation.operationId.trim()
+            ? operation.operationId.trim()
+            : `${normalizedMethod.toUpperCase()} ${path}`
+        const description =
+          typeof operation.summary === 'string' && operation.summary.trim()
+            ? operation.summary.trim()
+            : typeof operation.description === 'string' && operation.description.trim()
+              ? operation.description.trim()
+              : '-'
+
+        tools.push({
+          name: operationId,
+          description,
+          method: normalizedMethod,
+          path,
+        })
+      }
+    }
+
+    return tools
+  } catch {
+    return []
+  }
 }
 
 const resetForm = () => {
@@ -105,7 +156,6 @@ const openEdit = (item: ListBoxItem) => {
     name: record.name,
     description: record.description || '',
     openapiSchema: record.openapiSchema,
-    published: record.published,
     headers: record.headers?.length
       ? record.headers.map((header) => ({ ...header }))
       : [{ key: '', value: '' }],
@@ -144,7 +194,6 @@ const submit = async () => {
       description: formModel.description,
       openapiSchema: formModel.openapiSchema,
       headers: normalizeHeaders(),
-      published: formModel.published,
     }
 
     if (editingId.value) {
@@ -207,7 +256,7 @@ watch(
     :confirm-loading="saving"
     ok-text="保存"
     cancel-text="取消"
-    width="64rem"
+    width="78rem"
     @ok="submit"
   >
     <Form ref="formRef" class="resource-form" layout="vertical" :model="formModel">
@@ -234,9 +283,6 @@ watch(
           show-count
         />
       </FormItem>
-      <FormItem label="是否发布" name="published">
-        <Switch v-model:checked="formModel.published" />
-      </FormItem>
       <FormItem
         label="OpenAPI Schema"
         name="openapiSchema"
@@ -247,6 +293,30 @@ watch(
           placeholder="在此处输入您的 OpenAPI Schema"
           :rows="6"
         />
+      </FormItem>
+      <FormItem label="可用工具">
+        <div class="available-tools">
+          <div class="available-tools__head">
+            <span>名称</span>
+            <span>描述</span>
+            <span>方法</span>
+            <span>路径</span>
+          </div>
+          <div v-if="parsedTools.length === 0" class="available-tools__empty">
+            输入 OpenAPI Schema 后自动解析可用工具
+          </div>
+          <div
+            v-for="tool in parsedTools"
+            v-else
+            :key="`${tool.method}-${tool.path}-${tool.name}`"
+            class="available-tools__row"
+          >
+            <span>{{ tool.name }}</span>
+            <span>{{ tool.description }}</span>
+            <span>{{ tool.method }}</span>
+            <span>{{ tool.path }}</span>
+          </div>
+        </div>
       </FormItem>
       <FormItem label="Headers">
         <div class="headers">
@@ -302,5 +372,55 @@ watch(
 
 .add-header {
   align-self: flex-start;
+}
+
+.available-tools {
+  overflow: hidden;
+  border: 0.1rem solid #e5e7eb;
+  border-radius: 0.4rem;
+  color: #5f6775;
+  font-size: 1.2rem;
+}
+
+.available-tools__head,
+.available-tools__row {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1.4fr) minmax(14rem, 1.7fr) 5.6rem minmax(24rem, 2.3fr);
+  align-items: center;
+  min-height: 3.4rem;
+  padding: 0.7rem 1.2rem;
+  column-gap: 1.2rem;
+}
+
+.available-tools__head {
+  background: #fafafa;
+  color: #303846;
+  font-weight: 500;
+}
+
+.available-tools__row {
+  border-top: 0.1rem solid #eef0f3;
+}
+
+.available-tools__row span,
+.available-tools__head span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.available-tools__row span:last-child {
+  overflow: visible;
+  text-overflow: initial;
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.available-tools__empty {
+  padding: 1.2rem;
+  border-top: 0.1rem solid #eef0f3;
+  color: #9aa1ad;
 }
 </style>
