@@ -34,16 +34,19 @@ export class KnowledgeController {
   // -------------------------
   // 获取知识库列表
   @Get()
-  list(@Query() query: QueryKnowledgeDto) {
-    return this.knowledgeService.list(query);
+  list(@Query() query: QueryKnowledgeDto, @CurrentUser() user: AuthUser) {
+    return this.knowledgeService.list(query, user.userId);
   }
   // -------------------------
 
   // -------------------------
   // 获取知识库详情
   @Get(":id")
-  findOne(@Param("id", ParseIntPipe) id: number) {
-    return this.knowledgeService.findOne(id);
+  findOne(
+    @Param("id", ParseIntPipe) id: number,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.knowledgeService.findOne(id, user.userId);
   }
   // -------------------------
 
@@ -62,8 +65,8 @@ export class KnowledgeController {
   // -------------------------
   // 删除知识库
   @Delete(":id")
-  remove(@Param("id", ParseIntPipe) id: number) {
-    return this.knowledgeService.remove(id);
+  remove(@Param("id", ParseIntPipe) id: number, @CurrentUser() user: AuthUser) {
+    return this.knowledgeService.remove(id, user.userId);
   }
   // -------------------------
 }

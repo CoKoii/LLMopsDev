@@ -40,9 +40,8 @@ export class CreatePluginDto {
   @MaxLength(800, { message: "插件描述长度不能超过800个字符" })
   description?: string;
 
-  @IsOptional()
   @IsInt({ message: "插件分类ID必须为整数" })
-  categoryId?: number;
+  categoryId!: number;
 
   @IsString({ message: "OpenAPI Schema必须为字符串" })
   @IsNotEmpty({ message: "OpenAPI Schema不能为空" })

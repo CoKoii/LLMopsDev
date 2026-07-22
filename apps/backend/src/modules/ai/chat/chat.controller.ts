@@ -56,9 +56,14 @@ export class ChatController {
   optimizePromptStream(
     @Param("id", ParseIntPipe) id: number,
     @Body() dto: OptimizeAppPromptDto,
+    @CurrentUser() user: AuthUser,
   ): StreamableFile {
     return new StreamableFile(
-      this.chatService.createPromptOptimizeSseStream(id, dto.prompt),
+      this.chatService.createPromptOptimizeSseStream(
+        id,
+        dto.prompt,
+        user.userId,
+      ),
       {
         type: "text/event-stream; charset=utf-8",
       },
@@ -72,8 +77,9 @@ export class ChatController {
   optimizePrompt(
     @Param("id", ParseIntPipe) id: number,
     @Body() dto: OptimizeAppPromptDto,
+    @CurrentUser() user: AuthUser,
   ) {
-    return this.chatService.optimizePrompt(id, dto.prompt);
+    return this.chatService.optimizePrompt(id, dto.prompt, user.userId);
   }
   // -------------------------
 }

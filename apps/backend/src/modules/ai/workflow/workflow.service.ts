@@ -70,11 +70,15 @@ export class WorkflowService {
 
   // --------------------------------------------------------------------------------------------------
   // 获取工作流列表
-  async list(query: QueryWorkflowsDto): Promise<PageResult<Workflow>> {
+  async list(
+    query: QueryWorkflowsDto,
+    userId: number,
+  ): Promise<PageResult<Workflow>> {
     const { page, pageSize, skip } = resolvePageQuery(query);
     const name = query.name?.trim();
     const queryBuilder = this.workflowRepository
       .createQueryBuilder("workflow")
+      .where("workflow.createdBy = :userId", { userId })
       .orderBy("workflow.id", "DESC")
       .skip(skip)
       .take(pageSize);
@@ -98,8 +102,10 @@ export class WorkflowService {
 
   // --------------------------------------------------------------------------------------------------
   // 获取工作流详情
-  async findOne(id: number) {
-    const workflow = await this.workflowRepository.findOne({ where: { id } });
+  async findOne(id: number, userId: number) {
+    const workflow = await this.workflowRepository.findOne({
+      where: { id, createdBy: userId },
+    });
     if (!workflow) throw new NotFoundException("工作流不存在");
     return this.withAccessibleIcon(workflow);
   }
@@ -112,11 +118,14 @@ export class WorkflowService {
     updateWorkflowDto: UpdateWorkflowDto,
     userId: number,
   ) {
-    const workflow = await this.workflowRepository.preload({
-      id,
-      ...(await this.buildWorkflowPayload(updateWorkflowDto, userId)),
+    const workflow = await this.workflowRepository.findOne({
+      where: { id, createdBy: userId },
     });
     if (!workflow) throw new NotFoundException("工作流不存在");
+    Object.assign(
+      workflow,
+      await this.buildWorkflowPayload(updateWorkflowDto, userId),
+    );
     await this.workflowRepository.save(workflow);
     return { success: true };
   }
@@ -124,8 +133,10 @@ export class WorkflowService {
 
   // --------------------------------------------------------------------------------------------------
   // 删除工作流
-  async remove(id: number) {
-    const workflow = await this.workflowRepository.findOne({ where: { id } });
+  async remove(id: number, userId: number) {
+    const workflow = await this.workflowRepository.findOne({
+      where: { id, createdBy: userId },
+    });
     if (!workflow) throw new NotFoundException("工作流不存在");
     await this.workflowRepository.softRemove(workflow);
     return { success: true };

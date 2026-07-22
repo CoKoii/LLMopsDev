@@ -67,11 +67,15 @@ export class KnowledgeService {
 
   // --------------------------------------------------------------------------------------------------
   // 获取知识库列表
-  async list(query: QueryKnowledgeDto): Promise<PageResult<Knowledge>> {
+  async list(
+    query: QueryKnowledgeDto,
+    userId: number,
+  ): Promise<PageResult<Knowledge>> {
     const { page, pageSize, skip } = resolvePageQuery(query);
     const name = query.name?.trim();
     const queryBuilder = this.knowledgeRepository
       .createQueryBuilder("knowledge")
+      .where("knowledge.createdBy = :userId", { userId })
       .orderBy("knowledge.id", "DESC")
       .skip(skip)
       .take(pageSize);
@@ -94,8 +98,10 @@ export class KnowledgeService {
 
   // --------------------------------------------------------------------------------------------------
   // 获取知识库详情
-  async findOne(id: number) {
-    const knowledge = await this.knowledgeRepository.findOne({ where: { id } });
+  async findOne(id: number, userId: number) {
+    const knowledge = await this.knowledgeRepository.findOne({
+      where: { id, createdBy: userId },
+    });
     if (!knowledge) throw new NotFoundException("知识库不存在");
     return this.withAccessibleIcon(knowledge);
   }
@@ -108,11 +114,14 @@ export class KnowledgeService {
     updateKnowledgeDto: UpdateKnowledgeDto,
     userId: number,
   ) {
-    const knowledge = await this.knowledgeRepository.preload({
-      id,
-      ...(await this.buildKnowledgePayload(updateKnowledgeDto, userId)),
+    const knowledge = await this.knowledgeRepository.findOne({
+      where: { id, createdBy: userId },
     });
     if (!knowledge) throw new NotFoundException("知识库不存在");
+    Object.assign(
+      knowledge,
+      await this.buildKnowledgePayload(updateKnowledgeDto, userId),
+    );
     await this.knowledgeRepository.save(knowledge);
     return { success: true };
   }
@@ -120,8 +129,10 @@ export class KnowledgeService {
 
   // --------------------------------------------------------------------------------------------------
   // 删除知识库
-  async remove(id: number) {
-    const knowledge = await this.knowledgeRepository.findOne({ where: { id } });
+  async remove(id: number, userId: number) {
+    const knowledge = await this.knowledgeRepository.findOne({
+      where: { id, createdBy: userId },
+    });
     if (!knowledge) throw new NotFoundException("知识库不存在");
     await this.knowledgeRepository.softRemove(knowledge);
     return { success: true };

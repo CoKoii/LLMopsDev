@@ -1,28 +1,30 @@
 <script setup lang="ts">
 import { Ellipsis } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import type { ListBoxItem } from './types'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
+import type { ListBoxAction, ListBoxActions, ListBoxItem } from './types'
 
 const props = defineProps<{
   items: ListBoxItem[]
   loading?: boolean
+  actions?: ListBoxActions
 }>()
 
 const emit = defineEmits<{
   edit: [item: ListBoxItem]
   delete: [item: ListBoxItem]
   open: [item: ListBoxItem]
+  action: [key: string, item: ListBoxItem]
 }>()
 
-const listItems = computed(() => props.items)
 const activeActionId = ref<ListBoxItem['id']>()
-const actionItems = [
+const defaultActions: ListBoxAction[] = [
   { key: 'edit', label: '编辑' },
   { key: 'delete', label: '删除', danger: true },
 ]
 
 const handleAction = (key: string, item: ListBoxItem) => {
   activeActionId.value = undefined
+  emit('action', key, item)
   if (key === 'edit') {
     emit('edit', item)
   }
@@ -34,6 +36,13 @@ const handleAction = (key: string, item: ListBoxItem) => {
 const toggleActions = (item: ListBoxItem) => {
   activeActionId.value = activeActionId.value === item.id ? undefined : item.id
 }
+
+const getActions = (item: ListBoxItem) => {
+  if (props.actions === false) return []
+  if (!props.actions) return defaultActions
+  return Array.isArray(props.actions) ? props.actions : props.actions(item)
+}
+const hasActions = (item: ListBoxItem) => getActions(item).length > 0
 
 const closeActions = () => {
   activeActionId.value = undefined
@@ -57,8 +66,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="items" v-if="listItems.length">
-    <div class="item" v-for="item in listItems" :key="item.id" @click="emit('open', item)">
+  <div class="items" v-if="items.length">
+    <div class="item" v-for="item in items" :key="item.id" @click="emit('open', item)">
       <div class="head">
         <div class="title_image">
           <img :src="item.image" alt="" v-if="item.image" />
@@ -68,7 +77,7 @@ onBeforeUnmount(() => {
             <div class="desc">{{ item.description }}</div>
           </div>
         </div>
-        <div class="actions" @click.stop>
+        <div class="actions" v-if="hasActions(item)" @click.stop>
           <button
             class="more"
             type="button"
@@ -79,11 +88,12 @@ onBeforeUnmount(() => {
           </button>
           <div class="action-menu" v-if="activeActionId === item.id">
             <button
-              v-for="action in actionItems"
+              v-for="action in getActions(item)"
               :key="action.key"
               type="button"
+              :disabled="action.disabled"
               :class="{ danger: action.danger }"
-              @click="handleAction(action.key, item)"
+              @click="!action.disabled && handleAction(action.key, item)"
             >
               {{ action.label }}
             </button>
@@ -233,11 +243,24 @@ onBeforeUnmount(() => {
               background: var(--touch-bg);
             }
 
+            &:disabled {
+              color: #c3c8d0;
+              cursor: not-allowed;
+            }
+
+            &:disabled:hover {
+              background: transparent;
+            }
+
             &.danger {
               color: #dc2626;
 
               &:hover {
                 background: #fef2f2;
+              }
+
+              &:disabled {
+                color: #f0a0a0;
               }
             }
           }

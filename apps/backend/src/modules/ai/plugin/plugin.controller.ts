@@ -40,6 +40,14 @@ export class PluginController {
   // -------------------------
 
   // -------------------------
+  // 获取插件分类
+  @Get("categories")
+  listCategories() {
+    return this.pluginService.listCategories();
+  }
+  // -------------------------
+
+  // -------------------------
   // 获取插件详情
   @Get(":id")
   findOne(@Param("id", ParseIntPipe) id: number) {

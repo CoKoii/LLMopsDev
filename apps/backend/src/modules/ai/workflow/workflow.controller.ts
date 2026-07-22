@@ -34,16 +34,19 @@ export class WorkflowController {
   // -------------------------
   // 获取工作流列表
   @Get()
-  list(@Query() query: QueryWorkflowsDto) {
-    return this.workflowService.list(query);
+  list(@Query() query: QueryWorkflowsDto, @CurrentUser() user: AuthUser) {
+    return this.workflowService.list(query, user.userId);
   }
   // -------------------------
 
   // -------------------------
   // 获取工作流详情
   @Get(":id")
-  findOne(@Param("id", ParseIntPipe) id: number) {
-    return this.workflowService.findOne(id);
+  findOne(
+    @Param("id", ParseIntPipe) id: number,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.workflowService.findOne(id, user.userId);
   }
   // -------------------------
 
@@ -62,8 +65,8 @@ export class WorkflowController {
   // -------------------------
   // 删除工作流
   @Delete(":id")
-  remove(@Param("id", ParseIntPipe) id: number) {
-    return this.workflowService.remove(id);
+  remove(@Param("id", ParseIntPipe) id: number, @CurrentUser() user: AuthUser) {
+    return this.workflowService.remove(id, user.userId);
   }
   // -------------------------
 }

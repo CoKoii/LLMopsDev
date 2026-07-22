@@ -14,6 +14,7 @@ export interface PageParams {
   pageSize?: number
   name?: string
   scope?: 'mine' | 'available'
+  categoryKey?: string
 }
 
 export interface LlmItem {
@@ -417,6 +418,14 @@ export const streamAiAppDebugApi = async ({
 
 export const listPluginsApi = async (params?: PageParams): Promise<PageResult<PluginItem>> => {
   return request.get('/ai/plugins', { params })
+}
+
+export const listPluginCategoriesApi = async (): Promise<PluginCategoryItem[]> => {
+  return request.get('/ai/plugins/categories')
+}
+
+export const getPluginApi = async (id: number): Promise<PluginItem> => {
+  return request.get(`/ai/plugins/${id}`)
 }
 
 export const createPluginApi = async (payload: CreatePluginPayload) => {

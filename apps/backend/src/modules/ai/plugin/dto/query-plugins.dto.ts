@@ -9,4 +9,8 @@ export class QueryPluginsDto extends PageQueryDto {
   @IsOptional()
   @IsIn(["mine", "available"], { message: "范围必须为 mine 或 available" })
   scope?: "mine" | "available";
+
+  @IsOptional()
+  @IsString({ message: "插件分类必须为字符串" })
+  categoryKey?: string;
 }

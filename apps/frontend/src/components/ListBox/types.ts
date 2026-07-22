@@ -8,3 +8,12 @@ export interface ListBoxItem {
   footer?: string
   raw?: unknown
 }
+
+export interface ListBoxAction {
+  key: string
+  label: string
+  danger?: boolean
+  disabled?: boolean
+}
+
+export type ListBoxActions = false | ListBoxAction[] | ((item: ListBoxItem) => ListBoxAction[])

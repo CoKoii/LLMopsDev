@@ -114,6 +114,9 @@ export class PluginService {
   // --------------------------------------------------------------------------------------------------
   // 创建插件
   async create(createPluginDto: CreatePluginDto, userId: number) {
+    if (createPluginDto.categoryId === undefined) {
+      throw new BadRequestException("创建插件时必须选择分类");
+    }
     await this.pluginRepository.save(
       this.pluginRepository.create(
         await this.buildPluginPayload(createPluginDto, userId),
@@ -124,10 +127,20 @@ export class PluginService {
   // --------------------------------------------------------------------------------------------------
 
   // --------------------------------------------------------------------------------------------------
+  // 获取插件分类
+  async listCategories() {
+    return this.pluginCategoryRepository.find({
+      order: { sort: "ASC", id: "ASC" },
+    });
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
   // 获取插件列表
   async list(query: QueryPluginsDto): Promise<PageResult<Plugin>> {
     const { page, pageSize, skip } = resolvePageQuery(query);
     const name = query.name?.trim();
+    const categoryKey = query.categoryKey?.trim();
     const scope = query.scope ?? "available";
     const userId = this.requestContext.getUserId();
     const queryBuilder = this.pluginRepository
@@ -140,6 +153,11 @@ export class PluginService {
     if (name) {
       queryBuilder.andWhere("plugin.name LIKE :name", {
         name: `%${name}%`,
+      });
+    }
+    if (categoryKey) {
+      queryBuilder.andWhere("category.key = :categoryKey", {
+        categoryKey,
       });
     }
 
@@ -211,6 +229,9 @@ export class PluginService {
     const userId = this.requestContext.getUserId();
     if (userId === undefined || plugin.createdBy !== userId) {
       throw new NotFoundException("插件不存在");
+    }
+    if (plugin.published) {
+      throw new BadRequestException("已发布插件不允许删除");
     }
     await this.pluginRepository.softRemove(plugin);
     return { success: true };

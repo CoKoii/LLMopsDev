@@ -182,6 +182,7 @@ watch(
     ok-text="保存"
     cancel-text="取消"
     width="52rem"
+    destroy-on-hidden
     @ok="submit"
   >
     <Form ref="formRef" class="resource-form" layout="vertical" :model="formModel">

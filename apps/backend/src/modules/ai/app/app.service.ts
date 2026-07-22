@@ -183,14 +183,19 @@ export class AppService {
     };
   }
 
-  private async ensureApp(id: number): Promise<AiApp> {
-    const app = await this.appRepository.findOne({ where: { id } });
+  private async ensureApp(id: number, userId: number): Promise<AiApp> {
+    const app = await this.appRepository.findOne({
+      where: { id, createdBy: userId },
+    });
     if (!app) throw new NotFoundException("AI应用不存在");
     return app;
   }
 
-  private async ensureDraftVersion(appId: number): Promise<AiAppVersion> {
-    await this.ensureApp(appId);
+  private async ensureDraftVersion(
+    appId: number,
+    userId: number,
+  ): Promise<AiAppVersion> {
+    await this.ensureApp(appId, userId);
 
     const draft = await this.appVersionRepository.findOne({
       where: {
@@ -244,11 +249,15 @@ export class AppService {
 
   // --------------------------------------------------------------------------------------------------
   // 获取AI应用列表
-  async list(query: QueryAppsDto): Promise<PageResult<AppListItem>> {
+  async list(
+    query: QueryAppsDto,
+    userId: number,
+  ): Promise<PageResult<AppListItem>> {
     const { page, pageSize, skip } = resolvePageQuery(query);
     const name = query.name?.trim();
     const queryBuilder = this.appRepository
       .createQueryBuilder("app")
+      .where("app.createdBy = :userId", { userId })
       .orderBy("app.id", "DESC")
       .skip(skip)
       .take(pageSize);
@@ -314,23 +323,23 @@ export class AppService {
 
   // --------------------------------------------------------------------------------------------------
   // 获取AI应用详情
-  async findOne(id: number) {
-    const app = await this.ensureApp(id);
+  async findOne(id: number, userId: number) {
+    const app = await this.ensureApp(id, userId);
     return this.withAccessibleImage(app);
   }
   // --------------------------------------------------------------------------------------------------
 
   // --------------------------------------------------------------------------------------------------
   // 获取AI应用草稿版本
-  async getDraft(id: number) {
-    return this.withVersionPlugins(await this.ensureDraftVersion(id));
+  async getDraft(id: number, userId: number) {
+    return this.withVersionPlugins(await this.ensureDraftVersion(id, userId));
   }
   // --------------------------------------------------------------------------------------------------
 
   // --------------------------------------------------------------------------------------------------
   // 自动保存AI应用草稿版本
-  async updateDraft(id: number, dto: UpdateAppDraftDto) {
-    const draft = await this.ensureDraftVersion(id);
+  async updateDraft(id: number, dto: UpdateAppDraftDto, userId: number) {
+    const draft = await this.ensureDraftVersion(id, userId);
     draft.config = this.mergeConfig(draft.config, dto.config);
     return this.withVersionPlugins(await this.appVersionRepository.save(draft));
   }
@@ -338,8 +347,8 @@ export class AppService {
 
   // --------------------------------------------------------------------------------------------------
   // 获取AI应用历史版本
-  async listVersions(id: number) {
-    await this.ensureApp(id);
+  async listVersions(id: number, userId: number) {
+    await this.ensureApp(id, userId);
     const versions = await this.appVersionRepository.find({
       where: [
         { appId: id, status: AiAppVersionStatus.PUBLISHED },
@@ -355,9 +364,9 @@ export class AppService {
 
   // --------------------------------------------------------------------------------------------------
   // 发布AI应用版本
-  async publishVersion(id: number) {
-    const draft = await this.ensureDraftVersion(id);
-    const publishedVersions = await this.listVersions(id);
+  async publishVersion(id: number, userId: number) {
+    const draft = await this.ensureDraftVersion(id, userId);
+    const publishedVersions = await this.listVersions(id, userId);
     const version = this.getNextPublishedVersion(publishedVersions);
 
     return this.withVersionPlugins(
@@ -376,7 +385,8 @@ export class AppService {
 
   // --------------------------------------------------------------------------------------------------
   // 恢复历史版本到草稿
-  async restoreVersion(id: number, versionId: number) {
+  async restoreVersion(id: number, versionId: number, userId: number) {
+    await this.ensureApp(id, userId);
     const target = await this.appVersionRepository.findOne({
       where: { id: versionId, appId: id },
     });
@@ -384,7 +394,7 @@ export class AppService {
       throw new NotFoundException("历史版本不存在");
     }
 
-    const draft = await this.ensureDraftVersion(id);
+    const draft = await this.ensureDraftVersion(id, userId);
     draft.config = target.config;
     return this.withVersionPlugins(await this.appVersionRepository.save(draft));
   }
@@ -393,11 +403,11 @@ export class AppService {
   // --------------------------------------------------------------------------------------------------
   // 更新AI应用
   async update(id: number, updateAppDto: UpdateAppDto, userId: number) {
-    const app = await this.appRepository.preload({
-      id,
-      ...(await this.buildAppPayload(updateAppDto, userId)),
+    const app = await this.appRepository.findOne({
+      where: { id, createdBy: userId },
     });
     if (!app) throw new NotFoundException("AI应用不存在");
+    Object.assign(app, await this.buildAppPayload(updateAppDto, userId));
     await this.appRepository.save(app);
     return { success: true };
   }
@@ -405,8 +415,10 @@ export class AppService {
 
   // --------------------------------------------------------------------------------------------------
   // 删除AI应用
-  async remove(id: number) {
-    const app = await this.appRepository.findOne({ where: { id } });
+  async remove(id: number, userId: number) {
+    const app = await this.appRepository.findOne({
+      where: { id, createdBy: userId },
+    });
     if (!app) throw new NotFoundException("AI应用不存在");
     await this.appRepository.softRemove(app);
     return { success: true };

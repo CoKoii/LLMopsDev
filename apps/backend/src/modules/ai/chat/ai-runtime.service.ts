@@ -30,8 +30,10 @@ export class AiRuntimeService {
     private readonly pluginToolService: PluginToolService,
   ) {}
 
-  async getDraft(appId: number): Promise<AiAppVersion> {
-    const app = await this.appRepository.findOne({ where: { id: appId } });
+  async getDraft(appId: number, userId: number): Promise<AiAppVersion> {
+    const app = await this.appRepository.findOne({
+      where: { id: appId, createdBy: userId },
+    });
     if (!app) throw new NotFoundException("AI应用不存在");
 
     const draft = await this.appVersionRepository.findOne({
@@ -72,7 +74,7 @@ export class AiRuntimeService {
   }
 
   async createAgent(appId: number, userId: number) {
-    const draft = await this.getDraft(appId);
+    const draft = await this.getDraft(appId, userId);
     const model = await this.createModel(draft.config);
     const tools = await this.pluginToolService.loadEnabledTools(
       draft.config,

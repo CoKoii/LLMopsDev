@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { useAuthStore } from '@/stores/auth'
-import { listPluginsApi, type AppVersionPluginItem, type PluginItem } from '@/api'
+import {
+  listPluginCategoriesApi,
+  listPluginsApi,
+  type AppVersionPluginItem,
+  type PluginCategoryItem,
+  type PluginItem,
+} from '@/api'
 import { renderMarkdown } from '@/utils/markdown'
 import {
   BadgeDollarSign,
@@ -8,6 +14,7 @@ import {
   Bot,
   BotMessageSquare,
   Calculator,
+  Code2,
   ChevronDown,
   CircleCheck,
   CircleDot,
@@ -23,10 +30,12 @@ import {
   Hourglass,
   Image,
   Info,
+  MessageCircle,
   MessagesSquare,
   MinusCircle,
   PanelTop,
   Paperclip,
+  Search,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -36,6 +45,7 @@ import {
   Trash2,
   User,
   UsersRound,
+  Wrench,
   Workflow,
   X,
 } from '@lucide/vue'
@@ -55,7 +65,7 @@ import {
   TextArea,
   message,
 } from 'antdv-next'
-import { computed, h, nextTick, onMounted, ref, type VNode } from 'vue'
+import { computed, h, nextTick, onMounted, ref, type Component, type VNode } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   configToggles,
@@ -75,6 +85,7 @@ type ChatMessage = {
 
 const route = useRoute()
 const authStore = useAuthStore()
+const allPluginCategoryKey = '__all__'
 const modelSettingsOpen = ref(false)
 const pluginModalOpen = ref(false)
 const publishHistoryOpen = ref(false)
@@ -85,9 +96,10 @@ const chatListRef = ref<HTMLElement>()
 const promptOptimizeResultRef = ref<HTMLElement>()
 const myPluginCatalog = ref<PluginItem[]>([])
 const publishedPluginCatalog = ref<PluginItem[]>([])
+const pluginCategoryCatalog = ref<PluginCategoryItem[]>([])
 const pluginCatalogLoading = ref(false)
 const activePluginSourceKey = ref<PluginSourceKey>('custom')
-const activePluginCategoryKey = ref('all')
+const activePluginCategoryKey = ref(allPluginCategoryKey)
 let promptOptimizeAbortController: AbortController | undefined
 const pageTabs = [
   { page: 'edit', label: '编辑' },
@@ -101,7 +113,20 @@ type PluginCategoryOption = {
   name: string
   sort: number
   count: number
+  icon: Component
 }
+const pluginCategoryIcons = [
+  Search,
+  Wrench,
+  Code2,
+  Calculator,
+  BookOpen,
+  Image,
+  MessagesSquare,
+  UsersRound,
+  MessageCircle,
+  Workflow,
+] as const
 const appId = computed(() => Number(route.params.appId))
 const {
   appDetail,
@@ -212,47 +237,63 @@ const selectedPlugins = computed<AppVersionPluginItem[]>(() => {
     .filter((item): item is AppVersionPluginItem => item !== undefined)
 })
 const pluginCategoryOptions = computed(() =>
-  buildPluginCategoryOptions(publishedPluginCatalog.value),
+  buildPluginCategoryOptions(pluginCategoryCatalog.value, publishedPluginCatalog.value),
 )
 const visiblePluginCatalog = computed(() => {
   if (activePluginSourceKey.value === 'custom') return myPluginCatalog.value
+  if (activePluginCategoryKey.value === allPluginCategoryKey) {
+    return publishedPluginCatalog.value
+  }
 
   return publishedPluginCatalog.value.filter((item) => {
-    const categoryKey = item.category?.key || 'uncategorized'
-    return activePluginCategoryKey.value === 'all' || categoryKey === activePluginCategoryKey.value
+    return item.category?.key === activePluginCategoryKey.value
   })
 })
-const pluginGroups = computed(() => buildPluginGroups(visiblePluginCatalog.value))
-const activePluginSourceName = computed(() =>
-  activePluginSourceKey.value === 'custom' ? '自定义插件' : '已发布插件',
+const pluginGroups = computed(() =>
+  buildPluginGroups(
+    visiblePluginCatalog.value,
+    activePluginSourceKey.value === 'custom' ? '自定义插件' : '已发布插件',
+  ),
 )
+const activePluginSourceName = computed(() => {
+  if (activePluginSourceKey.value === 'custom') return '自定义插件'
+  const category = pluginCategoryOptions.value.find((item) => item.key === activePluginCategoryKey.value)
+  return category?.name ?? '全部'
+})
 const pluginEmptyText = computed(() =>
   activePluginSourceKey.value === 'custom' ? '暂无自定义插件' : '当前分类下没有已发布插件',
 )
-function buildPluginCategoryOptions(plugins: PluginItem[]): PluginCategoryOption[] {
-  const categories = new Map<string, PluginCategoryOption>()
+function buildPluginCategoryOptions(
+  categories: PluginCategoryItem[],
+  plugins: PluginItem[],
+): PluginCategoryOption[] {
+  const counts = new Map<string, number>()
 
   for (const item of plugins) {
     const category = item.category
-    const key = category?.key || 'uncategorized'
-    const name = category?.name || '未分类'
-    const sort = category?.sort ?? 999
-    const current = categories.get(key)
-    categories.set(key, {
-      key,
-      name,
-      sort,
-      count: (current?.count ?? 0) + 1,
-    })
+    if (!category) continue
+    counts.set(category.key, (counts.get(category.key) ?? 0) + 1)
   }
 
   return [
-    { key: 'all', name: '全部', sort: -1, count: plugins.length },
-    ...[...categories.values()].sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name)),
-  ]
+    {
+      key: allPluginCategoryKey,
+      name: '全部',
+      sort: -1,
+      count: plugins.length,
+      icon: Database,
+    },
+    ...categories.map((category, index) => ({
+      key: category.key,
+      name: category.name,
+      sort: category.sort,
+      count: counts.get(category.key) ?? 0,
+      icon: pluginCategoryIcons[index % pluginCategoryIcons.length] ?? Workflow,
+    })),
+  ].sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name))
 }
 
-function buildPluginGroups(plugins: PluginItem[]) {
+function buildPluginGroups(plugins: PluginItem[], fallbackTitle: string) {
   const groups = new Map<
     string,
     {
@@ -265,8 +306,8 @@ function buildPluginGroups(plugins: PluginItem[]) {
 
   for (const item of plugins) {
     const category = item.category
-    const key = category?.key || 'uncategorized'
-    const title = category?.name || '未分类'
+    const key = category?.key ?? fallbackTitle
+    const title = category?.name ?? fallbackTitle
     const sort = category?.sort ?? 999
     const current = groups.get(key)
     if (current) {
@@ -453,12 +494,6 @@ function getCapabilityIcon(item: CapabilityItem) {
   return Bot
 }
 
-function getPluginCategoryIcon(key: string) {
-  if (key === 'all') return Database
-  if (key === 'uncategorized') return BookOpen
-  return Workflow
-}
-
 function removeCapability(key: string) {
   capabilities.value = capabilities.value.filter((item) => item.key !== key)
 }
@@ -466,7 +501,8 @@ function removeCapability(key: string) {
 async function loadPluginCatalog() {
   pluginCatalogLoading.value = true
   try {
-    const [mineResult, availableResult] = await Promise.all([
+    const [categories, mineResult, availableResult] = await Promise.all([
+      listPluginCategoriesApi(),
       listPluginsApi({
         page: 1,
         pageSize: 200,
@@ -478,13 +514,13 @@ async function loadPluginCatalog() {
         scope: 'available',
       }),
     ])
+    pluginCategoryCatalog.value = categories
     myPluginCatalog.value = mineResult.items
     publishedPluginCatalog.value = availableResult.items
     if (
-      activePluginCategoryKey.value !== 'all' &&
       !pluginCategoryOptions.value.some((item) => item.key === activePluginCategoryKey.value)
     ) {
-      activePluginCategoryKey.value = 'all'
+      activePluginCategoryKey.value = allPluginCategoryKey
     }
   } finally {
     pluginCatalogLoading.value = false
@@ -1188,7 +1224,7 @@ onMounted(() => {
                   type="button"
                   @click="selectPluginSource('custom')"
                 >
-                  <Database :size="15" />
+                  <User :size="15" />
                   <span>自定义插件</span>
                 </button>
               </div>
@@ -1207,7 +1243,7 @@ onMounted(() => {
                   type="button"
                   @click="selectPluginCategory(category.key)"
                 >
-                  <component :is="getPluginCategoryIcon(category.key)" :size="15" />
+                  <component :is="category.icon" :size="15" />
                   <span>{{ category.name }}</span>
                 </button>
               </div>

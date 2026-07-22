@@ -107,13 +107,13 @@ export class ChatService {
     return tokens || undefined;
   }
 
-  async optimizePrompt(appId: number, prompt: string) {
+  async optimizePrompt(appId: number, prompt: string, userId: number) {
     const sourcePrompt = prompt.trim();
     if (!sourcePrompt) {
       throw new BadRequestException("人设与回复逻辑不能为空");
     }
 
-    const draft = await this.aiRuntimeService.getDraft(appId);
+    const draft = await this.aiRuntimeService.getDraft(appId, userId);
     const model = await this.aiRuntimeService.createModel(draft.config);
     const response = await model.invoke(
       this.createPromptOptimizeMessages(sourcePrompt),
@@ -127,13 +127,18 @@ export class ChatService {
     return { prompt: optimizedPrompt };
   }
 
-  createPromptOptimizeSseStream(appId: number, prompt: string): Readable {
-    return Readable.from(this.streamPromptOptimize(appId, prompt));
+  createPromptOptimizeSseStream(
+    appId: number,
+    prompt: string,
+    userId: number,
+  ): Readable {
+    return Readable.from(this.streamPromptOptimize(appId, prompt, userId));
   }
 
   private async *streamPromptOptimize(
     appId: number,
     prompt: string,
+    userId: number,
   ): AsyncGenerator<string> {
     const sourcePrompt = prompt.trim();
 
@@ -142,7 +147,7 @@ export class ChatService {
         throw new BadRequestException("人设与回复逻辑不能为空");
       }
 
-      const draft = await this.aiRuntimeService.getDraft(appId);
+      const draft = await this.aiRuntimeService.getDraft(appId, userId);
       const model = await this.aiRuntimeService.createModel(draft.config);
       const stream = await model.stream(
         this.createPromptOptimizeMessages(sourcePrompt),
