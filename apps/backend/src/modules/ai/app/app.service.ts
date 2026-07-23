@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { DataSource, In, Repository } from "typeorm";
+import { DataSource, In, Repository, type FindOptionsRelations } from "typeorm";
 import { FilesService } from "../../files/files.service";
 import {
   createPageResult,
@@ -18,6 +18,7 @@ import {
   type AiAppVersionConfig,
   AiAppVersionStatus,
 } from "./entities/app-version.entity";
+import { AiAppCategory } from "./entities/app-category.entity";
 import { AiApp } from "./entities/app.entity";
 
 const DRAFT_VERSION = "draft";
@@ -62,6 +63,8 @@ export class AppService {
   constructor(
     @InjectRepository(AiApp)
     private readonly appRepository: Repository<AiApp>,
+    @InjectRepository(AiAppCategory)
+    private readonly appCategoryRepository: Repository<AiAppCategory>,
     @InjectRepository(AiAppVersion)
     private readonly appVersionRepository: Repository<AiAppVersion>,
     @InjectRepository(Llm)
@@ -145,6 +148,13 @@ export class AppService {
     if (dto.description !== undefined) {
       payload.description = dto.description || null;
     }
+    if (dto.categoryId !== undefined) {
+      const category = await this.appCategoryRepository.findOne({
+        where: { id: dto.categoryId },
+      });
+      if (!category) throw new NotFoundException("应用分类不存在");
+      payload.category = category;
+    }
     if (dto.status !== undefined) {
       payload.status = dto.status;
     }
@@ -183,9 +193,14 @@ export class AppService {
     };
   }
 
-  private async ensureApp(id: number, userId: number): Promise<AiApp> {
+  private async ensureApp(
+    id: number,
+    userId: number,
+    relations?: FindOptionsRelations<AiApp>,
+  ): Promise<AiApp> {
     const app = await this.appRepository.findOne({
       where: { id, createdBy: userId },
+      relations,
     });
     if (!app) throw new NotFoundException("AI应用不存在");
     return app;
@@ -248,6 +263,15 @@ export class AppService {
   // --------------------------------------------------------------------------------------------------
 
   // --------------------------------------------------------------------------------------------------
+  // 获取AI应用分类
+  async listCategories() {
+    return this.appCategoryRepository.find({
+      order: { sort: "ASC", id: "ASC" },
+    });
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
   // 获取AI应用列表
   async list(
     query: QueryAppsDto,
@@ -255,8 +279,10 @@ export class AppService {
   ): Promise<PageResult<AppListItem>> {
     const { page, pageSize, skip } = resolvePageQuery(query);
     const name = query.name?.trim();
+    const categoryKey = query.categoryKey?.trim();
     const queryBuilder = this.appRepository
       .createQueryBuilder("app")
+      .leftJoinAndSelect("app.category", "category")
       .where("app.createdBy = :userId", { userId })
       .orderBy("app.id", "DESC")
       .skip(skip)
@@ -265,6 +291,11 @@ export class AppService {
     if (name) {
       queryBuilder.andWhere("app.name LIKE :name", {
         name: `%${name}%`,
+      });
+    }
+    if (categoryKey) {
+      queryBuilder.andWhere("category.key = :categoryKey", {
+        categoryKey,
       });
     }
 
@@ -324,8 +355,9 @@ export class AppService {
   // --------------------------------------------------------------------------------------------------
   // 获取AI应用详情
   async findOne(id: number, userId: number) {
-    const app = await this.ensureApp(id, userId);
-    return this.withAccessibleImage(app);
+    return this.withAccessibleImage(
+      await this.ensureApp(id, userId, { category: true }),
+    );
   }
   // --------------------------------------------------------------------------------------------------
 

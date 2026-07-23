@@ -21,6 +21,9 @@ export class CreateAppDto {
   @IsInt({ message: "应用图片文件ID必须为整数" })
   imageFileId?: number;
 
+  @IsInt({ message: "应用分类ID必须为整数" })
+  categoryId!: number;
+
   @IsOptional()
   @IsString({ message: "应用描述必须为字符串" })
   @MaxLength(800, { message: "应用描述长度不能超过800个字符" })

@@ -5,11 +5,23 @@ import AppModal from '@/components/AppModal/AppModal.vue'
 import {
   createAiAppApi,
   deleteAiAppApi,
+  listAiAppCategoriesApi,
   listAiAppsApi,
   updateAiAppApi,
+  type AiAppCategoryItem,
   type AiAppItem,
+  type CreateAiAppPayload,
 } from '@/api'
-import { Form, FormItem, Input, message, Modal, TextArea, type FormInstance } from 'antdv-next'
+import {
+  Form,
+  FormItem,
+  Input,
+  message,
+  Modal,
+  Select,
+  TextArea,
+  type FormInstance,
+} from 'antdv-next'
 import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import ImageUpload from '../components/ImageUpload.vue'
@@ -26,11 +38,14 @@ const saving = ref(false)
 const modalOpen = ref(false)
 const editingId = ref<number>()
 const formRef = ref<FormInstance>()
+const appCategories = ref<AiAppCategoryItem[]>([])
+const categoriesLoading = ref(false)
 
 const createEmptyForm = () => ({
   name: '',
   image: undefined as string | undefined,
   imageFileId: undefined as number | undefined,
+  categoryId: undefined as number | undefined,
   description: '',
 })
 
@@ -41,12 +56,18 @@ const appActions: ListBoxAction[] = [
   { key: 'edit', label: '编辑' },
   { key: 'delete', label: '删除', danger: true },
 ]
+const appCategoryOptions = computed(() =>
+  appCategories.value.map((category) => ({
+    label: category.name,
+    value: category.id,
+  })),
+)
 
 const listItems = computed<ListBoxItem[]>(() =>
   records.value.map((item) => ({
     id: item.id,
     title: item.name,
-    description: formatModelName(item),
+    description: formatAppDescription(item),
     content: item.description || '暂无描述',
     image: item.image || undefined,
     authorImage: props.creatorAvatar || undefined,
@@ -55,8 +76,9 @@ const listItems = computed<ListBoxItem[]>(() =>
   })),
 )
 
-const formatModelName = (item: AiAppItem) => {
-  return item.model ? `${item.model.provider}·${item.model.modelName}` : '未选择模型'
+const formatAppDescription = (item: AiAppItem) => {
+  const modelName = item.model ? `${item.model.provider}·${item.model.modelName}` : '未选择模型'
+  return `${item.category?.name || '未分类'} · ${modelName}`
 }
 
 const formatDate = (value: string) => {
@@ -87,10 +109,24 @@ const loadList = async () => {
   }
 }
 
+const loadAppCategories = async () => {
+  if (appCategories.value.length) return
+
+  categoriesLoading.value = true
+  try {
+    appCategories.value = await listAiAppCategoriesApi()
+  } catch {
+    message.error('应用分类获取失败')
+  } finally {
+    categoriesLoading.value = false
+  }
+}
+
 const openCreate = async () => {
   editingId.value = undefined
   resetForm()
   modalOpen.value = true
+  void loadAppCategories()
 }
 
 const openEdit = async (item: ListBoxItem) => {
@@ -100,10 +136,12 @@ const openEdit = async (item: ListBoxItem) => {
     name: record.name,
     image: record.image || undefined,
     imageFileId: undefined,
+    categoryId: record.category?.id,
     description: record.description || '',
   })
   formRef.value?.clearValidate()
   modalOpen.value = true
+  void loadAppCategories()
 }
 
 const openOrchestration = (item: ListBoxItem) => {
@@ -113,11 +151,14 @@ const openOrchestration = (item: ListBoxItem) => {
 
 const submit = async () => {
   await formRef.value?.validate()
+  if (formModel.categoryId === undefined) return
+
   saving.value = true
   try {
-    const payload = {
+    const payload: CreateAiAppPayload = {
       name: formModel.name,
       imageFileId: formModel.imageFileId,
+      categoryId: formModel.categoryId,
       description: formModel.description,
     }
 
@@ -206,6 +247,19 @@ watch(
         :rules="[{ required: true, message: '请输入应用名称' }]"
       >
         <Input v-model:value="formModel.name" placeholder="应用名称不能为空" :maxlength="100" />
+      </FormItem>
+      <FormItem
+        label="应用分类"
+        name="categoryId"
+        :rules="[{ required: true, message: '请选择应用分类' }]"
+      >
+        <Select
+          v-model:value="formModel.categoryId"
+          :loading="categoriesLoading"
+          :disabled="!categoriesLoading && appCategoryOptions.length === 0"
+          :options="appCategoryOptions"
+          placeholder="请选择应用分类"
+        />
       </FormItem>
       <FormItem label="应用描述" name="description">
         <TextArea

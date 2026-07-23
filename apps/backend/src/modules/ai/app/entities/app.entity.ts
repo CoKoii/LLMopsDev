@@ -1,11 +1,14 @@
 import {
   Column,
   Entity,
+  JoinColumn,
+  ManyToOne,
   OneToMany,
   PrimaryGeneratedColumn,
   Relation,
 } from "typeorm";
 import { AuditableEntity } from "../../../../common/database/base.entity";
+import { AiAppCategory } from "./app-category.entity";
 import { AiAppVersion } from "./app-version.entity";
 
 @Entity({ name: "ai_apps", comment: "AI应用" })
@@ -29,6 +32,10 @@ export class AiApp extends AuditableEntity {
 
   @Column({ comment: "状态", default: true })
   status!: boolean;
+
+  @ManyToOne(() => AiAppCategory, { nullable: true, onDelete: "SET NULL" })
+  @JoinColumn({ name: "categoryId" })
+  category?: Relation<AiAppCategory> | null;
 
   @OneToMany(() => AiAppVersion, (version) => version.app)
   versions!: Relation<AiAppVersion[]>;

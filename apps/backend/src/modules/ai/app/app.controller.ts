@@ -38,6 +38,14 @@ export class AppController {
   // -------------------------
 
   // -------------------------
+  // 获取AI应用分类
+  @Get("categories")
+  listCategories() {
+    return this.appService.listCategories();
+  }
+  // -------------------------
+
+  // -------------------------
   // 获取AI应用详情
   @Get(":id")
   findOne(

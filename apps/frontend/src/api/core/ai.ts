@@ -27,11 +27,24 @@ export interface LlmItem {
   updatedAt?: string
 }
 
+export interface CategoryItem {
+  id: number
+  key: string
+  name: string
+  sort: number
+  createdAt?: string
+  updatedAt?: string
+}
+
+export type AiAppCategoryItem = CategoryItem
+export type PluginCategoryItem = CategoryItem
+
 export interface AiAppItem {
   id: number
   name: string
   image?: string | null
   description?: string | null
+  category?: AiAppCategoryItem | null
   model?: Pick<LlmItem, 'id' | 'provider' | 'modelName'> | null
   status: boolean
   createdAt?: string
@@ -93,15 +106,6 @@ export interface PluginHeader {
   value: string
 }
 
-export interface PluginCategoryItem {
-  id: number
-  key: string
-  name: string
-  sort: number
-  createdAt?: string
-  updatedAt?: string
-}
-
 export interface PluginItem {
   id: number
   icon?: string | null
@@ -144,6 +148,7 @@ export interface CreateAiAppPayload {
   name: string
   image?: string
   imageFileId?: number
+  categoryId: number
   description?: string
   status?: boolean
 }
@@ -207,6 +212,10 @@ export const listAiAppsApi = async (params?: PageParams): Promise<PageResult<AiA
 
 export const getAiAppApi = async (id: number): Promise<AiAppItem> => {
   return request.get(`/ai/apps/${id}`)
+}
+
+export const listAiAppCategoriesApi = async (): Promise<AiAppCategoryItem[]> => {
+  return request.get('/ai/apps/categories')
 }
 
 export const createAiAppApi = async (payload: CreateAiAppPayload) => {
@@ -289,7 +298,11 @@ export const streamAiAppPromptOptimizeApi = async ({
 
   const consumeEvent = (rawEvent: string) => {
     const lines = rawEvent.split('\n')
-    const eventName = lines.find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message'
+    const eventName =
+      lines
+        .find((line) => line.startsWith('event:'))
+        ?.slice(6)
+        .trim() || 'message'
     const data = lines
       .filter((line) => line.startsWith('data:'))
       .map((line) => line.slice(5).trim())
@@ -370,7 +383,11 @@ export const streamAiAppDebugApi = async ({
 
   const consumeEvent = (rawEvent: string) => {
     const lines = rawEvent.split('\n')
-    const eventName = lines.find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message'
+    const eventName =
+      lines
+        .find((line) => line.startsWith('event:'))
+        ?.slice(6)
+        .trim() || 'message'
     const data = lines
       .filter((line) => line.startsWith('data:'))
       .map((line) => line.slice(5).trim())
