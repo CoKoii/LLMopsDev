@@ -477,6 +477,10 @@ export const listKnowledgeApi = async (params?: PageParams): Promise<PageResult<
   return request.get('/ai/knowledge', { params })
 }
 
+export const getKnowledgeApi = async (id: number): Promise<KnowledgeItem> => {
+  return request.get(`/ai/knowledge/${id}`)
+}
+
 export const createKnowledgeApi = async (payload: CreateKnowledgePayload) => {
   return request.post('/ai/knowledge', payload)
 }

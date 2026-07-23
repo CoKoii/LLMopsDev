@@ -129,7 +129,20 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       appTransition: 'app-shell',
     },
-    children: mainRoutes,
+    children: [
+      ...mainRoutes,
+      {
+        path: 'personal-space/knowledge/:knowledgeId/files',
+        name: 'knowledge-files',
+        meta: {
+          title: '知识库详情',
+          activeMenu: 'personal-space',
+          pageTransition: 'workspace-fade',
+          shellKey: 'knowledge-files',
+        },
+        component: () => import('../views/personalSpace/knowledge/detail.vue'),
+      },
+    ],
   },
   {
     path: '/login',

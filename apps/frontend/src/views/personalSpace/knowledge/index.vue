@@ -11,6 +11,7 @@ import {
 } from '@/api'
 import { Form, FormItem, Input, message, Modal, TextArea, type FormInstance } from 'antdv-next'
 import { computed, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import ImageUpload from '../components/ImageUpload.vue'
 
 const props = defineProps<{
@@ -25,6 +26,7 @@ const saving = ref(false)
 const modalOpen = ref(false)
 const editingId = ref<number>()
 const formRef = ref<FormInstance>()
+const router = useRouter()
 
 const createEmptyForm = () => ({
   icon: undefined as string | undefined,
@@ -99,6 +101,14 @@ const openEdit = (item: ListBoxItem) => {
   modalOpen.value = true
 }
 
+const openDetail = (item: ListBoxItem) => {
+  const record = item.raw as KnowledgeItem
+  void router.push({
+    name: 'knowledge-files',
+    params: { knowledgeId: record.id },
+  })
+}
+
 const submit = async () => {
   await formRef.value?.validate()
   saving.value = true
@@ -167,6 +177,7 @@ watch(
     :actions="knowledgeActions"
     @edit="openEdit"
     @delete="confirmDelete"
+    @open="openDetail"
   />
 
   <AppModal
