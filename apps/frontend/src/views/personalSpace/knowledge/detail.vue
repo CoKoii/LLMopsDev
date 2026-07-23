@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { getKnowledgeApi, type KnowledgeItem } from '@/api'
+import AppModal from '@/components/AppModal/AppModal.vue'
 import { BookOutlined, EllipsisOutlined, SearchOutlined } from '@antdv-next/icons'
 import {
   Badge,
   Button,
-  Dropdown,
   Input,
+  Dropdown,
   message,
+  Modal,
   Space,
   Switch,
   Table,
@@ -30,6 +32,10 @@ const knowledge = ref<KnowledgeItem>()
 const loading = ref(false)
 const searchValue = ref('')
 const documents = ref<KnowledgeDocument[]>([])
+const renameModalOpen = ref(false)
+const renameSaving = ref(false)
+const renameDocumentId = ref<number>()
+const renameName = ref('')
 
 const documentSeeds = [
   ['LLMOps 项目提示词.md', 4700, 18, '2024-06-11 23:31:47', false],
@@ -133,15 +139,52 @@ const toggleFile = (record: KnowledgeDocument, checked: boolean) => {
   message.success(checked ? '文档已启用' : '文档已禁用')
 }
 
+const openRenameModal = (record: KnowledgeDocument) => {
+  renameDocumentId.value = record.id
+  renameName.value = record.name
+  renameModalOpen.value = true
+}
+
+const submitRename = async () => {
+  const name = renameName.value.trim()
+  if (!name || renameDocumentId.value === undefined) return
+
+  renameSaving.value = true
+  try {
+    documents.value = documents.value.map((item) =>
+      item.id === renameDocumentId.value ? { ...item, name } : item,
+    )
+    message.success('文档已重命名')
+    renameModalOpen.value = false
+  } finally {
+    renameSaving.value = false
+  }
+}
+
+const confirmDeleteFile = (record: KnowledgeDocument) => {
+  Modal.confirm({
+    title: '要删除该文档吗？',
+    content: '删除后，该文档将从列表中移除。',
+    centered: true,
+    keyboard: true,
+    maskClosable: true,
+    okText: '确认',
+    cancelText: '取消',
+    onOk: async () => {
+      documents.value = documents.value.filter((item) => item.id !== record.id)
+      message.success('文档已删除')
+    },
+  })
+}
+
 const handleFileAction = (event: { key: string | number }, record: KnowledgeDocument) => {
   if (event.key === 'rename') {
-    message.info(`重命名 ${record.name}`)
+    openRenameModal(record)
     return
   }
 
   if (event.key === 'delete') {
-    documents.value = documents.value.filter((item) => item.id !== record.id)
-    message.success('文档已删除')
+    confirmDeleteFile(record)
   }
 }
 
@@ -239,6 +282,19 @@ watch(
         </Table>
       </div>
     </main>
+
+    <AppModal
+      v-model:open="renameModalOpen"
+      title="重命名文档"
+      :confirm-loading="renameSaving"
+      ok-text="保存"
+      cancel-text="取消"
+      width="42rem"
+      destroy-on-hidden
+      @ok="submitRename"
+    >
+      <Input v-model:value="renameName" placeholder="请输入文档名称" :maxlength="120" />
+    </AppModal>
   </div>
 </template>
 
