@@ -94,13 +94,14 @@ const promptOptimizeSource = ref('')
 const promptOptimizeResult = ref('')
 const chatListRef = ref<HTMLElement>()
 const promptOptimizeResultRef = ref<HTMLElement>()
-const myPluginCatalog = ref<PluginItem[]>([])
-const publishedPluginCatalog = ref<PluginItem[]>([])
+const pluginCatalog = ref<PluginItem[]>([])
+const pluginCatalogCache = ref<PluginItem[]>([])
 const pluginCategoryCatalog = ref<PluginCategoryItem[]>([])
 const pluginCatalogLoading = ref(false)
 const activePluginSourceKey = ref<PluginSourceKey>('custom')
 const activePluginCategoryKey = ref(allPluginCategoryKey)
 let promptOptimizeAbortController: AbortController | undefined
+let pluginCatalogRequestId = 0
 const pageTabs = [
   { page: 'edit', label: '编辑' },
   { page: 'publish', label: '发布配置' },
@@ -112,7 +113,6 @@ type PluginCategoryOption = {
   key: string
   name: string
   sort: number
-  count: number
   icon: Component
 }
 const pluginCategoryIcons = [
@@ -226,10 +226,7 @@ const selectedPlugins = computed<AppVersionPluginItem[]>(() => {
   for (const item of appDraft.value?.plugins ?? []) {
     pluginLookup.set(item.id, item)
   }
-  for (const item of myPluginCatalog.value) {
-    pluginLookup.set(item.id, item)
-  }
-  for (const item of publishedPluginCatalog.value) {
+  for (const item of pluginCatalogCache.value) {
     pluginLookup.set(item.id, item)
   }
   return pluginIds.value
@@ -237,57 +234,36 @@ const selectedPlugins = computed<AppVersionPluginItem[]>(() => {
     .filter((item): item is AppVersionPluginItem => item !== undefined)
 })
 const pluginCategoryOptions = computed(() =>
-  buildPluginCategoryOptions(pluginCategoryCatalog.value, publishedPluginCatalog.value),
+  buildPluginCategoryOptions(pluginCategoryCatalog.value),
 )
-const visiblePluginCatalog = computed(() => {
-  if (activePluginSourceKey.value === 'custom') return myPluginCatalog.value
-  if (activePluginCategoryKey.value === allPluginCategoryKey) {
-    return publishedPluginCatalog.value
-  }
-
-  return publishedPluginCatalog.value.filter((item) => {
-    return item.category?.key === activePluginCategoryKey.value
-  })
-})
 const pluginGroups = computed(() =>
   buildPluginGroups(
-    visiblePluginCatalog.value,
+    pluginCatalog.value,
     activePluginSourceKey.value === 'custom' ? '自定义插件' : '已发布插件',
   ),
 )
 const activePluginSourceName = computed(() => {
   if (activePluginSourceKey.value === 'custom') return '自定义插件'
-  const category = pluginCategoryOptions.value.find((item) => item.key === activePluginCategoryKey.value)
+  const category = pluginCategoryOptions.value.find(
+    (item) => item.key === activePluginCategoryKey.value,
+  )
   return category?.name ?? '全部'
 })
 const pluginEmptyText = computed(() =>
   activePluginSourceKey.value === 'custom' ? '暂无自定义插件' : '当前分类下没有已发布插件',
 )
-function buildPluginCategoryOptions(
-  categories: PluginCategoryItem[],
-  plugins: PluginItem[],
-): PluginCategoryOption[] {
-  const counts = new Map<string, number>()
-
-  for (const item of plugins) {
-    const category = item.category
-    if (!category) continue
-    counts.set(category.key, (counts.get(category.key) ?? 0) + 1)
-  }
-
+function buildPluginCategoryOptions(categories: PluginCategoryItem[]): PluginCategoryOption[] {
   return [
     {
       key: allPluginCategoryKey,
       name: '全部',
       sort: -1,
-      count: plugins.length,
       icon: Database,
     },
     ...categories.map((category, index) => ({
       key: category.key,
       name: category.name,
       sort: category.sort,
-      count: counts.get(category.key) ?? 0,
       icon: pluginCategoryIcons[index % pluginCategoryIcons.length] ?? Workflow,
     })),
   ].sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name))
@@ -499,31 +475,24 @@ function removeCapability(key: string) {
 }
 
 async function loadPluginCatalog() {
+  const requestId = ++pluginCatalogRequestId
   pluginCatalogLoading.value = true
   try {
-    const [categories, mineResult, availableResult] = await Promise.all([
-      listPluginCategoriesApi(),
-      listPluginsApi({
-        page: 1,
-        pageSize: 200,
-        scope: 'mine',
-      }),
-      listPluginsApi({
-        page: 1,
-        pageSize: 200,
-        scope: 'available',
-      }),
+    const [categories, plugins] = await Promise.all([
+      loadPluginCategories(),
+      loadCurrentPluginCatalog(),
     ])
+    if (requestId !== pluginCatalogRequestId) return
     pluginCategoryCatalog.value = categories
-    myPluginCatalog.value = mineResult.items
-    publishedPluginCatalog.value = availableResult.items
-    if (
-      !pluginCategoryOptions.value.some((item) => item.key === activePluginCategoryKey.value)
-    ) {
+    pluginCatalog.value = plugins
+    mergePluginCatalogCache(plugins)
+    if (!pluginCategoryOptions.value.some((item) => item.key === activePluginCategoryKey.value)) {
       activePluginCategoryKey.value = allPluginCategoryKey
     }
   } finally {
-    pluginCatalogLoading.value = false
+    if (requestId === pluginCatalogRequestId) {
+      pluginCatalogLoading.value = false
+    }
   }
 }
 
@@ -534,11 +503,39 @@ function openPluginModal() {
 
 function selectPluginSource(key: PluginSourceKey) {
   activePluginSourceKey.value = key
+  void loadPluginCatalog()
 }
 
 function selectPluginCategory(key: string) {
   activePluginSourceKey.value = 'category'
   activePluginCategoryKey.value = key
+  void loadPluginCatalog()
+}
+
+function loadPluginCategories() {
+  if (pluginCategoryCatalog.value.length) return Promise.resolve(pluginCategoryCatalog.value)
+  return listPluginCategoriesApi()
+}
+
+async function loadCurrentPluginCatalog() {
+  const result = await listPluginsApi({
+    page: 1,
+    pageSize: 200,
+    scope: activePluginSourceKey.value === 'custom' ? 'mine' : 'available',
+    ...(activePluginSourceKey.value === 'category' &&
+    activePluginCategoryKey.value !== allPluginCategoryKey
+      ? { categoryKey: activePluginCategoryKey.value }
+      : {}),
+  })
+  return result.items
+}
+
+function mergePluginCatalogCache(items: PluginItem[]) {
+  const next = new Map(pluginCatalogCache.value.map((item) => [item.id, item]))
+  for (const item of items) {
+    next.set(item.id, item)
+  }
+  pluginCatalogCache.value = [...next.values()]
 }
 
 function togglePluginSelection(id: number) {

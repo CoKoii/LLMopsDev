@@ -33,6 +33,12 @@ const creatorName = computed(() => {
   const userInfo = authStore.userInfo as CurrentUserInfo | undefined
   return userInfo?.profile?.nickname || userInfo?.username || '用户'
 })
+const childRouteProps = computed(() => ({
+  searchValue: searchValue.value,
+  createKey: createKey.value,
+  creatorAvatar: creatorAvatar.value,
+  ...(route.name === 'personal-space-plugins' ? { creatorName: creatorName.value } : {}),
+}))
 
 watch(
   () => route.name,
@@ -56,13 +62,7 @@ onMounted(() => {
     <RouterView v-slot="{ Component }">
       <Transition name="personal-space-tab" mode="out-in">
         <div :key="route.name" class="personal-space-tab-panel">
-          <component
-            :is="Component"
-            :search-value="searchValue"
-            :create-key="createKey"
-            :creator-avatar="creatorAvatar"
-            :creator-name="creatorName"
-          />
+          <component :is="Component" v-bind="childRouteProps" />
         </div>
       </Transition>
     </RouterView>
