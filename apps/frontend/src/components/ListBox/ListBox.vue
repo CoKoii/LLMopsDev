@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Ellipsis } from '@lucide/vue'
+import { Empty } from 'antdv-next'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ListBoxAction, ListBoxActions, ListBoxItem } from './types'
 
@@ -112,7 +113,8 @@ onBeforeUnmount(() => {
     </div>
   </div>
   <div class="empty" v-else>
-    {{ loading ? '加载中...' : '暂无数据' }}
+    <span v-if="loading">加载中...</span>
+    <Empty v-else description="暂无数据" />
   </div>
 </template>
 
@@ -319,7 +321,7 @@ onBeforeUnmount(() => {
 }
 
 .empty {
-  height: 24rem;
+  min-height: calc(100vh - 17.6rem);
   display: grid;
   place-items: center;
   color: var(--font-light-color);
