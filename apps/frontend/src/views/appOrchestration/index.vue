@@ -733,12 +733,7 @@ onMounted(() => {
           <div class="orchestration-panel__header">
             <div class="app-orchestration__title-row">
               <h2>应用编排</h2>
-              <Popover
-                v-model:open="modelSettingsOpen"
-                trigger="click"
-                placement="bottomLeft"
-                force-render
-              >
+              <Popover v-model:open="modelSettingsOpen" trigger="click" placement="bottomLeft">
                 <button class="app-orchestration__model-trigger" type="button">
                   <Bot :size="14" />
                   <span>{{ selectedModelLabel }}</span>
