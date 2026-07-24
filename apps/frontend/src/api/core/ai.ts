@@ -141,6 +141,21 @@ export interface KnowledgeItem {
   updatedAt?: string
 }
 
+export interface KnowledgeDocumentItem {
+  id: number
+  knowledgeId: number
+  fileId?: number | null
+  name: string
+  contentType: string
+  size: number
+  url: string
+  characterCount: number
+  recallCount: number
+  enabled: boolean
+  createdAt?: string
+  updatedAt?: string
+}
+
 export type CreateLlmPayload = Omit<LlmItem, 'id' | 'createdAt' | 'updatedAt'>
 export type UpdateLlmPayload = Partial<CreateLlmPayload>
 
@@ -189,6 +204,15 @@ export interface CreateKnowledgePayload {
 }
 
 export type UpdateKnowledgePayload = Partial<CreateKnowledgePayload>
+
+export interface CreateKnowledgeDocumentPayload {
+  fileId: number
+}
+
+export interface UpdateKnowledgeDocumentPayload {
+  name?: string
+  enabled?: boolean
+}
 
 export const listLlmsApi = async (params?: PageParams): Promise<PageResult<LlmItem>> => {
   return request.get('/ai/llms', { params })
@@ -491,4 +515,30 @@ export const updateKnowledgeApi = async (id: number, payload: UpdateKnowledgePay
 
 export const deleteKnowledgeApi = async (id: number) => {
   return request.delete(`/ai/knowledge/${id}`)
+}
+
+export const listKnowledgeDocumentsApi = async (
+  knowledgeId: number,
+  params?: PageParams,
+): Promise<PageResult<KnowledgeDocumentItem>> => {
+  return request.get(`/ai/knowledge/${knowledgeId}/documents`, { params })
+}
+
+export const createKnowledgeDocumentApi = async (
+  knowledgeId: number,
+  payload: CreateKnowledgeDocumentPayload,
+): Promise<KnowledgeDocumentItem> => {
+  return request.post(`/ai/knowledge/${knowledgeId}/documents`, payload)
+}
+
+export const updateKnowledgeDocumentApi = async (
+  knowledgeId: number,
+  documentId: number,
+  payload: UpdateKnowledgeDocumentPayload,
+): Promise<KnowledgeDocumentItem> => {
+  return request.put(`/ai/knowledge/${knowledgeId}/documents/${documentId}`, payload)
+}
+
+export const deleteKnowledgeDocumentApi = async (knowledgeId: number, documentId: number) => {
+  return request.delete(`/ai/knowledge/${knowledgeId}/documents/${documentId}`)
 }

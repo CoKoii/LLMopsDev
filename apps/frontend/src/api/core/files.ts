@@ -22,7 +22,7 @@ interface UploadIntent {
 export const createUploadIntentApi = async (file: File): Promise<UploadIntent> => {
   return request.post('/files/upload-intents', {
     filename: file.name,
-    contentType: file.type,
+    contentType: file.type || 'application/octet-stream',
     size: file.size,
   })
 }
@@ -40,7 +40,7 @@ export const uploadFileApi = async (file: File): Promise<UploadedFile> => {
   })
 
   if (!response.ok) {
-    throw new Error('图片上传失败')
+    throw new Error('文件上传失败')
   }
 
   return completeUploadApi(intent.file.id)

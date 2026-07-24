@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { getKnowledgeApi, type KnowledgeItem } from '@/api'
+import {
+  createKnowledgeDocumentApi,
+  deleteKnowledgeDocumentApi,
+  getKnowledgeApi,
+  listKnowledgeDocumentsApi,
+  updateKnowledgeDocumentApi,
+  type KnowledgeDocumentItem,
+  type KnowledgeItem,
+} from '@/api'
 import AppModal from '@/components/AppModal/AppModal.vue'
 import { BookOutlined, EllipsisOutlined, SearchOutlined } from '@antdv-next/icons'
 import {
@@ -17,14 +25,13 @@ import {
 } from 'antdv-next'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { createMockDocuments, readUploadedDocuments, type KnowledgeDocument } from './documents'
 
 const route = useRoute()
 const router = useRouter()
 const knowledge = ref<KnowledgeItem>()
 const loading = ref(false)
 const searchValue = ref('')
-const documents = ref<KnowledgeDocument[]>([])
+const documents = ref<KnowledgeDocumentItem[]>([])
 const renameModalOpen = ref(false)
 const renameSaving = ref(false)
 const renameDocumentId = ref<number>()
@@ -35,7 +42,7 @@ const columns = [
   { title: '文档名', dataIndex: 'name', key: 'name' },
   { title: '字符数', dataIndex: 'characterCount', key: 'characterCount' },
   { title: '召回次数', dataIndex: 'recallCount', key: 'recallCount' },
-  { title: '上传时间', dataIndex: 'uploadedAt', key: 'uploadedAt' },
+  { title: '上传时间', dataIndex: 'createdAt', key: 'createdAt' },
   { title: '状态', dataIndex: 'enabled', key: 'enabled' },
   { title: '操作', key: 'operation', align: 'center' as const },
 ]
@@ -81,17 +88,37 @@ const formatCompactNumber = (value: number) => {
 
 const formatNumber = (value: number) => value.toLocaleString('en-US')
 
+const formatDateTime = (value?: string) => {
+  if (!value) return '-'
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+
+  const year = date.getFullYear()
+  const month = `${date.getMonth() + 1}`.padStart(2, '0')
+  const day = `${date.getDate()}`.padStart(2, '0')
+  const hours = `${date.getHours()}`.padStart(2, '0')
+  const minutes = `${date.getMinutes()}`.padStart(2, '0')
+  const seconds = `${date.getSeconds()}`.padStart(2, '0')
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
+}
+
 const loadKnowledge = async () => {
   const knowledgeId = parseKnowledgeId()
   if (!Number.isFinite(knowledgeId)) return
 
   loading.value = true
   try {
-    knowledge.value = await getKnowledgeApi(knowledgeId)
+    const [knowledgeDetail, documentResult] = await Promise.all([
+      getKnowledgeApi(knowledgeId),
+      listKnowledgeDocumentsApi(knowledgeId, { page: 1, pageSize: 100 }),
+    ])
+    knowledge.value = knowledgeDetail
+    documents.value = documentResult.items
   } catch {
     message.error('知识库详情获取失败')
+    documents.value = []
   } finally {
-    documents.value = [...readUploadedDocuments(knowledgeId), ...createMockDocuments()]
     loading.value = false
   }
 }
@@ -107,12 +134,21 @@ const addFile = () => {
   })
 }
 
-const toggleFile = (record: KnowledgeDocument, checked: boolean) => {
+const toggleFile = async (record: KnowledgeDocumentItem, checked: boolean) => {
+  const knowledgeId = parseKnowledgeId()
+  if (!Number.isFinite(knowledgeId)) return
+
+  const previousEnabled = record.enabled
   record.enabled = checked
-  message.success(checked ? '文档已启用' : '文档已禁用')
+  try {
+    await updateKnowledgeDocumentApi(knowledgeId, record.id, { enabled: checked })
+    message.success(checked ? '文档已启用' : '文档已禁用')
+  } catch {
+    record.enabled = previousEnabled
+  }
 }
 
-const openRenameModal = (record: KnowledgeDocument) => {
+const openRenameModal = (record: KnowledgeDocumentItem) => {
   renameDocumentId.value = record.id
   renameName.value = record.name
   renameModalOpen.value = true
@@ -124,8 +160,14 @@ const submitRename = async () => {
 
   renameSaving.value = true
   try {
+    const knowledgeId = parseKnowledgeId()
+    if (!Number.isFinite(knowledgeId)) return
+
+    const updatedDocument = await updateKnowledgeDocumentApi(knowledgeId, renameDocumentId.value, {
+      name,
+    })
     documents.value = documents.value.map((item) =>
-      item.id === renameDocumentId.value ? { ...item, name } : item,
+      item.id === updatedDocument.id ? updatedDocument : item,
     )
     message.success('文档已重命名')
     renameModalOpen.value = false
@@ -134,7 +176,7 @@ const submitRename = async () => {
   }
 }
 
-const confirmDeleteFile = (record: KnowledgeDocument) => {
+const confirmDeleteFile = (record: KnowledgeDocumentItem) => {
   Modal.confirm({
     title: '要删除该文档吗？',
     content: '删除后，该文档将从列表中移除。',
@@ -144,13 +186,17 @@ const confirmDeleteFile = (record: KnowledgeDocument) => {
     okText: '确认',
     cancelText: '取消',
     onOk: async () => {
+      const knowledgeId = parseKnowledgeId()
+      if (!Number.isFinite(knowledgeId)) return
+
+      await deleteKnowledgeDocumentApi(knowledgeId, record.id)
       documents.value = documents.value.filter((item) => item.id !== record.id)
       message.success('文档已删除')
     },
   })
 }
 
-const handleFileAction = (event: { key: string | number }, record: KnowledgeDocument) => {
+const handleFileAction = (event: { key: string | number }, record: KnowledgeDocumentItem) => {
   if (event.key === 'rename') {
     openRenameModal(record)
     return
@@ -221,6 +267,9 @@ watch(
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'characterCount'">
               {{ formatCompactNumber(record.characterCount) }}
+            </template>
+            <template v-else-if="column.key === 'createdAt'">
+              {{ formatDateTime(record.createdAt) }}
             </template>
             <template v-else-if="column.key === 'enabled'">
               <Badge

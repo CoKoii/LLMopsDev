@@ -1,9 +1,9 @@
 <script setup lang="ts">
+import { createKnowledgeDocumentApi, uploadFileApi } from '@/api'
 import { Check, FileText, Plus, Trash2 } from '@lucide/vue'
 import { Button, Checkbox, Input, message } from 'antdv-next'
-import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { createUploadedDocuments, readUploadedDocuments, writeUploadedDocuments } from '../documents'
 
 interface UploadFileItem {
   id: number
@@ -23,7 +23,6 @@ const wizardStep = ref<WizardStep>(1)
 const selectedFiles = ref<UploadFileItem[]>([])
 const chunkMode = ref<ChunkMode>('auto')
 const processing = ref(false)
-const processingTimer = ref<number>()
 const fileInputRef = ref<HTMLInputElement>()
 const customConfig = reactive({
   separator: '',
@@ -117,33 +116,6 @@ const removeSelectedFile = (fileId: number) => {
   selectedFiles.value = selectedFiles.value.filter((item) => item.id !== fileId)
 }
 
-const startProcessing = () => {
-  processing.value = true
-  selectedFiles.value = selectedFiles.value.map((item) => ({
-    ...item,
-    status: 'processing',
-    progress: item.progress || 12,
-  }))
-
-  processingTimer.value = window.setInterval(() => {
-    selectedFiles.value = selectedFiles.value.map((item) => {
-      if (item.status === 'done') return item
-
-      const nextProgress = Math.min(item.progress + 13 + Math.round(Math.random() * 16), 100)
-      return {
-        ...item,
-        progress: nextProgress,
-        status: nextProgress >= 100 ? 'done' : 'processing',
-      }
-    })
-
-    if (selectedFiles.value.every((item) => item.status === 'done')) {
-      window.clearInterval(processingTimer.value)
-      processing.value = false
-    }
-  }, 500)
-}
-
 const goNextStep = () => {
   if (wizardStep.value === 1 && selectedFiles.value.length === 0) {
     message.warning('请先上传文件')
@@ -169,7 +141,6 @@ const goNextStep = () => {
 
   if (wizardStep.value === 2) {
     wizardStep.value = 3
-    startProcessing()
   }
 }
 
@@ -179,22 +150,29 @@ const goPreviousStep = () => {
   }
 }
 
-const confirmUpload = () => {
-  window.clearInterval(processingTimer.value)
-  processing.value = false
-
+const confirmUpload = async () => {
   const knowledgeId = parseKnowledgeId()
-  const existingDocuments = readUploadedDocuments(knowledgeId)
-  const newDocuments = createUploadedDocuments(selectedFiles.value, existingDocuments)
+  if (!Number.isFinite(knowledgeId)) return
 
-  writeUploadedDocuments(knowledgeId, [...newDocuments, ...existingDocuments])
-  message.success('文件已添加')
-  void router.push({ name: 'knowledge-files', params: { knowledgeId } })
+  processing.value = true
+  try {
+    for (const item of selectedFiles.value) {
+      item.status = 'processing'
+      item.progress = 35
+
+      const uploadedFile = await uploadFileApi(item.file)
+      await createKnowledgeDocumentApi(knowledgeId, { fileId: uploadedFile.id })
+
+      item.status = 'done'
+      item.progress = 100
+    }
+
+    message.success('文件已添加')
+    void router.push({ name: 'knowledge-files', params: { knowledgeId } })
+  } finally {
+    processing.value = false
+  }
 }
-
-onBeforeUnmount(() => {
-  window.clearInterval(processingTimer.value)
-})
 </script>
 
 <template>
@@ -219,7 +197,13 @@ onBeforeUnmount(() => {
     <main class="upload-main">
       <Transition name="step-switch" mode="out-in">
         <section v-if="wizardStep === 1" key="upload-files" class="upload-panel">
-          <button class="drop-zone" type="button" @click="chooseFiles" @dragover.prevent @drop.prevent="handleDrop">
+          <button
+            class="drop-zone"
+            type="button"
+            @click="chooseFiles"
+            @dragover.prevent
+            @drop.prevent="handleDrop"
+          >
             <Plus class="drop-zone__icon" />
             <span>点击或拖拽文件到此处上传</span>
             <small>支持PDF、TXT、DOC、DOCX、MD，最多可上传10个文件，每个文件不超过10MB</small>
@@ -233,7 +217,12 @@ onBeforeUnmount(() => {
             @change="handleFileInputChange"
           />
 
-          <TransitionGroup v-if="selectedFiles.length" name="file-list" tag="div" class="selected-file-list">
+          <TransitionGroup
+            v-if="selectedFiles.length"
+            name="file-list"
+            tag="div"
+            class="selected-file-list"
+          >
             <div v-for="item in selectedFiles" :key="item.id" class="selected-file">
               <FileText class="selected-file__icon" />
               <span>{{ item.name }}</span>
@@ -277,14 +266,19 @@ onBeforeUnmount(() => {
               </label>
               <label>
                 <span>分段最大长度 <b>*</b></span>
-                <Input v-model:value="customConfig.maxSegmentLength" placeholder="请输入100 - 10000的数值" />
+                <Input
+                  v-model:value="customConfig.maxSegmentLength"
+                  placeholder="请输入100 - 10000的数值"
+                />
               </label>
               <div class="preprocess-rules">
                 <span>文本预处理规则</span>
                 <Checkbox v-model:checked="customConfig.replaceWhitespace">
                   替换连续的空格、换行符和制表符
                 </Checkbox>
-                <Checkbox v-model:checked="customConfig.removeUrls">删除所有 URL 和电子邮件地址</Checkbox>
+                <Checkbox v-model:checked="customConfig.removeUrls"
+                  >删除所有 URL 和电子邮件地址</Checkbox
+                >
               </div>
             </div>
           </div>
@@ -302,7 +296,13 @@ onBeforeUnmount(() => {
                 <span>{{ formatFileSize(item.size) }}</span>
               </div>
               <span class="processing-file__status">
-                {{ item.status === 'done' ? '处理完成' : `${item.progress}%` }}
+                {{
+                  item.status === 'done'
+                    ? '处理完成'
+                    : item.status === 'processing'
+                      ? `${item.progress}%`
+                      : '待处理'
+                }}
               </span>
             </div>
           </div>
@@ -315,7 +315,7 @@ onBeforeUnmount(() => {
       <div class="upload-actions">
         <Button v-if="wizardStep === 2" @click="goPreviousStep">上一步</Button>
         <Button v-if="wizardStep < 3" type="primary" @click="goNextStep">下一步</Button>
-        <Button v-else type="primary" @click="confirmUpload">确定</Button>
+        <Button v-else type="primary" :loading="processing" @click="confirmUpload">确定</Button>
       </div>
     </footer>
   </div>
