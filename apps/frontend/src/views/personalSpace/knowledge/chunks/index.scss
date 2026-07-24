@@ -1,0 +1,252 @@
+.knowledge-chunks-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 2.2rem 1.8rem;
+  color: var(--font-color);
+  background: var(--body-bg);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.knowledge-chunks-header {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2.4rem;
+  margin-bottom: 2.4rem;
+}
+
+.knowledge-chunks-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1.6rem;
+}
+
+.knowledge-chunks-title {
+  display: flex;
+  align-items: center;
+  gap: 1.6rem;
+  justify-content: flex-start;
+}
+
+.knowledge-chunks-title__icon {
+  display: grid;
+  width: 4rem;
+  height: 4rem;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 0.1rem solid var(--border-color);
+  border-radius: 0.8rem;
+  color: var(--primary-color);
+  background: var(--white);
+  box-sizing: border-box;
+}
+
+.knowledge-chunks-title__content {
+  min-width: 0;
+}
+
+.knowledge-chunks-title__content h1 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--font-active-color);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 2rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-chunks-title__content p {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0;
+}
+
+.knowledge-chunks-search {
+  width: 24rem;
+}
+
+.knowledge-chunks-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1.2rem;
+}
+
+.knowledge-chunks-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  height: 3.2rem;
+  padding: 0 1.2rem;
+  border: 0.1rem solid var(--border-color);
+  border-radius: 0.8rem;
+  color: var(--font-color);
+  background: var(--white);
+  font-size: 1.4rem;
+  line-height: 1;
+  box-sizing: border-box;
+}
+
+.status-dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--font-light-color);
+}
+
+.status-dot.is-enabled {
+  background: #52c41a;
+}
+
+.knowledge-chunks-main {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.knowledge-chunks-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(22rem, 1fr));
+  gap: 2.2rem 2rem;
+  align-content: start;
+  padding-bottom: 2.4rem;
+}
+
+.chunk-card {
+  display: flex;
+  flex-direction: column;
+  height: 20.4rem;
+  padding: 1.4rem;
+  border: 0.1rem solid var(--border-color);
+  border-radius: 0.8rem;
+  background: var(--white);
+  box-sizing: border-box;
+}
+
+.chunk-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  gap: 1rem;
+}
+
+.chunk-card footer {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr) 2.8rem;
+  align-items: center;
+  flex: none;
+  gap: 1rem;
+  color: var(--font-light-color);
+  font-size: 1.2rem;
+}
+
+.chunk-card__status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  min-width: 0;
+  color: var(--font-light-color);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.chunk-card__body {
+  display: -webkit-box;
+  flex: 1;
+  margin: 1.2rem 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  color: var(--font-color);
+  background: transparent;
+  font-size: 1.4rem;
+  line-height: 2rem;
+  text-align: left;
+  cursor: pointer;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
+}
+
+.chunk-card footer > span {
+  display: inline-flex;
+  align-items: center;
+}
+
+.chunk-card__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.chunk-card__actions :deep(.ant-btn) {
+  width: 2.4rem;
+  height: 2.4rem;
+}
+
+.knowledge-chunks-empty {
+  display: grid;
+  height: 24rem;
+  place-items: center;
+  color: var(--font-light-color);
+}
+
+.chunk-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.8rem;
+}
+
+.chunk-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.chunk-form label > span {
+  color: var(--font-active-color);
+  font-weight: 600;
+}
+
+.chunk-form label > span b {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.chunk-form textarea {
+  height: 19rem;
+  resize: none;
+  border: 0;
+  border-radius: 0.8rem;
+  background: var(--touch-bg);
+}
+
+:global(.chunk-keywords-select .ant-select-content) {
+  min-height: 3.2rem;
+  padding-inline-end: 0;
+  background: var(--touch-bg);
+}
+
+:global(.chunk-keywords-select .ant-select-suffix) {
+  display: none !important;
+}
+
+@media (max-width: 1320px) {
+  .knowledge-chunks-grid {
+    grid-template-columns: repeat(3, minmax(22rem, 1fr));
+  }
+}
+
+@media (max-width: 980px) {
+  .knowledge-chunks-grid {
+    grid-template-columns: repeat(2, minmax(22rem, 1fr));
+  }
+}

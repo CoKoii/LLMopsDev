@@ -3,6 +3,7 @@ import {
   createKnowledgeDocumentApi,
   getKnowledgeDocumentApi,
   uploadFileApi,
+  type KnowledgeDocumentChunkConfig,
   type KnowledgeDocumentItem,
 } from '@/api'
 import { Check, FileText, Plus, Trash2 } from '@lucide/vue'
@@ -203,13 +204,28 @@ const resolveDocumentProgress = (document: KnowledgeDocumentItem) => {
   return '等待处理'
 }
 
+const buildChunkConfig = (): KnowledgeDocumentChunkConfig | undefined => {
+  if (chunkMode.value !== 'custom') return undefined
+
+  return {
+    separator: customConfig.separator.trim(),
+    maxSegmentLength: Number(customConfig.maxSegmentLength),
+    replaceWhitespace: customConfig.replaceWhitespace,
+    removeUrls: customConfig.removeUrls,
+  }
+}
+
 const pollDocumentProgress = async (
   knowledgeId: number,
   documentId: number,
   item: UploadFileItem,
 ) => {
   while (!disposed) {
-    const document = await getKnowledgeDocumentApi(knowledgeId, documentId)
+    const document = await getKnowledgeDocumentApi(knowledgeId, documentId, {
+      suppressErrorNotify: true,
+    })
+    if (disposed) return
+
     item.message = resolveDocumentProgress(document)
 
     if (hasDocumentFailed(document)) {
@@ -228,21 +244,41 @@ const pollDocumentProgress = async (
   }
 }
 
-const processSelectedFile = async (knowledgeId: number, item: UploadFileItem) => {
+const processSelectedFile = async (
+  knowledgeId: number,
+  item: UploadFileItem,
+  chunkConfig?: KnowledgeDocumentChunkConfig,
+) => {
   try {
+    if (disposed) return
     item.status = 'uploading'
     item.message = '上传中'
 
-    const uploadedFile = await uploadFileApi(item.file)
+    const uploadedFile = await uploadFileApi(item.file, {
+      suppressErrorNotify: true,
+    })
+    if (disposed) return
+
     item.status = 'creating'
     item.message = '创建文档'
 
-    const document = await createKnowledgeDocumentApi(knowledgeId, { fileId: uploadedFile.id })
+    const document = await createKnowledgeDocumentApi(
+      knowledgeId,
+      {
+        fileId: uploadedFile.id,
+        chunkConfig,
+      },
+      { suppressErrorNotify: true },
+    )
+    if (disposed) return
+
     item.status = 'processing'
     item.message = resolveDocumentProgress(document)
 
     await pollDocumentProgress(knowledgeId, document.id, item)
   } catch {
+    if (disposed) return
+
     item.status = 'failed'
     item.message = '处理失败'
   }
@@ -254,7 +290,12 @@ const startProcessing = async () => {
   if (processingStarted.value) return
 
   processingStarted.value = true
-  await Promise.all(selectedFiles.value.map((item) => processSelectedFile(knowledgeId, item)))
+  const chunkConfig = buildChunkConfig()
+  await Promise.all(
+    selectedFiles.value.map((item) => processSelectedFile(knowledgeId, item, chunkConfig)),
+  )
+  if (disposed) return
+
   if (selectedFiles.value.every((item) => item.status === 'completed')) {
     message.success('文件处理完成')
   } else {

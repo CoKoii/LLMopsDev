@@ -3,8 +3,15 @@ import type {
   ParsedDocument,
   ParsedDocumentBlock,
 } from "../document-parser/document-parser.types";
-import { blocksToText, normalizeText } from "../document-parser/parsers/parser.utils";
-import type { CleanedDocument, DocumentCleanerResult } from "./document-cleaner.types";
+import {
+  blocksToText,
+  normalizeText,
+} from "../document-parser/parsers/parser.utils";
+import type { KnowledgeDocumentChunkConfig } from "../knowledge-document-process.types";
+import type {
+  CleanedDocument,
+  DocumentCleanerResult,
+} from "./document-cleaner.types";
 
 const PRESERVE_FORMAT_TYPES = new Set<ParsedDocumentBlock["type"]>([
   "code",
@@ -26,6 +33,9 @@ const RULES = [
   "dedupe-adjacent-blocks",
 ];
 
+const URL_OR_EMAIL_PATTERN =
+  /https?:\/\/\S+|www\.\S+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+
 const removeControlCharacters = (value: string) =>
   value
     .replace(/\u0000/g, "")
@@ -37,8 +47,22 @@ const isPageMarkLine = (value: string) => {
   return PAGE_MARK_PATTERNS.some((pattern) => pattern.test(text));
 };
 
-const cleanFreeText = (value: string) =>
-  removeControlCharacters(value)
+const applyCustomCleaning = (
+  value: string,
+  config?: KnowledgeDocumentChunkConfig,
+) => {
+  let text = value;
+  if (config?.removeUrls) {
+    text = text.replace(URL_OR_EMAIL_PATTERN, "");
+  }
+  if (config?.replaceWhitespace) {
+    text = text.replace(/\s+/g, " ");
+  }
+  return text;
+};
+
+const cleanFreeText = (value: string, config?: KnowledgeDocumentChunkConfig) =>
+  applyCustomCleaning(removeControlCharacters(value), config)
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
     .split("\n")
@@ -48,19 +72,30 @@ const cleanFreeText = (value: string) =>
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-const cleanPreservedText = (value: string) =>
-  normalizeText(removeControlCharacters(value)).replace(/\n{4,}/g, "\n\n\n");
+const cleanPreservedText = (
+  value: string,
+  config?: KnowledgeDocumentChunkConfig,
+) =>
+  normalizeText(
+    applyCustomCleaning(removeControlCharacters(value), config),
+  ).replace(/\n{4,}/g, "\n\n\n");
 
-const cleanTableRows = (rows?: string[][]) =>
+const cleanTableRows = (
+  rows?: string[][],
+  config?: KnowledgeDocumentChunkConfig,
+) =>
   rows
-    ?.map((row) => row.map((cell) => cleanFreeText(cell)))
+    ?.map((row) => row.map((cell) => cleanFreeText(cell, config)))
     .filter((row) => row.some(Boolean));
 
 const createBlockId = (index: number) => `block-${index + 1}`;
 
 @Injectable()
 export class DocumentCleanerService {
-  clean(parsedDocument: ParsedDocument): DocumentCleanerResult {
+  clean(
+    parsedDocument: ParsedDocument,
+    config?: KnowledgeDocumentChunkConfig,
+  ): DocumentCleanerResult {
     if (!parsedDocument.blocks.length) {
       throw new BadRequestException("解析结果为空，无法清洗");
     }
@@ -69,13 +104,13 @@ export class DocumentCleanerService {
     let removedBlockCount = 0;
 
     for (const block of parsedDocument.blocks) {
-      const rows = cleanTableRows(block.rows);
+      const rows = cleanTableRows(block.rows, config);
       const text =
         block.type === "table" && rows?.length
           ? rows.map((row) => row.join(" | ")).join("\n")
           : PRESERVE_FORMAT_TYPES.has(block.type)
-            ? cleanPreservedText(block.text)
-            : cleanFreeText(block.text);
+            ? cleanPreservedText(block.text, config)
+            : cleanFreeText(block.text, config);
 
       if (!text) {
         removedBlockCount += 1;
@@ -106,7 +141,9 @@ export class DocumentCleanerService {
               },
             }
           : {}),
-        headingPath: block.headingPath?.map(cleanFreeText).filter(Boolean),
+        headingPath: block.headingPath
+          ?.map((heading) => cleanFreeText(heading, config))
+          .filter(Boolean),
       });
     }
 

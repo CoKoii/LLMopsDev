@@ -48,6 +48,12 @@ export class KnowledgeDocumentChunk extends AuditableEntity {
   @Column({ comment: "字符数", type: "int" })
   characterCount!: number;
 
+  @Column({ comment: "召回次数", type: "int", default: 0 })
+  recallCount!: number;
+
+  @Column({ comment: "是否启用", default: true })
+  enabled!: boolean;
+
   @Column({ comment: "Embedding模型", length: 100 })
   embeddingModel!: string;
 

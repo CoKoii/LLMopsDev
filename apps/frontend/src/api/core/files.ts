@@ -19,20 +19,39 @@ interface UploadIntent {
   }
 }
 
-export const createUploadIntentApi = async (file: File): Promise<UploadIntent> => {
-  return request.post('/files/upload-intents', {
-    filename: file.name,
-    contentType: file.type || 'application/octet-stream',
-    size: file.size,
+interface UploadRequestOptions {
+  suppressErrorNotify?: boolean
+}
+
+export const createUploadIntentApi = async (
+  file: File,
+  options: UploadRequestOptions = {},
+): Promise<UploadIntent> => {
+  return request.post(
+    '/files/upload-intents',
+    {
+      filename: file.name,
+      contentType: file.type || 'application/octet-stream',
+      size: file.size,
+    },
+    { suppressErrorNotify: options.suppressErrorNotify },
+  )
+}
+
+export const completeUploadApi = async (
+  id: number,
+  options: UploadRequestOptions = {},
+): Promise<UploadedFile> => {
+  return request.post(`/files/${id}/complete`, undefined, {
+    suppressErrorNotify: options.suppressErrorNotify,
   })
 }
 
-export const completeUploadApi = async (id: number): Promise<UploadedFile> => {
-  return request.post(`/files/${id}/complete`)
-}
-
-export const uploadFileApi = async (file: File): Promise<UploadedFile> => {
-  const intent = await createUploadIntentApi(file)
+export const uploadFileApi = async (
+  file: File,
+  options: UploadRequestOptions = {},
+): Promise<UploadedFile> => {
+  const intent = await createUploadIntentApi(file, options)
   const response = await fetch(intent.upload.url, {
     method: intent.upload.method,
     headers: intent.upload.headers,
@@ -43,5 +62,5 @@ export const uploadFileApi = async (file: File): Promise<UploadedFile> => {
     throw new Error('文件上传失败')
   }
 
-  return completeUploadApi(intent.file.id)
+  return completeUploadApi(intent.file.id, options)
 }

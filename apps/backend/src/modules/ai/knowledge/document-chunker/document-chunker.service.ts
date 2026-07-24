@@ -3,6 +3,8 @@ import type {
   ParsedDocumentBlock,
   ParsedDocumentBlockType,
 } from "../document-parser/document-parser.types";
+import { extractChunkKeywords } from "../document-keyword-extractor";
+import type { KnowledgeDocumentChunkConfig } from "../knowledge-document-process.types";
 import type {
   DocumentChunkDraft,
   DocumentChunkerInput,
@@ -16,18 +18,23 @@ interface ParagraphUnit {
   blockTypes: ParsedDocumentBlockType[];
   pages: number[];
   tokenCount: number;
+  breakBefore?: boolean;
 }
 
 interface ChunkGroup {
   units: ParagraphUnit[];
 }
 
-const MAX_TOKENS = 700;
+const DEFAULT_MAX_TOKENS = 700;
+const MIN_CHUNK_TOKENS = 160;
 const OVERLAP_TOKENS = 80;
 
 const unique = <T>(items: T[]) => Array.from(new Set(items));
 
 const compact = (value: string) => value.replace(/\s+/g, " ").trim();
+
+const escapeRegExp = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const estimateTokens = (text: string) => {
   const cjkCount = text.match(/[\u3400-\u9fff]/g)?.length ?? 0;
@@ -49,12 +56,25 @@ const collectHeadingPath = (
   ].filter(Boolean);
 };
 
+const resolveBlockHeadingPath = (
+  currentHeadingPath: string[],
+  block: ParsedDocumentBlock,
+  fallbackHeadingPath = currentHeadingPath,
+) => {
+  const headingPath = block.headingPath?.map(compact).filter(Boolean) ?? [];
+  if (headingPath.length) return headingPath;
+
+  return block.type === "heading"
+    ? collectHeadingPath(currentHeadingPath, block)
+    : fallbackHeadingPath;
+};
+
 const blockToUnit = (
   block: ParsedDocumentBlock,
   headingPath: string[],
 ): ParagraphUnit | undefined => {
   const text = compact(block.text);
-  if (!text || block.type === "heading") return undefined;
+  if (!text) return undefined;
 
   return {
     text,
@@ -73,6 +93,9 @@ const commonHeadingPath = (units: ParagraphUnit[]) => {
   );
 };
 
+const sameHeadingRoot = (left: string[], right: string[]) =>
+  Boolean(left[0] && right[0] && left[0] === right[0]);
+
 const mergeUnits = (units: ParagraphUnit[]): ParagraphUnit => {
   const text = units.map((unit) => unit.text).join("\n\n");
   return {
@@ -85,20 +108,82 @@ const mergeUnits = (units: ParagraphUnit[]): ParagraphUnit => {
   };
 };
 
-const splitOversizedUnit = (unit: ParagraphUnit): ParagraphUnit[] => {
-  if (unit.tokenCount <= MAX_TOKENS) return [unit];
+const resolveMaxTokens = (config?: KnowledgeDocumentChunkConfig) =>
+  typeof config?.maxSegmentLength === "number" &&
+  Number.isFinite(config.maxSegmentLength)
+    ? Math.max(100, Math.min(config.maxSegmentLength, 10000))
+    : DEFAULT_MAX_TOKENS;
+
+const resolveSeparators = (config?: KnowledgeDocumentChunkConfig) =>
+  (config?.separator ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const splitUnitBySeparators = (
+  unit: ParagraphUnit,
+  separators: string[],
+): ParagraphUnit[] => {
+  if (!separators.length) return [unit];
+
+  const separatorPattern = new RegExp(
+    separators.map(escapeRegExp).join("|"),
+    "g",
+  );
+  return unit.text.split(separatorPattern).flatMap((value, index) => {
+    const text = compact(value);
+    if (!text) return [];
+
+    return {
+      ...unit,
+      text,
+      tokenCount: estimateTokens(text),
+      breakBefore: index > 0,
+    };
+  });
+};
+
+const splitByCharacterLimit = (
+  unit: ParagraphUnit,
+  maxTokens: number,
+): ParagraphUnit[] => {
+  if (unit.tokenCount <= maxTokens) return [unit];
+
+  const chunks: ParagraphUnit[] = [];
+  const maxCharacters = Math.max(1, maxTokens);
+
+  for (let start = 0; start < unit.text.length; start += maxCharacters) {
+    const text = compact(unit.text.slice(start, start + maxCharacters));
+    if (!text) continue;
+
+    chunks.push({
+      ...unit,
+      text,
+      tokenCount: estimateTokens(text),
+      breakBefore: chunks.length > 0 || unit.breakBefore,
+    });
+  }
+
+  return chunks;
+};
+
+const splitOversizedUnit = (
+  unit: ParagraphUnit,
+  maxTokens: number,
+): ParagraphUnit[] => {
+  if (unit.tokenCount <= maxTokens) return [unit];
 
   const parts = unit.text
     .split(/(?<=[。！？.!?])\s+|\n+/u)
     .map(compact)
     .filter(Boolean);
-  if (parts.length <= 1) return [unit];
+  if (parts.length <= 1) return splitByCharacterLimit(unit, maxTokens);
 
   const chunks: string[] = [];
   let current = "";
   for (const part of parts) {
     const next = current ? `${current}\n${part}` : part;
-    if (estimateTokens(next) > MAX_TOKENS && current) {
+    if (estimateTokens(next) > maxTokens && current) {
       chunks.push(current);
       current = part;
     } else {
@@ -107,11 +192,17 @@ const splitOversizedUnit = (unit: ParagraphUnit): ParagraphUnit[] => {
   }
   if (current) chunks.push(current);
 
-  return chunks.map((text) => ({
-    ...unit,
-    text,
-    tokenCount: estimateTokens(text),
-  }));
+  return chunks.flatMap((text, index) =>
+    splitByCharacterLimit(
+      {
+        ...unit,
+        text,
+        tokenCount: estimateTokens(text),
+        breakBefore: index > 0 || unit.breakBefore,
+      },
+      maxTokens,
+    ),
+  );
 };
 
 const overlapTail = (text: string) => {
@@ -128,24 +219,19 @@ const overlapTail = (text: string) => {
     : tail;
 };
 
-const chunkPrelude = (input: DocumentChunkerInput, headingPath: string[]) =>
-  [
-    `文档：${input.document.title || input.documentName}`,
-    input.summary ? `摘要：${input.summary}` : undefined,
-    input.keywords?.length ? `关键词：${input.keywords.join("、")}` : undefined,
-    headingPath.length ? `章节：${headingPath.join(" / ")}` : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n");
+const chunkPrelude = (headingPath: string[]) =>
+  headingPath.length ? `章节：${headingPath.join(" / ")}` : "";
 
 const chunkEmbeddingText = (
-  input: DocumentChunkerInput,
+  documentTitle: string,
   headingPath: string[],
+  overlap: string,
   text: string,
 ) =>
   [
-    `文档：${input.document.title || input.documentName}`,
+    `文档：${documentTitle}`,
     headingPath.length ? `章节：${headingPath.join(" / ")}` : undefined,
+    overlap ? `上文：${overlap}` : undefined,
     text,
   ]
     .filter(Boolean)
@@ -156,14 +242,16 @@ export class DocumentChunkerService {
   async createChunks(
     input: DocumentChunkerInput,
   ): Promise<DocumentChunkDraft[]> {
-    const units = this.createParagraphUnits(input.document.blocks);
+    const maxTokens = resolveMaxTokens(input.chunkConfig);
+    const separators = resolveSeparators(input.chunkConfig);
+    const units = this.createParagraphUnits(input.document.blocks, separators);
     if (!units.length) {
       throw new BadRequestException("增强结果为空，无法切块");
     }
 
-    const chunkGroups = this.createChunkGroups(units);
+    const chunkGroups = this.createChunkGroups(units, maxTokens);
     const limitedGroups = chunkGroups.flatMap((group) =>
-      splitOversizedUnit(mergeUnits(group.units)).map((unit) => ({
+      splitOversizedUnit(mergeUnits(group.units), maxTokens).map((unit) => ({
         units: [unit],
       })),
     );
@@ -171,24 +259,35 @@ export class DocumentChunkerService {
     return this.createFinalChunks(input, limitedGroups);
   }
 
-  private createParagraphUnits(blocks: ParsedDocumentBlock[]) {
+  private createParagraphUnits(
+    blocks: ParsedDocumentBlock[],
+    separators: string[],
+  ) {
     let headingPath: string[] = [];
     const units: ParagraphUnit[] = [];
 
     for (const block of blocks) {
       if (block.type === "heading") {
-        headingPath = collectHeadingPath(headingPath, block);
+        headingPath = resolveBlockHeadingPath(headingPath, block);
+        const unit = blockToUnit(block, headingPath);
+        if (unit) units.push(unit);
         continue;
       }
 
-      const unit = blockToUnit(block, block.headingPath ?? headingPath);
-      if (unit) units.push(unit);
+      const unit = blockToUnit(
+        block,
+        resolveBlockHeadingPath(headingPath, block),
+      );
+      if (unit) units.push(...splitUnitBySeparators(unit, separators));
     }
 
     return units;
   }
 
-  private createChunkGroups(units: ParagraphUnit[]): ChunkGroup[] {
+  private createChunkGroups(
+    units: ParagraphUnit[],
+    maxTokens: number,
+  ): ChunkGroup[] {
     const groups: ChunkGroup[] = [];
     let current: ParagraphUnit[] = [];
 
@@ -201,10 +300,20 @@ export class DocumentChunkerService {
       const previous = current[current.length - 1];
       const sameSection =
         previous?.headingPath.join("\n") === unit.headingPath.join("\n");
-      const mergedTokenCount =
-        current.reduce((total, item) => total + item.tokenCount, 0) +
-        unit.tokenCount;
-      const shouldMerge = sameSection && mergedTokenCount <= MAX_TOKENS;
+      const sameRootSection = sameHeadingRoot(
+        previous?.headingPath ?? [],
+        unit.headingPath,
+      );
+      const currentTokenCount = current.reduce(
+        (total, item) => total + item.tokenCount,
+        0,
+      );
+      const mergedTokenCount = currentTokenCount + unit.tokenCount;
+      const shouldMerge =
+        !unit.breakBefore &&
+        (sameSection ||
+          (sameRootSection && currentTokenCount < MIN_CHUNK_TOKENS)) &&
+        mergedTokenCount <= maxTokens;
 
       if (shouldMerge) {
         current.push(unit);
@@ -229,8 +338,13 @@ export class DocumentChunkerService {
       const previousText = chunks[chunks.length - 1]?.text;
       const overlap = previousText ? overlapTail(previousText) : "";
       const text = merged.text;
-      const prelude = chunkPrelude(input, merged.headingPath);
-      const embeddingText = chunkEmbeddingText(input, merged.headingPath, text);
+      const prelude = chunkPrelude(merged.headingPath);
+      const embeddingText = chunkEmbeddingText(
+        input.document.title,
+        merged.headingPath,
+        overlap,
+        text,
+      );
       const searchText = [
         prelude,
         overlap ? `上文：${overlap}` : undefined,
@@ -239,6 +353,7 @@ export class DocumentChunkerService {
         .filter(Boolean)
         .join("\n\n");
       const chunkIndex = chunks.length;
+      const keywords = extractChunkKeywords(text, merged.headingPath);
       const metadata: DocumentChunkMetadata = {
         knowledgeId: input.knowledgeId,
         documentId: input.documentId,
@@ -255,8 +370,7 @@ export class DocumentChunkerService {
         tokenCount: estimateTokens(text),
         characterCount: text.length,
         overlapFromPrevious: Boolean(overlap),
-        summary: input.summary,
-        keywords: input.keywords ?? [],
+        keywords,
       };
 
       chunks.push({

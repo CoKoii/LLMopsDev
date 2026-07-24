@@ -1,11 +1,12 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { randomUUID } from "crypto";
-import { Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import { OssService } from "../../../common/oss/oss.service";
 import { FilesService } from "../../files/files.service";
 import {
@@ -16,14 +17,19 @@ import {
 import { DocumentProcessQueueService } from "./document-process-queue.service";
 import { DocumentCleanerService } from "./document-cleaner/document-cleaner.service";
 import { DocumentChunkerService } from "./document-chunker/document-chunker.service";
+import type { DocumentChunkMetadata } from "./document-chunker/document-chunker.types";
 import { DocumentEmbeddingService } from "./document-embedding/document-embedding.service";
 import { DocumentEnhancerService } from "./document-enhancer/document-enhancer.service";
 import { DocumentParserService } from "./document-parser/document-parser.service";
 import { DocumentVectorStoreService } from "./document-vector-store/document-vector-store.service";
+import { CreateKnowledgeDocumentChunkDto } from "./dto/create-knowledge-document-chunk.dto";
 import { CreateKnowledgeDocumentDto } from "./dto/create-knowledge-document.dto";
 import { CreateKnowledgeDto } from "./dto/create-knowledge.dto";
+import { QueryKnowledgeDocumentChunksDto } from "./dto/query-knowledge-document-chunks.dto";
 import { QueryKnowledgeDocumentsDto } from "./dto/query-knowledge-documents.dto";
 import { QueryKnowledgeDto } from "./dto/query-knowledge.dto";
+import { RecallTestDto } from "./dto/recall-test.dto";
+import { UpdateKnowledgeDocumentChunkDto } from "./dto/update-knowledge-document-chunk.dto";
 import { UpdateKnowledgeDocumentDto } from "./dto/update-knowledge-document.dto";
 import { UpdateKnowledgeDto } from "./dto/update-knowledge.dto";
 import {
@@ -37,6 +43,74 @@ import {
 } from "./entities/knowledge-document.entity";
 import { KnowledgeDocumentChunk } from "./entities/knowledge-document-chunk.entity";
 import { Knowledge } from "./entities/knowledge.entity";
+import type { KnowledgeDocumentChunkConfig } from "./knowledge-document-process.types";
+
+interface RecallMatch {
+  chunkId: number;
+  score: number;
+  source: "vector" | "text" | "hybrid";
+  vectorScore?: number;
+  textScore?: number;
+}
+
+const clampScore = (score: number) =>
+  Math.max(0, Math.min(1, Number(score.toFixed(4))));
+
+const escapeLikeValue = (value: string) =>
+  value.replace(/[\\%_]/g, (match) => `\\${match}`);
+
+const normalizeRecallText = (value: string) =>
+  value.toLowerCase().replace(/\s+/g, " ").trim();
+
+const uniqueStrings = (items: string[]) => [...new Set(items)];
+
+const extractRecallTerms = (query: string) => {
+  const normalizedQuery = normalizeRecallText(query);
+  const terms: string[] = [];
+
+  terms.push(
+    ...Array.from(
+      normalizedQuery.matchAll(/[A-Za-z][A-Za-z0-9_./+-]{1,}/g),
+      (match) => match[0].toLowerCase(),
+    ),
+  );
+
+  for (const match of normalizedQuery.matchAll(/[\u3400-\u9fff]{2,}/g)) {
+    const word = match[0];
+    terms.push(word);
+
+    for (let index = 0; index <= word.length - 2; index += 1) {
+      terms.push(word.slice(index, index + 2));
+    }
+  }
+
+  return uniqueStrings(
+    terms.map((term) => term.trim()).filter((term) => term.length >= 2),
+  );
+};
+
+const recallTermWeight = (term: string) =>
+  /[\u3400-\u9fff]/.test(term)
+    ? Math.min(term.length, 6)
+    : Math.min(Math.ceil(term.length / 2), 6);
+
+const looksLikeMetadataBlock = (text: string) =>
+  /^\s*[A-Za-z][\w.-]{1,40}\s*:/u.test(text);
+
+const estimateChunkTokens = (text: string) => {
+  const cjkCount = text.match(/[\u3400-\u9fff]/g)?.length ?? 0;
+  const words = text.match(/[A-Za-z0-9_./:-]+/g)?.length ?? 0;
+  const other = Math.max(0, text.length - cjkCount);
+  return Math.max(1, Math.ceil(cjkCount + words * 1.25 + other * 0.08));
+};
+
+const compactChunkText = (value: string) => value.replace(/\s+/g, " ").trim();
+
+const normalizeChunkKeywords = (keywords: string[] | undefined) =>
+  [...new Set((keywords ?? []).map(compactChunkText).filter(Boolean))].slice(
+    0,
+    10,
+  );
 
 @Injectable()
 export class KnowledgeService {
@@ -174,6 +248,247 @@ export class KnowledgeService {
     await this.chunkRepository.delete({ documentId });
   }
 
+  private createChunkSearchText(chunk: KnowledgeDocumentChunk) {
+    const headingPath = chunk.metadata.headingPath ?? [];
+    return [
+      headingPath.length ? `章节：${headingPath.join(" / ")}` : undefined,
+      chunk.text,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
+
+  private createChunkEmbeddingText(
+    document: KnowledgeDocument,
+    chunk: KnowledgeDocumentChunk,
+  ) {
+    const headingPath = chunk.metadata.headingPath ?? [];
+    return [
+      `文档：${document.name}`,
+      headingPath.length ? `章节：${headingPath.join(" / ")}` : undefined,
+      chunk.text,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
+
+  private async upsertChunkVector(
+    document: KnowledgeDocument,
+    chunk: KnowledgeDocumentChunk,
+  ) {
+    const embeddingResult = await this.documentEmbeddingService.embed([
+      this.createChunkEmbeddingText(document, chunk),
+    ]);
+    const vector = embeddingResult.vectors[0] ?? [];
+
+    await this.documentVectorStoreService.ensureCollection(
+      embeddingResult.dimension,
+    );
+
+    chunk.embeddingModel = embeddingResult.model;
+    chunk.embeddingDimension = embeddingResult.dimension;
+    chunk.vectorId ||= randomUUID();
+    const savedChunk = await this.chunkRepository.save(chunk);
+
+    await this.documentVectorStoreService.upsert([
+      {
+        id: savedChunk.vectorId,
+        vector,
+        payload: {
+          knowledgeId: savedChunk.knowledgeId,
+          documentId: savedChunk.documentId,
+          documentName: document.name,
+          chunkId: savedChunk.id,
+          chunkIndex: savedChunk.chunkIndex,
+          text: savedChunk.text,
+          searchText: savedChunk.searchText,
+          enabled: savedChunk.enabled,
+          metadata: savedChunk.metadata,
+        },
+      },
+    ]);
+
+    return savedChunk;
+  }
+
+  private createManualChunkMetadata(
+    document: KnowledgeDocument,
+    chunkIndex: number,
+    text: string,
+    keywords: string[],
+  ): DocumentChunkMetadata {
+    return {
+      knowledgeId: document.knowledgeId,
+      documentId: document.id,
+      documentName: document.name,
+      documentTitle: document.name,
+      contentType: document.contentType,
+      format: document.parsedDocument?.format ?? "manual",
+      chunkIndex,
+      sectionTitle: "手动片段",
+      headingPath: ["手动片段"],
+      sourceBlockIds: [],
+      blockTypes: ["paragraph"],
+      pages: [],
+      tokenCount: estimateChunkTokens(text),
+      characterCount: text.length,
+      overlapFromPrevious: false,
+      keywords,
+    };
+  }
+
+  private async syncDocumentChunkCount(documentId: number) {
+    const chunkCount = await this.chunkRepository.count({ where: { documentId } });
+    await this.documentRepository.update({ id: documentId }, { chunkCount });
+    return chunkCount;
+  }
+
+  private async searchVectorRecall(
+    knowledgeId: number,
+    query: string,
+    limit: number,
+    minScore: number,
+  ): Promise<RecallMatch[]> {
+    const embeddingResult = await this.documentEmbeddingService.embed([query]);
+    const vector = embeddingResult.vectors[0] ?? [];
+    const points = await this.documentVectorStoreService.search({
+      vector,
+      knowledgeId,
+      limit,
+      scoreThreshold: minScore || undefined,
+    });
+
+    return points.map((point) => ({
+      chunkId: point.payload.chunkId,
+      score: point.score,
+      vectorScore: point.score,
+      source: "vector",
+    }));
+  }
+
+  private async searchTextRecall(
+    knowledgeId: number,
+    query: string,
+    limit: number,
+    minScore: number,
+  ): Promise<RecallMatch[]> {
+    const terms = extractRecallTerms(query);
+    if (!terms.length) return [];
+
+    const params = Object.fromEntries(
+      terms.map((term, index) => [
+        `term${index}`,
+        `%${escapeLikeValue(term)}%`,
+      ]),
+    );
+    const chunks = await this.chunkRepository
+      .createQueryBuilder("chunk")
+      .innerJoin("chunk.document", "document")
+      .where("chunk.knowledgeId = :knowledgeId", { knowledgeId })
+      .andWhere("chunk.enabled = :chunkEnabled", { chunkEnabled: true })
+      .andWhere("document.enabled = :enabled", { enabled: true })
+      .andWhere(
+        `(${terms
+          .map((_, index) => `chunk.text LIKE :term${index}`)
+          .join(" OR ")})`,
+        params,
+      )
+      .orderBy("chunk.id", "DESC")
+      .take(limit)
+      .getMany();
+
+    return chunks
+      .map((chunk) => ({
+        chunk,
+        score: this.calculateRecallLexicalScore(query, chunk),
+      }))
+      .sort((left, right) => right.score - left.score)
+      .map(({ chunk, score }) => {
+        return {
+          chunkId: chunk.id,
+          score,
+          textScore: score,
+          source: "text" as const,
+        };
+      })
+      .filter((item) => item.score >= minScore);
+  }
+
+  private calculateRecallLexicalScore(
+    query: string,
+    chunk: KnowledgeDocumentChunk,
+  ) {
+    const terms = extractRecallTerms(query);
+    if (!terms.length) return 0;
+
+    const text = normalizeRecallText(chunk.text);
+    const headingText = normalizeRecallText(
+      chunk.metadata.headingPath.join(" "),
+    );
+    let matchedWeight = 0;
+    let totalWeight = 0;
+
+    for (const term of terms) {
+      const weight = recallTermWeight(term);
+      totalWeight += weight;
+
+      if (text.includes(term)) {
+        matchedWeight += weight;
+        continue;
+      }
+      if (headingText.includes(term)) {
+        matchedWeight += weight * 0.65;
+      }
+    }
+
+    return totalWeight ? matchedWeight / totalWeight : 0;
+  }
+
+  private calculateRecallRankScore(
+    query: string,
+    match: RecallMatch,
+    chunk: KnowledgeDocumentChunk,
+  ) {
+    const lexicalScore = this.calculateRecallLexicalScore(query, chunk);
+    const isCodeOnly =
+      chunk.metadata.blockTypes.length > 0 &&
+      chunk.metadata.blockTypes.every((type) => type === "code");
+    const metadataPenalty = looksLikeMetadataBlock(chunk.text) ? 0.22 : 0;
+    const shortTextPenalty = chunk.text.length < 60 ? 0.06 : 0;
+    const codePenalty = isCodeOnly && lexicalScore < 0.6 ? 0.12 : 0;
+    const vectorScore = match.vectorScore ?? 0;
+    const textScore = match.textScore ?? lexicalScore;
+    const baseScore = vectorScore
+      ? vectorScore + textScore * 0.04
+      : textScore;
+
+    return baseScore - metadataPenalty - shortTextPenalty - codePenalty;
+  }
+
+  private mergeRecallMatches(matches: RecallMatch[], limit: number) {
+    const matchMap = new Map<number, RecallMatch>();
+
+    for (const match of matches) {
+      const existing = matchMap.get(match.chunkId);
+      if (!existing) {
+        matchMap.set(match.chunkId, match);
+        continue;
+      }
+
+      matchMap.set(match.chunkId, {
+        chunkId: match.chunkId,
+        score: Math.max(existing.score, match.score),
+        source: existing.source === match.source ? match.source : "hybrid",
+        vectorScore: Math.max(existing.vectorScore ?? 0, match.vectorScore ?? 0),
+        textScore: Math.max(existing.textScore ?? 0, match.textScore ?? 0),
+      });
+    }
+
+    return [...matchMap.values()]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+  }
+
   // --------------------------------------------------------------------------------------------------
   // 创建知识库
   async create(createKnowledgeDto: CreateKnowledgeDto, userId: number) {
@@ -297,6 +612,105 @@ export class KnowledgeService {
   // --------------------------------------------------------------------------------------------------
 
   // --------------------------------------------------------------------------------------------------
+  // 召回测试
+  async recallTest(knowledgeId: number, dto: RecallTestDto, userId: number) {
+    await this.findOwnedKnowledge(knowledgeId, userId);
+
+    const query = dto.query.trim();
+    if (!query) throw new BadRequestException("检索文本不能为空");
+
+    const strategy = dto.strategy ?? "hybrid";
+    const limit = dto.limit ?? 5;
+    const minScore = dto.minScore ?? 0;
+    const matches: RecallMatch[] = [];
+
+    if (strategy === "hybrid" || strategy === "vector") {
+      matches.push(
+        ...(await this.searchVectorRecall(
+          knowledgeId,
+          query,
+          strategy === "hybrid" ? Math.max(limit * 8, 20) : limit,
+          minScore,
+        )),
+      );
+    }
+
+    if (strategy === "hybrid" || strategy === "text") {
+      matches.push(
+        ...(await this.searchTextRecall(
+          knowledgeId,
+          query,
+          strategy === "hybrid" ? Math.max(limit * 8, 20) : limit,
+          minScore,
+        )),
+      );
+    }
+
+    const candidateLimit =
+      strategy === "hybrid" ? Math.max(limit * 8, 20) : limit;
+    const mergedMatches = this.mergeRecallMatches(matches, candidateLimit);
+    const chunks = mergedMatches.length
+      ? await this.chunkRepository.find({
+          where: {
+            id: In(mergedMatches.map((item) => item.chunkId)),
+            knowledgeId,
+          },
+          relations: { document: true },
+        })
+      : [];
+    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const items = mergedMatches
+      .map((match) => {
+        const chunk = chunkMap.get(match.chunkId);
+        if (!chunk?.enabled || !chunk.document?.enabled) return undefined;
+        const rankScore = this.calculateRecallRankScore(query, match, chunk);
+
+        return {
+          rankScore,
+          chunkId: chunk.id,
+          documentId: chunk.documentId,
+          documentName: chunk.document.name,
+          chunkIndex: chunk.chunkIndex,
+          score: clampScore(rankScore),
+          source: match.source,
+          text: chunk.text,
+          searchText: chunk.searchText,
+          metadata: chunk.metadata,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      .sort((left, right) => right.rankScore - left.rankScore)
+      .slice(0, limit)
+      .map(({ rankScore, ...item }) => item);
+
+    const documentIds = [...new Set(items.map((item) => item.documentId))];
+    if (documentIds.length) {
+      await this.documentRepository.increment(
+        { id: In(documentIds), knowledgeId },
+        "recallCount",
+        1,
+      );
+    }
+    const chunkIds = items.map((item) => item.chunkId);
+    if (chunkIds.length) {
+      await this.chunkRepository.increment(
+        { id: In(chunkIds), knowledgeId },
+        "recallCount",
+        1,
+      );
+    }
+
+    return {
+      query,
+      strategy,
+      limit,
+      minScore,
+      items,
+    };
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
   // 获取知识库文档详情
   async findDocument(knowledgeId: number, documentId: number, userId: number) {
     const document = await this.findOwnedDocument(
@@ -305,6 +719,158 @@ export class KnowledgeService {
       userId,
     );
     return this.withAccessibleDocumentUrl(document, { includeParsed: true });
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 获取文档片段列表
+  async listDocumentChunks(
+    knowledgeId: number,
+    documentId: number,
+    query: QueryKnowledgeDocumentChunksDto,
+    userId: number,
+  ): Promise<PageResult<KnowledgeDocumentChunk>> {
+    await this.findOwnedDocument(knowledgeId, documentId, userId);
+
+    const { page, pageSize, skip } = resolvePageQuery(query);
+    const keyword = query.keyword?.trim();
+    const queryBuilder = this.chunkRepository
+      .createQueryBuilder("chunk")
+      .where("chunk.knowledgeId = :knowledgeId", { knowledgeId })
+      .andWhere("chunk.documentId = :documentId", { documentId })
+      .orderBy("chunk.chunkIndex", "ASC")
+      .skip(skip)
+      .take(pageSize);
+
+    if (keyword) {
+      queryBuilder.andWhere(
+        "(chunk.text LIKE :keyword OR chunk.searchText LIKE :keyword OR CAST(chunk.metadata AS TEXT) LIKE :keyword)",
+        { keyword: `%${escapeLikeValue(keyword)}%` },
+      );
+    }
+
+    const [items, total] = await queryBuilder.getManyAndCount();
+    return createPageResult(items, total, page, pageSize);
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 添加文档片段
+  async createDocumentChunk(
+    knowledgeId: number,
+    documentId: number,
+    dto: CreateKnowledgeDocumentChunkDto,
+    userId: number,
+  ) {
+    const document = await this.findOwnedDocument(knowledgeId, documentId, userId);
+    const text = dto.text.trim();
+    if (!text) throw new BadRequestException("片段内容不能为空");
+
+    const maxChunk = await this.chunkRepository.findOne({
+      where: { knowledgeId, documentId },
+      order: { chunkIndex: "DESC" },
+    });
+    const chunkIndex = (maxChunk?.chunkIndex ?? -1) + 1;
+    const keywords = normalizeChunkKeywords(dto.keywords);
+    const metadata = this.createManualChunkMetadata(
+      document,
+      chunkIndex,
+      text,
+      keywords,
+    );
+    const chunk = this.chunkRepository.create({
+      knowledgeId,
+      documentId,
+      chunkIndex,
+      text,
+      searchText: "",
+      tokenCount: metadata.tokenCount,
+      characterCount: metadata.characterCount,
+      recallCount: 0,
+      enabled: true,
+      embeddingModel: document.embeddingModel ?? this.documentEmbeddingService.model,
+      embeddingDimension: document.embeddingDimension,
+      vectorId: randomUUID(),
+      metadata,
+      createdBy: userId,
+      updatedBy: userId,
+    });
+    chunk.searchText = this.createChunkSearchText(chunk);
+
+    const savedChunk = await this.upsertChunkVector(document, chunk);
+    await this.syncDocumentChunkCount(documentId);
+    return savedChunk;
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 更新文档片段
+  async updateDocumentChunk(
+    knowledgeId: number,
+    documentId: number,
+    chunkId: number,
+    dto: UpdateKnowledgeDocumentChunkDto,
+    userId: number,
+  ) {
+    const document = await this.findOwnedDocument(knowledgeId, documentId, userId);
+    const chunk = await this.chunkRepository.findOne({
+      where: { id: chunkId, knowledgeId, documentId },
+    });
+    if (!chunk) throw new NotFoundException("文档片段不存在");
+
+    const nextText = dto.text?.trim();
+    const shouldUpdateVector = nextText !== undefined && nextText !== chunk.text;
+
+    if (nextText !== undefined) {
+      if (!nextText) throw new BadRequestException("片段内容不能为空");
+      chunk.text = nextText;
+      chunk.tokenCount = estimateChunkTokens(nextText);
+      chunk.characterCount = nextText.length;
+      chunk.metadata = {
+        ...chunk.metadata,
+        tokenCount: chunk.tokenCount,
+        characterCount: chunk.characterCount,
+      };
+    }
+
+    if (dto.keywords !== undefined) {
+      chunk.metadata = {
+        ...chunk.metadata,
+        keywords: normalizeChunkKeywords(dto.keywords),
+      };
+    }
+
+    if (dto.enabled !== undefined) {
+      chunk.enabled = dto.enabled;
+    }
+
+    chunk.updatedBy = userId;
+    chunk.searchText = this.createChunkSearchText(chunk);
+
+    return shouldUpdateVector
+      ? this.upsertChunkVector(document, chunk)
+      : this.chunkRepository.save(chunk);
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 删除文档片段
+  async removeDocumentChunk(
+    knowledgeId: number,
+    documentId: number,
+    chunkId: number,
+    userId: number,
+  ) {
+    await this.findOwnedDocument(knowledgeId, documentId, userId);
+    const chunk = await this.chunkRepository.findOne({
+      where: { id: chunkId, knowledgeId, documentId },
+    });
+    if (!chunk) throw new NotFoundException("文档片段不存在");
+
+    await this.documentVectorStoreService.deleteChunkPoint(chunk.id);
+    await this.chunkRepository.remove(chunk);
+    await this.syncDocumentChunkCount(documentId);
+    return { success: true };
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -349,6 +915,7 @@ export class KnowledgeService {
         knowledgeId,
         documentId: document.id,
         userId,
+        chunkConfig: dto.chunkConfig,
       });
     } catch (error) {
       this.applyProcessError(document, error);
@@ -412,6 +979,7 @@ export class KnowledgeService {
     knowledgeId: number,
     documentId: number,
     userId: number,
+    chunkConfig?: KnowledgeDocumentChunkConfig,
   ) {
     const document = await this.findOwnedDocument(
       knowledgeId,
@@ -444,8 +1012,10 @@ export class KnowledgeService {
       document.cleanStatus = KnowledgeDocumentCleanStatus.CLEANING;
       document.cleanError = null;
       await this.documentRepository.save(document);
-      const { document: cleanedDocument } =
-        this.documentCleanerService.clean(parsedDocument);
+      const { document: cleanedDocument } = this.documentCleanerService.clean(
+        parsedDocument,
+        chunkConfig,
+      );
 
       document.cleanStatus = KnowledgeDocumentCleanStatus.CLEANED;
       document.cleanError = null;
@@ -478,8 +1048,7 @@ export class KnowledgeService {
         documentName: document.name,
         contentType: document.contentType,
         document: cleanedDocument,
-        summary: enhancedDocument.metadata.summary,
-        keywords: enhancedDocument.metadata.keywords,
+        chunkConfig,
       });
 
       document.chunkStatus = KnowledgeDocumentChunkStatus.CHUNKED;
@@ -526,6 +1095,8 @@ export class KnowledgeService {
             searchText: chunk.searchText,
             tokenCount: chunk.tokenCount,
             characterCount: chunk.characterCount,
+            recallCount: 0,
+            enabled: true,
             embeddingModel: embeddingResult.model,
             embeddingDimension: embeddingResult.dimension,
             vectorId: randomUUID(),
@@ -547,6 +1118,7 @@ export class KnowledgeService {
             chunkIndex: chunk.chunkIndex,
             text: chunk.text,
             searchText: chunk.searchText,
+            enabled: chunk.enabled,
             metadata: chunk.metadata,
           },
         })),

@@ -1,4 +1,5 @@
 import type { CleanedDocument } from "../document-cleaner/document-cleaner.types";
+import type { KnowledgeDocumentChunkConfig } from "../knowledge-document-process.types";
 import type { ParsedDocumentBlockType } from "../document-parser/document-parser.types";
 
 export interface DocumentChunkerInput {
@@ -7,8 +8,7 @@ export interface DocumentChunkerInput {
   documentName: string;
   contentType: string;
   document: CleanedDocument;
-  summary?: string;
-  keywords?: string[];
+  chunkConfig?: KnowledgeDocumentChunkConfig;
 }
 
 export interface DocumentChunkMetadata {
@@ -32,7 +32,6 @@ export interface DocumentChunkMetadata {
     average: number;
   };
   overlapFromPrevious: boolean;
-  summary?: string;
   keywords: string[];
 }
 

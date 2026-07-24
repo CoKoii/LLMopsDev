@@ -58,6 +58,7 @@ export class DocumentProcessProcessor
       job.data.knowledgeId,
       job.data.documentId,
       job.data.userId,
+      job.data.chunkConfig,
     );
   }
 }

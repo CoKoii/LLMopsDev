@@ -153,6 +153,17 @@ export const routes: RouteRecordRaw[] = [
         },
         component: () => import('../views/personalSpace/knowledge/add/index.vue'),
       },
+      {
+        path: 'personal-space/knowledge/:knowledgeId/files/:documentId/chunks',
+        name: 'knowledge-file-chunks',
+        meta: {
+          title: '文档片段',
+          activeMenu: 'personal-space',
+          pageTransition: 'workspace-fade',
+          shellKey: 'knowledge-files',
+        },
+        component: () => import('../views/personalSpace/knowledge/chunks/index.vue'),
+      },
     ],
   },
   {

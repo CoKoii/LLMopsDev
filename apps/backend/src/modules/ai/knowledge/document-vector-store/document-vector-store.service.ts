@@ -1,5 +1,9 @@
 import { BadGatewayException, Injectable } from "@nestjs/common";
-import type { UpsertVectorPoint } from "./document-vector-store.types";
+import type {
+  SearchVectorPoint,
+  UpsertVectorPoint,
+  VectorPointPayload,
+} from "./document-vector-store.types";
 
 interface QdrantCollectionInfoResponse {
   result?: {
@@ -14,13 +18,19 @@ interface QdrantCollectionInfoResponse {
   };
 }
 
+interface QdrantSearchResponse {
+  result?: Array<{
+    score?: number;
+    payload?: VectorPointPayload;
+  }>;
+}
+
 const DEFAULT_QDRANT_URL = "http://127.0.0.1:6333";
 const DEFAULT_COLLECTION = "ai_knowledge_chunks";
 
 @Injectable()
 export class DocumentVectorStoreService {
-  readonly collection =
-    process.env.QDRANT_COLLECTION ?? DEFAULT_COLLECTION;
+  readonly collection = process.env.QDRANT_COLLECTION ?? DEFAULT_COLLECTION;
 
   private readonly baseUrl = (
     process.env.QDRANT_URL ?? DEFAULT_QDRANT_URL
@@ -83,10 +93,60 @@ export class DocumentVectorStoreService {
     ]);
   }
 
+  async deleteChunkPoint(chunkId: number) {
+    await this.deleteByFilter([{ key: "chunkId", match: { value: chunkId } }]);
+  }
+
   async deleteKnowledgePoints(knowledgeId: number) {
     await this.deleteByFilter([
       { key: "knowledgeId", match: { value: knowledgeId } },
     ]);
+  }
+
+  async search(params: {
+    vector: number[];
+    knowledgeId: number;
+    limit: number;
+    scoreThreshold?: number;
+  }): Promise<SearchVectorPoint[]> {
+    if (!params.vector.length || params.limit <= 0) return [];
+
+    const response = await fetch(
+      `${this.baseUrl}/collections/${this.collection}/points/search`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          vector: params.vector,
+          limit: params.limit,
+          with_payload: true,
+          score_threshold: params.scoreThreshold,
+          filter: {
+            must: [
+              { key: "knowledgeId", match: { value: params.knowledgeId } },
+            ],
+          },
+        }),
+      },
+    );
+
+    if (response.status === 404) return [];
+    if (!response.ok) {
+      throw new BadGatewayException(
+        `Qdrant 检索失败：${response.status} ${await response.text()}`,
+      );
+    }
+
+    const data = (await response.json()) as QdrantSearchResponse;
+    return (data.result ?? [])
+      .filter(
+        (item): item is { score: number; payload: VectorPointPayload } =>
+          typeof item.score === "number" && Boolean(item.payload),
+      )
+      .map((item) => ({
+        score: item.score,
+        payload: item.payload,
+      }));
   }
 
   private async createCollection(vectorSize: number) {

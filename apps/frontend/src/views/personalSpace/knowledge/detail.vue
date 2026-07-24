@@ -3,19 +3,32 @@ import {
   deleteKnowledgeDocumentApi,
   getKnowledgeApi,
   listKnowledgeDocumentsApi,
+  recallTestApi,
   updateKnowledgeDocumentApi,
   type KnowledgeDocumentItem,
   type KnowledgeItem,
+  type KnowledgeRecallStrategy,
+  type RecallTestResultItem,
 } from '@/api'
 import AppModal from '@/components/AppModal/AppModal.vue'
-import { BookOutlined, EllipsisOutlined, SearchOutlined } from '@antdv-next/icons'
+import {
+  BookOutlined,
+  EllipsisOutlined,
+  SearchOutlined,
+  TranslationOutlined,
+} from '@antdv-next/icons'
 import {
   Badge,
   Button,
   Dropdown,
   Input,
+  InputNumber,
   message,
   Modal,
+  Radio,
+  RadioGroup,
+  Select,
+  Slider,
   Space,
   Switch,
   Table,
@@ -38,11 +51,27 @@ const renameModalOpen = ref(false)
 const renameSaving = ref(false)
 const renameDocumentId = ref<number>()
 const renameName = ref('')
+const recallModalOpen = ref(false)
+const recallSettingsOpen = ref(false)
+const recallDetailOpen = ref(false)
+const recallLoading = ref(false)
+const recallQuery = ref('')
+const recallStrategy = ref<KnowledgeRecallStrategy>('hybrid')
+const recallLimit = ref(5)
+const recallMinScore = ref(0)
+const recallResults = ref<RecallTestResultItem[]>([])
+const activeRecallItem = ref<RecallTestResultItem>()
+const recallRecentQueries = ref<
+  Array<{ id: string; source: string; text: string; createdAt: string }>
+>([])
 let pollingTimer: ReturnType<typeof window.setTimeout> | undefined
 let tableResizeObserver: ResizeObserver | undefined
 let tableScrollSyncQueued = false
 
 const MIN_TABLE_SCROLL_Y = 160
+const RECALL_HISTORY_STORAGE_KEY = 'knowledge-recall-test-history'
+const MAX_RECALL_HISTORY_COUNT = 8
+const MAX_RECALL_KEYWORD_COUNT = 4
 
 const columns = [
   { title: '#', dataIndex: 'id', key: 'id', width: 72, align: 'center' as const },
@@ -77,6 +106,14 @@ const tablePagination = computed(() => ({
 const tableScroll = computed(() => ({
   y: tableScrollY.value,
 }))
+
+const recallQueryLength = computed(() => recallQuery.value.length)
+
+const recallDetailTitle = computed(() =>
+  activeRecallItem.value
+    ? `片段详情  # ${String(activeRecallItem.value.chunkIndex + 1).padStart(3, '0')}`
+    : '片段详情',
+)
 
 const totalCharacterCount = computed(() =>
   documents.value.reduce((total, item) => total + item.characterCount, 0),
@@ -115,14 +152,123 @@ const formatDateTime = (value?: string) => {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
+const formatTime = (value: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+
+  const month = `${date.getMonth() + 1}`.padStart(2, '0')
+  const day = `${date.getDate()}`.padStart(2, '0')
+  const hours = `${date.getHours()}`.padStart(2, '0')
+  const minutes = `${date.getMinutes()}`.padStart(2, '0')
+  return `${month}-${day} ${hours}:${minutes}`
+}
+
+const formatRecallSource = (source: KnowledgeRecallStrategy) => {
+  if (source === 'vector') return '向量检索'
+  if (source === 'text') return '全文检索'
+  return '混合检索'
+}
+
+const formatRecallScore = (score: number) => Number(score.toFixed(2)).toFixed(2)
+
+const formatRecallScorePercent = (score: number) => `${Math.min(Math.max(score, 0), 1) * 100}%`
+
+const getRecallKeywords = (record?: RecallTestResultItem) => {
+  const keywords = record?.metadata?.keywords
+  return Array.isArray(keywords)
+    ? keywords
+        .filter((item): item is string => typeof item === 'string')
+        .slice(0, MAX_RECALL_KEYWORD_COUNT)
+    : []
+}
+
+const getRecallKeywordOptions = (record?: RecallTestResultItem) =>
+  getRecallKeywords(record).map((keyword) => ({
+    label: keyword,
+    value: keyword,
+  }))
+
+const hasDocumentFailed = (record: KnowledgeDocumentItem) =>
+  record.parseStatus === 'failed' ||
+  record.cleanStatus === 'failed' ||
+  record.enhanceStatus === 'failed' ||
+  record.chunkStatus === 'failed' ||
+  record.embeddingStatus === 'failed' ||
+  record.indexStatus === 'failed'
+
+const isDocumentReady = (record: KnowledgeDocumentItem) => record.indexStatus === 'indexed'
+
+const resolveDocumentFailure = (record: KnowledgeDocumentItem) => {
+  if (record.parseStatus === 'failed') return '解析失败'
+  if (record.cleanStatus === 'failed') return '清洗失败'
+  if (record.enhanceStatus === 'failed') return '增强失败'
+  if (record.chunkStatus === 'failed') return '切片失败'
+  if (record.embeddingStatus === 'failed') return '向量化失败'
+  if (record.indexStatus === 'failed') return '入库失败'
+  return '处理失败'
+}
+
+const resolveDocumentProgress = (record: KnowledgeDocumentItem) => {
+  if (record.indexStatus === 'indexing') return '写入索引'
+  if (record.embeddingStatus === 'embedding') return '向量化中'
+  if (record.embeddingStatus === 'embedded') return '写入索引'
+  if (record.embeddingStatus === 'queued') return '等待向量化'
+  if (record.chunkStatus === 'chunking') return '切片中'
+  if (record.chunkStatus === 'chunked') return '等待向量化'
+  if (record.enhanceStatus === 'enhancing') return '增强中'
+  if (record.enhanceStatus === 'enhanced') return '切片中'
+  if (record.cleanStatus === 'cleaning') return '清洗中'
+  if (record.cleanStatus === 'cleaned') return '切片中'
+  if (record.parseStatus === 'parsing') return '解析中'
+  if (record.parseStatus === 'parsed') return '清洗中'
+  return '等待处理'
+}
+
+const resolveDocumentStatus = (record: KnowledgeDocumentItem) => {
+  if (hasDocumentFailed(record)) {
+    return { status: 'error' as const, text: resolveDocumentFailure(record) }
+  }
+  if (!isDocumentReady(record)) {
+    return { status: 'processing' as const, text: resolveDocumentProgress(record) }
+  }
+  if (!record.enabled) {
+    return { status: 'default' as const, text: '已禁用' }
+  }
+  return { status: 'success' as const, text: '可用' }
+}
+
+const loadRecallHistory = () => {
+  try {
+    const value = window.localStorage.getItem(RECALL_HISTORY_STORAGE_KEY)
+    if (!value) {
+      recallRecentQueries.value = []
+      return
+    }
+
+    const items = JSON.parse(value) as typeof recallRecentQueries.value
+    recallRecentQueries.value = Array.isArray(items) ? items.slice(0, MAX_RECALL_HISTORY_COUNT) : []
+  } catch {
+    recallRecentQueries.value = []
+  }
+}
+
+const saveRecallHistory = (text: string, source: string) => {
+  const nextItem = {
+    id: `${Date.now()}`,
+    source,
+    text,
+    createdAt: new Date().toISOString(),
+  }
+  const nextItems = [
+    nextItem,
+    ...recallRecentQueries.value.filter((item) => item.text !== text),
+  ].slice(0, MAX_RECALL_HISTORY_COUNT)
+  recallRecentQueries.value = nextItems
+  window.localStorage.setItem(RECALL_HISTORY_STORAGE_KEY, JSON.stringify(nextItems))
+}
+
 const isProcessingDocument = (record: KnowledgeDocumentItem) =>
-  record.parseStatus === 'parsing' ||
-  record.cleanStatus === 'cleaning' ||
-  record.enhanceStatus === 'enhancing' ||
-  record.chunkStatus === 'chunking' ||
-  record.embeddingStatus === 'queued' ||
-  record.embeddingStatus === 'embedding' ||
-  record.indexStatus === 'indexing'
+  !hasDocumentFailed(record) && !isDocumentReady(record)
 
 const clearPollingTimer = () => {
   if (pollingTimer !== undefined) {
@@ -219,8 +365,66 @@ const handleTableChange = (nextPagination: { current?: number; pageSize?: number
   void loadKnowledge()
 }
 
-const runRecallTest = () => {
-  message.info('召回测试功能待接入')
+const openDocumentChunks = (record: KnowledgeDocumentItem) => {
+  void router.push({
+    name: 'knowledge-file-chunks',
+    params: {
+      knowledgeId: parseKnowledgeId(),
+      documentId: record.id,
+    },
+  })
+}
+
+const handleDocumentTableClick = (event: MouseEvent) => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+
+  const row = target.closest<HTMLTableRowElement>('tr[data-row-key]')
+  if (!row) return
+
+  const documentId = Number(row.dataset.rowKey)
+  const document = documents.value.find((item) => item.id === documentId)
+  if (document) {
+    openDocumentChunks(document)
+  }
+}
+
+const openRecallTest = () => {
+  loadRecallHistory()
+  recallModalOpen.value = true
+}
+
+const submitRecallTest = async (text = recallQuery.value) => {
+  const knowledgeId = parseKnowledgeId()
+  const query = text.trim()
+  if (!Number.isFinite(knowledgeId) || !query) {
+    message.warning('请输入召回测试文本')
+    return
+  }
+
+  recallQuery.value = query
+  recallLoading.value = true
+  try {
+    const result = await recallTestApi(knowledgeId, {
+      query,
+      strategy: recallStrategy.value,
+      limit: recallLimit.value,
+      minScore: recallMinScore.value,
+    })
+    recallResults.value = result.items
+    saveRecallHistory(query, formatRecallSource(result.strategy))
+    await loadKnowledge({ silent: true })
+    if (!result.items.length) {
+      message.info('未召回匹配片段')
+    }
+  } finally {
+    recallLoading.value = false
+  }
+}
+
+const openRecallDetail = (record: RecallTestResultItem) => {
+  activeRecallItem.value = record
+  recallDetailOpen.value = true
 }
 
 const addFile = () => {
@@ -365,14 +569,14 @@ onUnmounted(() => {
           </Input>
         </div>
         <Space>
-          <Button @click="runRecallTest">召回测试</Button>
+          <Button @click="openRecallTest">召回测试</Button>
           <Button type="primary" @click="addFile">添加文件</Button>
         </Space>
       </div>
     </header>
 
     <main class="knowledge-files-main">
-      <div ref="tableContainerRef" class="knowledge-table">
+      <div ref="tableContainerRef" class="knowledge-table" @click="handleDocumentTableClick">
         <Table
           row-key="id"
           size="small"
@@ -385,7 +589,12 @@ onUnmounted(() => {
           @change="handleTableChange"
         >
           <template #bodyCell="{ column, record }">
-            <template v-if="column.key === 'characterCount'">
+            <template v-if="column.key === 'name'">
+              <button class="knowledge-document-link" type="button" @click.stop="openDocumentChunks(record)">
+                {{ record.name }}
+              </button>
+            </template>
+            <template v-else-if="column.key === 'characterCount'">
               {{ formatCompactNumber(record.characterCount) }}
             </template>
             <template v-else-if="column.key === 'chunkCount'">
@@ -396,12 +605,12 @@ onUnmounted(() => {
             </template>
             <template v-else-if="column.key === 'enabled'">
               <Badge
-                :status="record.enabled ? 'success' : 'default'"
-                :text="record.enabled ? '可用' : '已禁用'"
+                :status="resolveDocumentStatus(record).status"
+                :text="resolveDocumentStatus(record).text"
               />
             </template>
             <template v-else-if="column.key === 'operation'">
-              <Space>
+              <Space @click.stop>
                 <Switch
                   size="small"
                   :checked="record.enabled"
@@ -424,6 +633,158 @@ onUnmounted(() => {
         </Table>
       </div>
     </main>
+
+    <AppModal
+      v-model:open="recallModalOpen"
+      title="召回测试"
+      width="112rem"
+      :footer="null"
+      destroy-on-hidden
+    >
+      <div class="recall-test">
+        <p class="recall-test__desc">基于给定的查询文本测试知识库的召回效果</p>
+
+        <div class="recall-test__body">
+          <section class="recall-query-panel">
+            <div class="recall-query-box">
+              <div class="recall-query-box__head">
+                <strong>源文本</strong>
+                <Button
+                  class="recall-strategy-button"
+                  size="small"
+                  @click="recallSettingsOpen = true"
+                >
+                  <template #icon>
+                    <TranslationOutlined />
+                  </template>
+                  {{ formatRecallSource(recallStrategy) }}
+                </Button>
+              </div>
+              <textarea
+                v-model="recallQuery"
+                maxlength="200"
+                placeholder="请输入文本，建议使用简短的陈述句"
+                @keydown.meta.enter.prevent="submitRecallTest()"
+                @keydown.ctrl.enter.prevent="submitRecallTest()"
+              />
+              <div class="recall-query-box__footer">
+                <span>{{ recallQueryLength }} / 200</span>
+                <Button type="primary" :loading="recallLoading" @click="submitRecallTest()">
+                  测试
+                </Button>
+              </div>
+            </div>
+
+            <div class="recall-history">
+              <h3>最近查询</h3>
+              <div v-if="recallRecentQueries.length" class="recall-history__table">
+                <button
+                  v-for="item in recallRecentQueries"
+                  :key="item.id"
+                  class="recall-history__row"
+                  type="button"
+                  @click="submitRecallTest(item.text)"
+                >
+                  <span>{{ item.source }}</span>
+                  <strong>{{ item.text }}</strong>
+                  <time>{{ formatTime(item.createdAt) }}</time>
+                </button>
+              </div>
+              <p v-else class="recall-empty-text">暂无查询记录</p>
+            </div>
+          </section>
+
+          <section class="recall-results">
+            <div v-if="recallResults.length" class="recall-result-grid">
+              <button
+                v-for="item in recallResults"
+                :key="item.chunkId"
+                class="recall-result-card"
+                type="button"
+                @click="openRecallDetail(item)"
+              >
+                <div class="recall-result-card__score">
+                  <span class="recall-result-card__icon" />
+                  <span class="recall-score-bar">
+                    <i :style="{ width: formatRecallScorePercent(item.score) }" />
+                  </span>
+                  <strong>{{ formatRecallScore(item.score) }}</strong>
+                </div>
+                <p>{{ item.text }}</p>
+                <footer>
+                  <span class="recall-result-card__file-icon">T</span>
+                  <span :title="item.documentName">{{ item.documentName }}</span>
+                </footer>
+              </button>
+            </div>
+            <div v-else class="recall-empty">
+              <SearchOutlined />
+              <span>输入文本后开始测试</span>
+            </div>
+          </section>
+        </div>
+      </div>
+    </AppModal>
+
+    <AppModal
+      v-model:open="recallSettingsOpen"
+      title="检索设置"
+      width="56rem"
+      ok-text="确定"
+      cancel-text="取消"
+      @ok="recallSettingsOpen = false"
+    >
+      <div class="recall-settings">
+        <div class="recall-settings__row">
+          <span>检索策略</span>
+          <RadioGroup v-model:value="recallStrategy" class="recall-settings__options">
+            <Radio value="hybrid">混合检索</Radio>
+            <Radio value="vector">向量检索</Radio>
+            <Radio value="text">全文检索</Radio>
+          </RadioGroup>
+        </div>
+        <div class="recall-settings__row">
+          <span>最大召回数量</span>
+          <div class="recall-setting-control">
+            <Slider v-model:value="recallLimit" :min="1" :max="20" :step="1" />
+            <InputNumber v-model:value="recallLimit" :min="1" :max="20" />
+          </div>
+        </div>
+        <div class="recall-settings__row">
+          <span>最小匹配度</span>
+          <div class="recall-setting-control">
+            <Slider v-model:value="recallMinScore" :min="0" :max="1" :step="0.01" />
+            <InputNumber v-model:value="recallMinScore" :min="0" :max="1" :step="0.01" />
+          </div>
+        </div>
+      </div>
+    </AppModal>
+
+    <AppModal
+      v-model:open="recallDetailOpen"
+      :title="recallDetailTitle"
+      width="52rem"
+      ok-text="确定"
+      cancel-text="取消"
+      @ok="recallDetailOpen = false"
+    >
+      <div v-if="activeRecallItem" class="recall-detail">
+        <label>
+          <span>片段内容 <b>*</b></span>
+          <textarea :value="activeRecallItem.text" readonly />
+        </label>
+        <label v-if="getRecallKeywords(activeRecallItem).length">
+          <span>关键词</span>
+          <Select
+            class="recall-keywords-select"
+            mode="multiple"
+            :value="getRecallKeywords(activeRecallItem)"
+            :options="getRecallKeywordOptions(activeRecallItem)"
+            :open="false"
+          />
+        </label>
+      </div>
+    </AppModal>
 
     <AppModal
       v-model:open="renameModalOpen"

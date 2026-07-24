@@ -34,6 +34,8 @@ const hasAuthorizationHeader = (config: InternalAxiosRequestConfig) => {
 }
 
 const notifyError = (error: AxiosError<ApiErrorData>) => {
+  if (error.config?.suppressErrorNotify) return
+
   message.error(error.response?.data?.message || error.message || '请求失败')
 }
 

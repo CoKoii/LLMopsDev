@@ -14,6 +14,12 @@ import {
 
 const MARKDOWN_EXTENSIONS = new Set(["md", "markdown"]);
 
+const stripFrontmatter = (source: string) => {
+  const normalized = source.replace(/^\ufeff/, "");
+  const match = /^(---|\+\+\+)\s*\n[\s\S]*?\n\1\s*(?:\n|$)/.exec(normalized);
+  return match ? normalized.slice(match[0].length) : normalized;
+};
+
 const isToken = <T extends Token["type"]>(
   token: Token,
   type: T,
@@ -41,7 +47,7 @@ export class MarkdownDocumentParser implements DocumentFormatParser {
   }
 
   parse(input: DocumentParserInput) {
-    const source = input.buffer.toString("utf8");
+    const source = stripFrontmatter(input.buffer.toString("utf8"));
     const tokens = marked.lexer(source, { gfm: true });
     const builder = createBlockBuilder();
 

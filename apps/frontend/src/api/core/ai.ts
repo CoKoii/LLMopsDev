@@ -184,6 +184,30 @@ export interface KnowledgeDocumentItem {
   updatedAt?: string
 }
 
+export interface KnowledgeDocumentChunkItem {
+  id: number
+  knowledgeId: number
+  documentId: number
+  chunkIndex: number
+  text: string
+  searchText: string
+  tokenCount: number
+  characterCount: number
+  recallCount: number
+  enabled: boolean
+  embeddingModel: string
+  embeddingDimension: number
+  vectorId: string
+  metadata: {
+    keywords?: string[]
+    headingPath?: string[]
+    blockTypes?: string[]
+    [key: string]: unknown
+  }
+  createdAt?: string
+  updatedAt?: string
+}
+
 export interface ParsedDocumentBlock {
   id: string
   type: 'heading' | 'paragraph' | 'table' | 'list' | 'code' | 'json'
@@ -271,8 +295,56 @@ export interface CreateKnowledgePayload {
 
 export type UpdateKnowledgePayload = Partial<CreateKnowledgePayload>
 
+export interface KnowledgeDocumentChunkConfig {
+  separator?: string
+  maxSegmentLength?: number
+  replaceWhitespace?: boolean
+  removeUrls?: boolean
+}
+
 export interface CreateKnowledgeDocumentPayload {
   fileId: number
+  chunkConfig?: KnowledgeDocumentChunkConfig
+}
+
+export interface CreateKnowledgeDocumentChunkPayload {
+  text: string
+  keywords?: string[]
+}
+
+export interface UpdateKnowledgeDocumentChunkPayload {
+  text?: string
+  keywords?: string[]
+  enabled?: boolean
+}
+
+export type KnowledgeRecallStrategy = 'hybrid' | 'vector' | 'text'
+
+export interface RecallTestPayload {
+  query: string
+  strategy?: KnowledgeRecallStrategy
+  limit?: number
+  minScore?: number
+}
+
+export interface RecallTestResultItem {
+  chunkId: number
+  documentId: number
+  documentName: string
+  chunkIndex: number
+  score: number
+  source: KnowledgeRecallStrategy
+  text: string
+  searchText: string
+  metadata: Record<string, unknown>
+}
+
+export interface RecallTestResult {
+  query: string
+  strategy: KnowledgeRecallStrategy
+  limit: number
+  minScore: number
+  items: RecallTestResultItem[]
 }
 
 export interface UpdateKnowledgeDocumentPayload {
@@ -593,15 +665,65 @@ export const listKnowledgeDocumentsApi = async (
 export const getKnowledgeDocumentApi = async (
   knowledgeId: number,
   documentId: number,
+  options: { suppressErrorNotify?: boolean } = {},
 ): Promise<KnowledgeDocumentItem> => {
-  return request.get(`/ai/knowledge/${knowledgeId}/documents/${documentId}`)
+  return request.get(`/ai/knowledge/${knowledgeId}/documents/${documentId}`, {
+    suppressErrorNotify: options.suppressErrorNotify,
+  })
+}
+
+export const listKnowledgeDocumentChunksApi = async (
+  knowledgeId: number,
+  documentId: number,
+  params?: PageParams & { keyword?: string },
+): Promise<PageResult<KnowledgeDocumentChunkItem>> => {
+  return request.get(`/ai/knowledge/${knowledgeId}/documents/${documentId}/chunks`, { params })
+}
+
+export const createKnowledgeDocumentChunkApi = async (
+  knowledgeId: number,
+  documentId: number,
+  payload: CreateKnowledgeDocumentChunkPayload,
+): Promise<KnowledgeDocumentChunkItem> => {
+  return request.post(`/ai/knowledge/${knowledgeId}/documents/${documentId}/chunks`, payload, {
+    timeout: 60000,
+  })
+}
+
+export const updateKnowledgeDocumentChunkApi = async (
+  knowledgeId: number,
+  documentId: number,
+  chunkId: number,
+  payload: UpdateKnowledgeDocumentChunkPayload,
+): Promise<KnowledgeDocumentChunkItem> => {
+  return request.put(`/ai/knowledge/${knowledgeId}/documents/${documentId}/chunks/${chunkId}`, payload, {
+    timeout: 60000,
+  })
+}
+
+export const deleteKnowledgeDocumentChunkApi = async (
+  knowledgeId: number,
+  documentId: number,
+  chunkId: number,
+) => {
+  return request.delete(`/ai/knowledge/${knowledgeId}/documents/${documentId}/chunks/${chunkId}`)
 }
 
 export const createKnowledgeDocumentApi = async (
   knowledgeId: number,
   payload: CreateKnowledgeDocumentPayload,
+  options: { suppressErrorNotify?: boolean } = {},
 ): Promise<KnowledgeDocumentItem> => {
-  return request.post(`/ai/knowledge/${knowledgeId}/documents`, payload)
+  return request.post(`/ai/knowledge/${knowledgeId}/documents`, payload, {
+    suppressErrorNotify: options.suppressErrorNotify,
+  })
+}
+
+export const recallTestApi = async (
+  knowledgeId: number,
+  payload: RecallTestPayload,
+): Promise<RecallTestResult> => {
+  return request.post(`/ai/knowledge/${knowledgeId}/recall-test`, payload)
 }
 
 export const updateKnowledgeDocumentApi = async (
