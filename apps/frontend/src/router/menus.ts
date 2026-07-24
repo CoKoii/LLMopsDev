@@ -142,6 +142,17 @@ export const routes: RouteRecordRaw[] = [
         },
         component: () => import('../views/personalSpace/knowledge/detail.vue'),
       },
+      {
+        path: 'personal-space/knowledge/:knowledgeId/files/add',
+        name: 'knowledge-files-add',
+        meta: {
+          title: '添加文件',
+          activeMenu: 'personal-space',
+          pageTransition: 'workspace-fade',
+          shellKey: 'knowledge-files',
+        },
+        component: () => import('../views/personalSpace/knowledge/add/index.vue'),
+      },
     ],
   },
   {

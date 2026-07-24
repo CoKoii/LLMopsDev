@@ -5,8 +5,8 @@ import { BookOutlined, EllipsisOutlined, SearchOutlined } from '@antdv-next/icon
 import {
   Badge,
   Button,
-  Input,
   Dropdown,
+  Input,
   message,
   Modal,
   Space,
@@ -16,18 +16,11 @@ import {
   type MenuProps,
 } from 'antdv-next'
 import { computed, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
-
-interface KnowledgeDocument {
-  id: number
-  name: string
-  characterCount: number
-  recallCount: number
-  uploadedAt: string
-  enabled: boolean
-}
+import { useRoute, useRouter } from 'vue-router'
+import { createMockDocuments, readUploadedDocuments, type KnowledgeDocument } from './documents'
 
 const route = useRoute()
+const router = useRouter()
 const knowledge = ref<KnowledgeItem>()
 const loading = ref(false)
 const searchValue = ref('')
@@ -36,15 +29,6 @@ const renameModalOpen = ref(false)
 const renameSaving = ref(false)
 const renameDocumentId = ref<number>()
 const renameName = ref('')
-
-const documentSeeds = [
-  ['LLMOps 项目提示词.md', 4700, 18, '2024-06-11 23:31:47', false],
-  ['课程Prompt提示词.txt', 2100, 0, '2024-04-07 09:22:00', true],
-  ['Readme.md', 1700, 12, '2024-01-08 13:20:10', true],
-  ['慕课LLMOps代码库.txt', 12500, 13, '2024-05-14 14:35:27', false],
-  ['LLMOps 项目API文档.md', 95100, 154, '2024-01-07 12:18:04', true],
-  ['基于工具调用的智能体设计与实现.md', 14800, 42, '2024-02-01 21:16:25', true],
-] as const
 
 const columns = [
   { title: '#', dataIndex: 'id', key: 'id', width: 72, align: 'center' as const },
@@ -97,19 +81,6 @@ const formatCompactNumber = (value: number) => {
 
 const formatNumber = (value: number) => value.toLocaleString('en-US')
 
-const createMockDocuments = () =>
-  Array.from({ length: 21 }, (_, index) => {
-    const item = documentSeeds[index % documentSeeds.length]!
-    return {
-      id: 21 - index,
-      name: item[0],
-      characterCount: item[1],
-      recallCount: item[2],
-      uploadedAt: item[3],
-      enabled: item[4],
-    }
-  })
-
 const loadKnowledge = async () => {
   const knowledgeId = parseKnowledgeId()
   if (!Number.isFinite(knowledgeId)) return
@@ -117,11 +88,10 @@ const loadKnowledge = async () => {
   loading.value = true
   try {
     knowledge.value = await getKnowledgeApi(knowledgeId)
-    documents.value = createMockDocuments()
   } catch {
     message.error('知识库详情获取失败')
-    documents.value = createMockDocuments()
   } finally {
+    documents.value = [...readUploadedDocuments(knowledgeId), ...createMockDocuments()]
     loading.value = false
   }
 }
@@ -131,7 +101,10 @@ const runRecallTest = () => {
 }
 
 const addFile = () => {
-  message.info('文件上传接口待接入')
+  void router.push({
+    name: 'knowledge-files-add',
+    params: { knowledgeId: parseKnowledgeId() },
+  })
 }
 
 const toggleFile = (record: KnowledgeDocument, checked: boolean) => {
@@ -220,16 +193,13 @@ watch(
       </div>
 
       <div class="knowledge-toolbar">
-        <Input
-          v-model:value="searchValue"
-          class="knowledge-search"
-          placeholder="输入关键词搜索文档"
-          allow-clear
-        >
-          <template #prefix>
-            <SearchOutlined />
-          </template>
-        </Input>
+        <div class="knowledge-search">
+          <Input v-model:value="searchValue" placeholder="输入关键词搜索文档" allow-clear>
+            <template #prefix>
+              <SearchOutlined />
+            </template>
+          </Input>
+        </div>
         <Space>
           <Button @click="runRecallTest">召回测试</Button>
           <Button type="primary" @click="addFile">添加文件</Button>
@@ -298,113 +268,4 @@ watch(
   </div>
 </template>
 
-<style scoped lang="scss">
-.knowledge-files-page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  padding: 2.4rem;
-  box-sizing: border-box;
-  overflow: hidden;
-  color: var(--font-color);
-}
-
-.knowledge-files-header {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: 2.4rem;
-  margin-bottom: 2.4rem;
-}
-
-.knowledge-header-main {
-  display: flex;
-  align-items: center;
-  min-height: 4rem;
-}
-
-.knowledge-entity {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 1.2rem;
-}
-
-.knowledge-entity__logo {
-  display: grid;
-  width: 4rem;
-  height: 4rem;
-  place-items: center;
-  flex: 0 0 auto;
-  color: var(--white);
-  background: var(--primary-color);
-  border-radius: 0.8rem;
-}
-
-.knowledge-entity__logo.has-image {
-  overflow: hidden;
-  background: var(--touch-bg);
-}
-
-.knowledge-entity__logo :deep(img) {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.knowledge-entity__identity {
-  min-width: 0;
-}
-
-.knowledge-entity__identity > div,
-.knowledge-entity__identity p {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.knowledge-entity__identity h1 {
-  margin: 0;
-  overflow: hidden;
-  color: var(--font-active-color);
-  font-size: 1.5rem;
-  font-weight: 600;
-  line-height: 2rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.knowledge-entity__identity p {
-  margin: 0.2rem 0 0;
-  gap: 0.4rem;
-}
-
-.knowledge-files-main {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.knowledge-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1.6rem;
-}
-
-.knowledge-search {
-  width: 24rem;
-}
-
-.knowledge-table {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-
-  :deep(.ant-table-thead > tr > th) {
-    background: #e5e7eb;
-  }
-}
-</style>
+<style src="./detail.scss" scoped lang="scss"></style>

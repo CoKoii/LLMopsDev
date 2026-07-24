@@ -1,0 +1,104 @@
+.knowledge-files-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 2.4rem;
+  box-sizing: border-box;
+  overflow: hidden;
+  color: var(--font-color);
+}
+
+.knowledge-files-header {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2.4rem;
+  margin-bottom: 2.4rem;
+}
+
+.knowledge-header-main {
+  display: flex;
+  align-items: center;
+  min-height: 4rem;
+}
+
+.knowledge-entity {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 1.2rem;
+}
+
+.knowledge-entity__logo {
+  display: grid;
+  width: 4rem;
+  height: 4rem;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--white);
+  background: var(--primary-color);
+  border-radius: 0.8rem;
+  overflow: hidden;
+}
+
+.knowledge-entity__logo.has-image {
+  background: var(--touch-bg);
+}
+
+.knowledge-entity__logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.knowledge-entity__identity {
+  min-width: 0;
+}
+
+.knowledge-entity__identity > div,
+.knowledge-entity__identity p {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.knowledge-entity__identity h1 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--font-active-color);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 2rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-entity__identity p {
+  margin: 0.2rem 0 0;
+  gap: 0.4rem;
+}
+
+.knowledge-files-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.knowledge-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.6rem;
+}
+
+.knowledge-search {
+  width: 24rem;
+}
+
+.knowledge-table {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
