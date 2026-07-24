@@ -122,6 +122,25 @@ export class OssService {
     await this.ensureEnabled().copy(targetKey, sourceKey);
   }
 
+  async getObjectBuffer(objectKey: string): Promise<Buffer> {
+    const result = await this.ensureEnabled().get(objectKey);
+    const content = result.content as unknown;
+
+    if (Buffer.isBuffer(content)) {
+      return content;
+    }
+
+    if (typeof content === "string") {
+      return Buffer.from(content);
+    }
+
+    if (content instanceof Uint8Array) {
+      return Buffer.from(content);
+    }
+
+    throw new Error("OSS 对象内容格式不支持");
+  }
+
   async headObject(objectKey: string): Promise<OssObjectMetadata> {
     const result = await this.ensureEnabled().head(objectKey);
     const headers = result.res.headers as Record<string, string | undefined>;

@@ -283,7 +283,7 @@
 
 .processing-file {
   display: grid;
-  grid-template-columns: 3rem minmax(0, 1fr) auto;
+  grid-template-columns: 3rem minmax(0, 1fr) 12rem;
   align-items: center;
   gap: 1.2rem;
   min-height: 5rem;
@@ -291,6 +291,14 @@
   border: 0.1rem solid #e5e7eb;
   border-radius: 0.6rem;
   background: var(--white);
+}
+
+.processing-file.completed {
+  border-color: #bbf7d0;
+}
+
+.processing-file.failed {
+  border-color: #fecaca;
 }
 
 .processing-file__icon {
@@ -308,6 +316,7 @@
 
 .processing-file__meta {
   display: grid;
+  gap: 0.5rem;
   min-width: 0;
 
   strong,
@@ -330,8 +339,19 @@
 }
 
 .processing-file__status {
+  min-width: 0;
   color: #4b5563;
   font-size: 1.3rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.processing-file.completed .processing-file__status {
+  color: #15803d;
+}
+
+.processing-file.failed .processing-file__status {
+  color: #dc2626;
 }
 
 .upload-footer {

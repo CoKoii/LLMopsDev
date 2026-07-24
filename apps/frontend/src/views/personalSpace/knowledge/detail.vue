@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import {
-  createKnowledgeDocumentApi,
   deleteKnowledgeDocumentApi,
   getKnowledgeApi,
   listKnowledgeDocumentsApi,
+  processKnowledgeDocumentApi,
   updateKnowledgeDocumentApi,
   type KnowledgeDocumentItem,
   type KnowledgeItem,
@@ -23,7 +23,7 @@ import {
   Tag,
   type MenuProps,
 } from 'antdv-next'
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 const route = useRoute()
@@ -36,11 +36,13 @@ const renameModalOpen = ref(false)
 const renameSaving = ref(false)
 const renameDocumentId = ref<number>()
 const renameName = ref('')
+let pollingTimer: ReturnType<typeof window.setTimeout> | undefined
 
 const columns = [
   { title: '#', dataIndex: 'id', key: 'id', width: 72, align: 'center' as const },
   { title: '文档名', dataIndex: 'name', key: 'name' },
   { title: '字符数', dataIndex: 'characterCount', key: 'characterCount' },
+  { title: '切块数', dataIndex: 'chunkCount', key: 'chunkCount' },
   { title: '召回次数', dataIndex: 'recallCount', key: 'recallCount' },
   { title: '上传时间', dataIndex: 'createdAt', key: 'createdAt' },
   { title: '状态', dataIndex: 'enabled', key: 'enabled' },
@@ -48,6 +50,7 @@ const columns = [
 ]
 
 const fileActionMenuItems: MenuProps['items'] = [
+  { key: 'process', label: '重新处理' },
   { key: 'rename', label: '重命名' },
   { key: 'delete', label: '删除', danger: true },
 ]
@@ -103,11 +106,38 @@ const formatDateTime = (value?: string) => {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
-const loadKnowledge = async () => {
+const isProcessingDocument = (record: KnowledgeDocumentItem) =>
+  record.parseStatus === 'parsing' ||
+  record.cleanStatus === 'cleaning' ||
+  record.enhanceStatus === 'enhancing' ||
+  record.chunkStatus === 'chunking' ||
+  record.embeddingStatus === 'queued' ||
+  record.embeddingStatus === 'embedding' ||
+  record.indexStatus === 'indexing'
+
+const clearPollingTimer = () => {
+  if (pollingTimer !== undefined) {
+    window.clearTimeout(pollingTimer)
+    pollingTimer = undefined
+  }
+}
+
+const schedulePolling = () => {
+  clearPollingTimer()
+  if (!documents.value.some(isProcessingDocument)) return
+
+  pollingTimer = window.setTimeout(() => {
+    void loadKnowledge({ silent: true })
+  }, 3000)
+}
+
+const loadKnowledge = async (options: { silent?: boolean } = {}) => {
   const knowledgeId = parseKnowledgeId()
   if (!Number.isFinite(knowledgeId)) return
 
-  loading.value = true
+  if (!options.silent) {
+    loading.value = true
+  }
   try {
     const [knowledgeDetail, documentResult] = await Promise.all([
       getKnowledgeApi(knowledgeId),
@@ -115,11 +145,18 @@ const loadKnowledge = async () => {
     ])
     knowledge.value = knowledgeDetail
     documents.value = documentResult.items
+    schedulePolling()
   } catch {
-    message.error('知识库详情获取失败')
-    documents.value = []
+    if (!options.silent) {
+      message.error('知识库详情获取失败')
+      documents.value = []
+    } else {
+      schedulePolling()
+    }
   } finally {
-    loading.value = false
+    if (!options.silent) {
+      loading.value = false
+    }
   }
 }
 
@@ -132,6 +169,29 @@ const addFile = () => {
     name: 'knowledge-files-add',
     params: { knowledgeId: parseKnowledgeId() },
   })
+}
+
+const processFile = async (record: KnowledgeDocumentItem) => {
+  const knowledgeId = parseKnowledgeId()
+  if (!Number.isFinite(knowledgeId)) return
+
+  const previousRecord = { ...record }
+  record.parseStatus = 'parsing'
+  record.cleanStatus = 'pending'
+  record.enhanceStatus = 'pending'
+  record.chunkStatus = 'pending'
+  record.embeddingStatus = 'pending'
+  record.indexStatus = 'pending'
+  try {
+    const parsedDocument = await processKnowledgeDocumentApi(knowledgeId, record.id)
+    documents.value = documents.value.map((item) =>
+      item.id === parsedDocument.id ? parsedDocument : item,
+    )
+    schedulePolling()
+    message.success('文档已提交处理')
+  } catch {
+    Object.assign(record, previousRecord)
+  }
 }
 
 const toggleFile = async (record: KnowledgeDocumentItem, checked: boolean) => {
@@ -202,6 +262,11 @@ const handleFileAction = (event: { key: string | number }, record: KnowledgeDocu
     return
   }
 
+  if (event.key === 'process') {
+    void processFile(record)
+    return
+  }
+
   if (event.key === 'delete') {
     confirmDeleteFile(record)
   }
@@ -214,6 +279,10 @@ watch(
   },
   { immediate: true },
 )
+
+onUnmounted(() => {
+  clearPollingTimer()
+})
 </script>
 
 <template>
@@ -267,6 +336,9 @@ watch(
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'characterCount'">
               {{ formatCompactNumber(record.characterCount) }}
+            </template>
+            <template v-else-if="column.key === 'chunkCount'">
+              {{ record.chunkCount || 0 }}
             </template>
             <template v-else-if="column.key === 'createdAt'">
               {{ formatDateTime(record.createdAt) }}

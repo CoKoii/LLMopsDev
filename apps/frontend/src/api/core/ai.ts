@@ -152,9 +152,75 @@ export interface KnowledgeDocumentItem {
   characterCount: number
   recallCount: number
   enabled: boolean
+  parseStatus: 'uploaded' | 'parsing' | 'parsed' | 'failed'
+  parseError?: string | null
+  parsedText?: string | null
+  parsedDocument?: ParsedDocument | null
+  parsedAt?: string | null
+  cleanStatus: 'pending' | 'cleaning' | 'cleaned' | 'failed'
+  cleanError?: string | null
+  cleanedText?: string | null
+  cleanedDocument?: CleanedDocument | null
+  cleanedAt?: string | null
+  enhanceStatus: 'pending' | 'enhancing' | 'enhanced' | 'failed'
+  enhanceError?: string | null
+  enhancedText?: string | null
+  enhancedDocument?: EnhancedDocument | null
+  enhancedAt?: string | null
+  chunkStatus: 'pending' | 'chunking' | 'chunked' | 'failed'
+  chunkError?: string | null
+  chunkCount: number
+  chunkedAt?: string | null
+  embeddingStatus: 'pending' | 'queued' | 'embedding' | 'embedded' | 'failed'
+  embeddingError?: string | null
+  embeddingModel?: string | null
+  embeddingDimension: number
+  embeddedAt?: string | null
+  indexStatus: 'pending' | 'indexing' | 'indexed' | 'failed'
+  indexError?: string | null
+  vectorCollection?: string | null
+  indexedAt?: string | null
   createdAt?: string
   updatedAt?: string
 }
+
+export interface ParsedDocumentBlock {
+  id: string
+  type: 'heading' | 'paragraph' | 'table' | 'list' | 'code' | 'json'
+  text: string
+  level?: number
+  page?: number
+  language?: string
+  headingPath?: string[]
+  rows?: string[][]
+  metadata?: Record<string, string | number | boolean | null | string[] | number[]>
+}
+
+export interface ParsedDocument {
+  title: string
+  format: string
+  contentType: string
+  text: string
+  characterCount: number
+  blocks: ParsedDocumentBlock[]
+  metadata: {
+    parser: string
+    blockCount: number
+    warnings?: string[]
+    cleaner?: string
+    removedBlockCount?: number
+    originalCharacterCount?: number
+    rules?: string[]
+    enhancer?: string
+    sourceCharacterCount?: number
+    summary?: string
+    keywords?: string[]
+    enhancementRules?: string[]
+  }
+}
+
+export type CleanedDocument = ParsedDocument
+export type EnhancedDocument = ParsedDocument
 
 export type CreateLlmPayload = Omit<LlmItem, 'id' | 'createdAt' | 'updatedAt'>
 export type UpdateLlmPayload = Partial<CreateLlmPayload>
@@ -524,6 +590,13 @@ export const listKnowledgeDocumentsApi = async (
   return request.get(`/ai/knowledge/${knowledgeId}/documents`, { params })
 }
 
+export const getKnowledgeDocumentApi = async (
+  knowledgeId: number,
+  documentId: number,
+): Promise<KnowledgeDocumentItem> => {
+  return request.get(`/ai/knowledge/${knowledgeId}/documents/${documentId}`)
+}
+
 export const createKnowledgeDocumentApi = async (
   knowledgeId: number,
   payload: CreateKnowledgeDocumentPayload,
@@ -537,6 +610,13 @@ export const updateKnowledgeDocumentApi = async (
   payload: UpdateKnowledgeDocumentPayload,
 ): Promise<KnowledgeDocumentItem> => {
   return request.put(`/ai/knowledge/${knowledgeId}/documents/${documentId}`, payload)
+}
+
+export const processKnowledgeDocumentApi = async (
+  knowledgeId: number,
+  documentId: number,
+): Promise<KnowledgeDocumentItem> => {
+  return request.post(`/ai/knowledge/${knowledgeId}/documents/${documentId}/process`)
 }
 
 export const deleteKnowledgeDocumentApi = async (knowledgeId: number, documentId: number) => {

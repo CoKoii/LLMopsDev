@@ -55,6 +55,18 @@ export class KnowledgeController {
   // -------------------------
 
   // -------------------------
+  // 获取知识库文档详情
+  @Get(":id/documents/:documentId")
+  findDocument(
+    @Param("id", ParseIntPipe) id: number,
+    @Param("documentId", ParseIntPipe) documentId: number,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.knowledgeService.findDocument(id, documentId, user.userId);
+  }
+  // -------------------------
+
+  // -------------------------
   // 添加知识库文档
   @Post(":id/documents")
   createDocument(
@@ -63,6 +75,18 @@ export class KnowledgeController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.knowledgeService.createDocument(id, dto, user.userId);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 处理知识库文档
+  @Post(":id/documents/:documentId/process")
+  processDocument(
+    @Param("id", ParseIntPipe) id: number,
+    @Param("documentId", ParseIntPipe) documentId: number,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.knowledgeService.processDocument(id, documentId, user.userId);
   }
   // -------------------------
 

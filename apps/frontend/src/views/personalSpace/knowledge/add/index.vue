@@ -1,8 +1,14 @@
 <script setup lang="ts">
-import { createKnowledgeDocumentApi, uploadFileApi } from '@/api'
+import {
+  createKnowledgeDocumentApi,
+  getKnowledgeDocumentApi,
+  processKnowledgeDocumentApi,
+  uploadFileApi,
+  type KnowledgeDocumentItem,
+} from '@/api'
 import { Check, FileText, Plus, Trash2 } from '@lucide/vue'
 import { Button, Checkbox, Input, message } from 'antdv-next'
-import { computed, reactive, ref } from 'vue'
+import { computed, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 interface UploadFileItem {
@@ -10,8 +16,15 @@ interface UploadFileItem {
   file: File
   name: string
   size: number
-  progress: number
-  status: 'waiting' | 'processing' | 'done'
+  status:
+    | 'waiting'
+    | 'uploading'
+    | 'creating'
+    | 'submitting'
+    | 'processing'
+    | 'completed'
+    | 'failed'
+  message: string
 }
 
 type WizardStep = 1 | 2 | 3
@@ -22,7 +35,7 @@ const router = useRouter()
 const wizardStep = ref<WizardStep>(1)
 const selectedFiles = ref<UploadFileItem[]>([])
 const chunkMode = ref<ChunkMode>('auto')
-const processing = ref(false)
+const processingStarted = ref(false)
 const fileInputRef = ref<HTMLInputElement>()
 const customConfig = reactive({
   separator: '',
@@ -31,15 +44,22 @@ const customConfig = reactive({
   removeUrls: false,
 })
 
-const acceptedExtensions = ['pdf', 'txt', 'doc', 'docx', 'md']
+const acceptedExtensions = ['pdf', 'txt', 'docx', 'md', 'json', 'csv', 'html', 'htm', 'xlsx', 'xls']
 const maxFileCount = 10
 const maxFileSize = 10 * 1024 * 1024
+let disposed = false
 
 const uploadStepItems = computed(() => [
   { index: 1 as WizardStep, title: '上传', done: wizardStep.value > 1 },
   { index: 2 as WizardStep, title: '分段设置', done: wizardStep.value > 2 },
   { index: 3 as WizardStep, title: '数据处理', done: false },
 ])
+
+const allFilesHandled = computed(
+  () =>
+    selectedFiles.value.length > 0 &&
+    selectedFiles.value.every((item) => item.status === 'completed' || item.status === 'failed'),
+)
 
 const parseKnowledgeId = () => {
   const value = route.params.knowledgeId
@@ -92,8 +112,8 @@ const appendFiles = (fileList: FileList | File[]) => {
       file,
       name: file.name,
       size: file.size,
-      progress: 0,
       status: 'waiting' as const,
+      message: '待处理',
     })),
   ]
 }
@@ -141,6 +161,7 @@ const goNextStep = () => {
 
   if (wizardStep.value === 2) {
     wizardStep.value = 3
+    void startProcessing()
   }
 }
 
@@ -150,29 +171,116 @@ const goPreviousStep = () => {
   }
 }
 
-const confirmUpload = async () => {
-  const knowledgeId = parseKnowledgeId()
-  if (!Number.isFinite(knowledgeId)) return
+const wait = (milliseconds: number) =>
+  new Promise<void>((resolve) => {
+    window.setTimeout(resolve, milliseconds)
+  })
 
-  processing.value = true
-  try {
-    for (const item of selectedFiles.value) {
-      item.status = 'processing'
-      item.progress = 35
+const hasDocumentFailed = (document: KnowledgeDocumentItem) =>
+  document.parseStatus === 'failed' ||
+  document.cleanStatus === 'failed' ||
+  document.enhanceStatus === 'failed' ||
+  document.chunkStatus === 'failed' ||
+  document.embeddingStatus === 'failed' ||
+  document.indexStatus === 'failed'
 
-      const uploadedFile = await uploadFileApi(item.file)
-      await createKnowledgeDocumentApi(knowledgeId, { fileId: uploadedFile.id })
+const resolveDocumentFailure = (document: KnowledgeDocumentItem) => {
+  if (document.parseStatus === 'failed') return '解析失败'
+  if (document.cleanStatus === 'failed') return '清洗失败'
+  if (document.enhanceStatus === 'failed') return '增强失败'
+  if (document.chunkStatus === 'failed') return '切片失败'
+  if (document.embeddingStatus === 'failed') return '向量化失败'
+  if (document.indexStatus === 'failed') return '入库失败'
+  return '处理失败'
+}
 
-      item.status = 'done'
-      item.progress = 100
+const resolveDocumentProgress = (document: KnowledgeDocumentItem) => {
+  if (document.indexStatus === 'indexed') return '处理完成'
+  if (document.indexStatus === 'indexing') return '写入索引'
+  if (document.embeddingStatus === 'embedding') return '向量化中'
+  if (document.embeddingStatus === 'embedded') return '写入索引'
+  if (document.embeddingStatus === 'queued') return '等待向量化'
+  if (document.chunkStatus === 'chunking') return '切片中'
+  if (document.chunkStatus === 'chunked') return '等待向量化'
+  if (document.enhanceStatus === 'enhancing') return '增强中'
+  if (document.enhanceStatus === 'enhanced') return '切片中'
+  if (document.cleanStatus === 'cleaning') return '清洗中'
+  if (document.cleanStatus === 'cleaned') return '切片中'
+  if (document.parseStatus === 'parsing') return '解析中'
+  if (document.parseStatus === 'parsed') return '清洗中'
+  return '等待处理'
+}
+
+const pollDocumentProgress = async (
+  knowledgeId: number,
+  documentId: number,
+  item: UploadFileItem,
+) => {
+  while (!disposed) {
+    const document = await getKnowledgeDocumentApi(knowledgeId, documentId)
+    item.message = resolveDocumentProgress(document)
+
+    if (hasDocumentFailed(document)) {
+      item.status = 'failed'
+      item.message = resolveDocumentFailure(document)
+      return
     }
 
-    message.success('文件已添加')
-    void router.push({ name: 'knowledge-files', params: { knowledgeId } })
-  } finally {
-    processing.value = false
+    if (document.indexStatus === 'indexed') {
+      item.status = 'completed'
+      item.message = '处理完成'
+      return
+    }
+
+    await wait(1200)
   }
 }
+
+const processSelectedFile = async (knowledgeId: number, item: UploadFileItem) => {
+  try {
+    item.status = 'uploading'
+    item.message = '上传中'
+
+    const uploadedFile = await uploadFileApi(item.file)
+    item.status = 'creating'
+    item.message = '创建文档'
+
+    const document = await createKnowledgeDocumentApi(knowledgeId, { fileId: uploadedFile.id })
+    item.status = 'submitting'
+    item.message = '提交处理'
+
+    const processingDocument = await processKnowledgeDocumentApi(knowledgeId, document.id)
+    item.status = 'processing'
+    item.message = resolveDocumentProgress(processingDocument)
+
+    await pollDocumentProgress(knowledgeId, document.id, item)
+  } catch {
+    item.status = 'failed'
+    item.message = '处理失败'
+  }
+}
+
+const startProcessing = async () => {
+  const knowledgeId = parseKnowledgeId()
+  if (!Number.isFinite(knowledgeId)) return
+  if (processingStarted.value) return
+
+  processingStarted.value = true
+  await Promise.all(selectedFiles.value.map((item) => processSelectedFile(knowledgeId, item)))
+  if (selectedFiles.value.every((item) => item.status === 'completed')) {
+    message.success('文件处理完成')
+  } else {
+    message.warning('部分文件处理失败')
+  }
+}
+
+const finishUpload = () => {
+  void router.push({ name: 'knowledge-files', params: { knowledgeId: parseKnowledgeId() } })
+}
+
+onUnmounted(() => {
+  disposed = true
+})
 </script>
 
 <template>
@@ -206,14 +314,16 @@ const confirmUpload = async () => {
           >
             <Plus class="drop-zone__icon" />
             <span>点击或拖拽文件到此处上传</span>
-            <small>支持PDF、TXT、DOC、DOCX、MD，最多可上传10个文件，每个文件不超过10MB</small>
+            <small
+              >支持PDF、TXT、DOCX、MD、JSON、CSV、HTML、XLSX，最多10个文件，每个不超过10MB</small
+            >
           </button>
           <input
             ref="fileInputRef"
             class="hidden-file-input"
             type="file"
             multiple
-            accept=".pdf,.txt,.doc,.docx,.md"
+            accept=".pdf,.txt,.docx,.md,.json,.csv,.html,.htm,.xlsx,.xls"
             @change="handleFileInputChange"
           />
 
@@ -285,9 +395,14 @@ const confirmUpload = async () => {
         </section>
 
         <section v-else key="processing" class="processing-panel">
-          <p class="processing-title">服务器处理中</p>
+          <p class="processing-title">数据处理中</p>
           <div class="processing-list">
-            <div v-for="item in selectedFiles" :key="item.id" class="processing-file">
+            <div
+              v-for="item in selectedFiles"
+              :key="item.id"
+              class="processing-file"
+              :class="{ failed: item.status === 'failed', completed: item.status === 'completed' }"
+            >
               <div class="processing-file__icon">
                 <FileText />
               </div>
@@ -295,15 +410,7 @@ const confirmUpload = async () => {
                 <strong>{{ item.name }}</strong>
                 <span>{{ formatFileSize(item.size) }}</span>
               </div>
-              <span class="processing-file__status">
-                {{
-                  item.status === 'done'
-                    ? '处理完成'
-                    : item.status === 'processing'
-                      ? `${item.progress}%`
-                      : '待处理'
-                }}
-              </span>
+              <span class="processing-file__status">{{ item.message }}</span>
             </div>
           </div>
         </section>
@@ -311,11 +418,13 @@ const confirmUpload = async () => {
     </main>
 
     <footer class="upload-footer">
-      <p v-if="wizardStep === 3">点击确认不影响数据处理，处理完毕后可进行引用</p>
+      <p v-if="wizardStep === 3">进入本步骤后会自动处理，可留在当前页查看进度</p>
       <div class="upload-actions">
         <Button v-if="wizardStep === 2" @click="goPreviousStep">上一步</Button>
         <Button v-if="wizardStep < 3" type="primary" @click="goNextStep">下一步</Button>
-        <Button v-else type="primary" :loading="processing" @click="confirmUpload">确定</Button>
+        <Button v-else type="primary" @click="finishUpload">
+          {{ allFilesHandled ? '完成' : '返回列表' }}
+        </Button>
       </div>
     </footer>
   </div>
