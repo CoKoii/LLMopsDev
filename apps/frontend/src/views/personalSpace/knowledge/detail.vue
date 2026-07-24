@@ -3,7 +3,6 @@ import {
   deleteKnowledgeDocumentApi,
   getKnowledgeApi,
   listKnowledgeDocumentsApi,
-  processKnowledgeDocumentApi,
   updateKnowledgeDocumentApi,
   type KnowledgeDocumentItem,
   type KnowledgeItem,
@@ -57,7 +56,6 @@ const columns = [
 ]
 
 const fileActionMenuItems: MenuProps['items'] = [
-  { key: 'process', label: '重新处理' },
   { key: 'rename', label: '重命名' },
   { key: 'delete', label: '删除', danger: true },
 ]
@@ -232,29 +230,6 @@ const addFile = () => {
   })
 }
 
-const processFile = async (record: KnowledgeDocumentItem) => {
-  const knowledgeId = parseKnowledgeId()
-  if (!Number.isFinite(knowledgeId)) return
-
-  const previousRecord = { ...record }
-  record.parseStatus = 'parsing'
-  record.cleanStatus = 'pending'
-  record.enhanceStatus = 'pending'
-  record.chunkStatus = 'pending'
-  record.embeddingStatus = 'pending'
-  record.indexStatus = 'pending'
-  try {
-    const parsedDocument = await processKnowledgeDocumentApi(knowledgeId, record.id)
-    documents.value = documents.value.map((item) =>
-      item.id === parsedDocument.id ? parsedDocument : item,
-    )
-    schedulePolling()
-    message.success('文档已提交处理')
-  } catch {
-    Object.assign(record, previousRecord)
-  }
-}
-
 const toggleFile = async (record: KnowledgeDocumentItem, checked: boolean) => {
   const knowledgeId = parseKnowledgeId()
   if (!Number.isFinite(knowledgeId)) return
@@ -323,11 +298,6 @@ const confirmDeleteFile = (record: KnowledgeDocumentItem) => {
 const handleFileAction = (event: { key: string | number }, record: KnowledgeDocumentItem) => {
   if (event.key === 'rename') {
     openRenameModal(record)
-    return
-  }
-
-  if (event.key === 'process') {
-    void processFile(record)
     return
   }
 

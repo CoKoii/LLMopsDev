@@ -79,18 +79,6 @@ export class KnowledgeController {
   // -------------------------
 
   // -------------------------
-  // 处理知识库文档
-  @Post(":id/documents/:documentId/process")
-  processDocument(
-    @Param("id", ParseIntPipe) id: number,
-    @Param("documentId", ParseIntPipe) documentId: number,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.knowledgeService.processDocument(id, documentId, user.userId);
-  }
-  // -------------------------
-
-  // -------------------------
   // 更新知识库文档
   @Put(":id/documents/:documentId")
   updateDocument(

@@ -174,18 +174,6 @@ export class KnowledgeService {
     await this.chunkRepository.delete({ documentId });
   }
 
-  private isDocumentProcessing(document: KnowledgeDocument) {
-    return (
-      document.parseStatus === KnowledgeDocumentParseStatus.PARSING ||
-      document.cleanStatus === KnowledgeDocumentCleanStatus.CLEANING ||
-      document.enhanceStatus === KnowledgeDocumentEnhanceStatus.ENHANCING ||
-      document.chunkStatus === KnowledgeDocumentChunkStatus.CHUNKING ||
-      document.embeddingStatus === KnowledgeDocumentEmbeddingStatus.QUEUED ||
-      document.embeddingStatus === KnowledgeDocumentEmbeddingStatus.EMBEDDING ||
-      document.indexStatus === KnowledgeDocumentIndexStatus.INDEXING
-    );
-  }
-
   // --------------------------------------------------------------------------------------------------
   // 创建知识库
   async create(createKnowledgeDto: CreateKnowledgeDto, userId: number) {
@@ -347,7 +335,7 @@ export class KnowledgeService {
         objectKey: file.objectKey,
         url: file.url,
         enabled: true,
-        parseStatus: KnowledgeDocumentParseStatus.UPLOADED,
+        parseStatus: KnowledgeDocumentParseStatus.PARSING,
         cleanStatus: KnowledgeDocumentCleanStatus.PENDING,
         enhanceStatus: KnowledgeDocumentEnhanceStatus.PENDING,
         chunkStatus: KnowledgeDocumentChunkStatus.PENDING,
@@ -355,6 +343,18 @@ export class KnowledgeService {
         indexStatus: KnowledgeDocumentIndexStatus.PENDING,
       }),
     );
+
+    try {
+      await this.documentProcessQueueService.enqueue({
+        knowledgeId,
+        documentId: document.id,
+        userId,
+      });
+    } catch (error) {
+      this.applyProcessError(document, error);
+      await this.documentRepository.save(document);
+      throw error;
+    }
 
     return this.withAccessibleDocumentUrl(document);
   }
@@ -403,43 +403,6 @@ export class KnowledgeService {
     await this.clearDocumentIndex(documentId);
     await this.documentRepository.softRemove(document);
     return { success: true };
-  }
-  // --------------------------------------------------------------------------------------------------
-
-  // --------------------------------------------------------------------------------------------------
-  // 提交知识库文档处理任务
-  async processDocument(
-    knowledgeId: number,
-    documentId: number,
-    userId: number,
-  ) {
-    const document = await this.findOwnedDocument(
-      knowledgeId,
-      documentId,
-      userId,
-    );
-
-    if (this.isDocumentProcessing(document)) {
-      return this.withAccessibleDocumentUrl(document);
-    }
-
-    document.parseStatus = KnowledgeDocumentParseStatus.PARSING;
-    this.resetParsedArtifacts(document);
-    const savedDocument = await this.documentRepository.save(document);
-
-    try {
-      await this.documentProcessQueueService.enqueue({
-        knowledgeId,
-        documentId,
-        userId,
-      });
-    } catch (error) {
-      this.applyProcessError(savedDocument, error);
-      await this.documentRepository.save(savedDocument);
-      throw error;
-    }
-
-    return this.withAccessibleDocumentUrl(savedDocument);
   }
   // --------------------------------------------------------------------------------------------------
 

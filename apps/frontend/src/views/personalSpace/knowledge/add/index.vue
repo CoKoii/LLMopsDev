@@ -2,7 +2,6 @@
 import {
   createKnowledgeDocumentApi,
   getKnowledgeDocumentApi,
-  processKnowledgeDocumentApi,
   uploadFileApi,
   type KnowledgeDocumentItem,
 } from '@/api'
@@ -16,14 +15,7 @@ interface UploadFileItem {
   file: File
   name: string
   size: number
-  status:
-    | 'waiting'
-    | 'uploading'
-    | 'creating'
-    | 'submitting'
-    | 'processing'
-    | 'completed'
-    | 'failed'
+  status: 'waiting' | 'uploading' | 'creating' | 'processing' | 'completed' | 'failed'
   message: string
 }
 
@@ -246,12 +238,8 @@ const processSelectedFile = async (knowledgeId: number, item: UploadFileItem) =>
     item.message = '创建文档'
 
     const document = await createKnowledgeDocumentApi(knowledgeId, { fileId: uploadedFile.id })
-    item.status = 'submitting'
-    item.message = '提交处理'
-
-    const processingDocument = await processKnowledgeDocumentApi(knowledgeId, document.id)
     item.status = 'processing'
-    item.message = resolveDocumentProgress(processingDocument)
+    item.message = resolveDocumentProgress(document)
 
     await pollDocumentProgress(knowledgeId, document.id, item)
   } catch {

@@ -612,13 +612,6 @@ export const updateKnowledgeDocumentApi = async (
   return request.put(`/ai/knowledge/${knowledgeId}/documents/${documentId}`, payload)
 }
 
-export const processKnowledgeDocumentApi = async (
-  knowledgeId: number,
-  documentId: number,
-): Promise<KnowledgeDocumentItem> => {
-  return request.post(`/ai/knowledge/${knowledgeId}/documents/${documentId}/process`)
-}
-
 export const deleteKnowledgeDocumentApi = async (knowledgeId: number, documentId: number) => {
   return request.delete(`/ai/knowledge/${knowledgeId}/documents/${documentId}`)
 }
