@@ -17,9 +17,6 @@
   --color-white: var(--white);
   --color-success: #0f766e;
   --color-scrim: rgba(17, 24, 39, 0.35);
-  --scrollbar-thumb: rgba(100, 116, 139, 0.28);
-  --scrollbar-thumb-hover: rgba(100, 116, 139, 0.42);
-  --scrollbar-track: transparent;
   --shadow-floating: 0 2.4rem 6.4rem rgba(17, 24, 39, 0.18);
   --radius-sm: 0.6rem;
   --radius-md: 0.8rem;
@@ -51,67 +48,6 @@
 .app-orchestration *::before,
 .app-orchestration *::after {
   box-sizing: border-box;
-}
-
-.app-orchestration,
-.app-orchestration :deep(*),
-.model-settings,
-.model-settings :deep(*),
-.plugin-modal-mask,
-.plugin-modal-mask :deep(*),
-.publish-history,
-.publish-history :deep(*) {
-  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
-  scrollbar-width: thin;
-}
-
-.app-orchestration::-webkit-scrollbar,
-.app-orchestration :deep(*)::-webkit-scrollbar,
-.model-settings::-webkit-scrollbar,
-.model-settings :deep(*)::-webkit-scrollbar,
-.plugin-modal-mask::-webkit-scrollbar,
-.plugin-modal-mask :deep(*)::-webkit-scrollbar,
-.publish-history::-webkit-scrollbar,
-.publish-history :deep(*)::-webkit-scrollbar {
-  width: 0.6rem;
-  height: 0.6rem;
-}
-
-.app-orchestration::-webkit-scrollbar-track,
-.app-orchestration :deep(*)::-webkit-scrollbar-track,
-.model-settings::-webkit-scrollbar-track,
-.model-settings :deep(*)::-webkit-scrollbar-track,
-.plugin-modal-mask::-webkit-scrollbar-track,
-.plugin-modal-mask :deep(*)::-webkit-scrollbar-track,
-.publish-history::-webkit-scrollbar-track,
-.publish-history :deep(*)::-webkit-scrollbar-track {
-  background: var(--scrollbar-track);
-}
-
-.app-orchestration::-webkit-scrollbar-thumb,
-.app-orchestration :deep(*)::-webkit-scrollbar-thumb,
-.model-settings::-webkit-scrollbar-thumb,
-.model-settings :deep(*)::-webkit-scrollbar-thumb,
-.plugin-modal-mask::-webkit-scrollbar-thumb,
-.plugin-modal-mask :deep(*)::-webkit-scrollbar-thumb,
-.publish-history::-webkit-scrollbar-thumb,
-.publish-history :deep(*)::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border: 0.2rem solid transparent;
-  border-radius: var(--radius-pill);
-  background-clip: padding-box;
-}
-
-.app-orchestration::-webkit-scrollbar-thumb:hover,
-.app-orchestration :deep(*)::-webkit-scrollbar-thumb:hover,
-.model-settings::-webkit-scrollbar-thumb:hover,
-.model-settings :deep(*)::-webkit-scrollbar-thumb:hover,
-.plugin-modal-mask::-webkit-scrollbar-thumb:hover,
-.plugin-modal-mask :deep(*)::-webkit-scrollbar-thumb:hover,
-.publish-history::-webkit-scrollbar-thumb:hover,
-.publish-history :deep(*)::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
-  background-clip: padding-box;
 }
 
 .workspace-topbar {

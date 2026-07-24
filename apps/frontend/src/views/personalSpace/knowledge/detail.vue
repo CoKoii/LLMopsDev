@@ -23,7 +23,7 @@ import {
   Tag,
   type MenuProps,
 } from 'antdv-next'
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 const route = useRoute()
@@ -32,11 +32,18 @@ const knowledge = ref<KnowledgeItem>()
 const loading = ref(false)
 const searchValue = ref('')
 const documents = ref<KnowledgeDocumentItem[]>([])
+const documentTotal = ref(0)
+const tableContainerRef = ref<HTMLDivElement>()
+const tableScrollY = ref(240)
 const renameModalOpen = ref(false)
 const renameSaving = ref(false)
 const renameDocumentId = ref<number>()
 const renameName = ref('')
 let pollingTimer: ReturnType<typeof window.setTimeout> | undefined
+let tableResizeObserver: ResizeObserver | undefined
+let tableScrollSyncQueued = false
+
+const MIN_TABLE_SCROLL_Y = 160
 
 const columns = [
   { title: '#', dataIndex: 'id', key: 'id', width: 72, align: 'center' as const },
@@ -55,19 +62,23 @@ const fileActionMenuItems: MenuProps['items'] = [
   { key: 'delete', label: '删除', danger: true },
 ]
 
-const tablePagination = {
-  pageSize: 10,
-  showSizeChanger: true,
-  pageSizeOptions: ['10', '20', '50'],
-  showTotal: (total: number) => `共 ${total} 个文档`,
-}
-
-const filteredDocuments = computed(() => {
-  const keyword = searchValue.value.trim().toLowerCase()
-  if (!keyword) return documents.value
-
-  return documents.value.filter((item) => item.name.toLowerCase().includes(keyword))
+const pagination = ref({
+  current: 1,
+  pageSize: 20,
 })
+
+const tablePagination = computed(() => ({
+  current: pagination.value.current,
+  pageSize: pagination.value.pageSize,
+  total: documentTotal.value,
+  showSizeChanger: true,
+  pageSizeOptions: ['10', '20', '50', '100'],
+  showTotal: (total: number) => `共 ${total} 个文档`,
+}))
+
+const tableScroll = computed(() => ({
+  y: tableScrollY.value,
+}))
 
 const totalCharacterCount = computed(() =>
   documents.value.reduce((total, item) => total + item.characterCount, 0),
@@ -131,6 +142,37 @@ const schedulePolling = () => {
   }, 3000)
 }
 
+const updateTableScroll = () => {
+  const container = tableContainerRef.value
+  if (!container) return
+
+  const header = container.querySelector<HTMLElement>('.ant-table-thead')
+  const paginationElement = container.querySelector<HTMLElement>('.ant-pagination')
+  const headerHeight = header?.offsetHeight ?? 0
+  const paginationHeight = paginationElement?.offsetHeight ?? 0
+  const paginationMargin = paginationElement
+    ? Number.parseFloat(window.getComputedStyle(paginationElement).marginTop || '0')
+    : 0
+  const nextHeight = Math.floor(
+    container.clientHeight - headerHeight - paginationHeight - paginationMargin,
+  )
+  const nextScrollY = Math.max(nextHeight, MIN_TABLE_SCROLL_Y)
+
+  if (tableScrollY.value !== nextScrollY) {
+    tableScrollY.value = nextScrollY
+  }
+}
+
+const syncTableScroll = () => {
+  if (tableScrollSyncQueued) return
+
+  tableScrollSyncQueued = true
+  void nextTick(() => {
+    tableScrollSyncQueued = false
+    updateTableScroll()
+  })
+}
+
 const loadKnowledge = async (options: { silent?: boolean } = {}) => {
   const knowledgeId = parseKnowledgeId()
   if (!Number.isFinite(knowledgeId)) return
@@ -141,15 +183,22 @@ const loadKnowledge = async (options: { silent?: boolean } = {}) => {
   try {
     const [knowledgeDetail, documentResult] = await Promise.all([
       getKnowledgeApi(knowledgeId),
-      listKnowledgeDocumentsApi(knowledgeId, { page: 1, pageSize: 100 }),
+      listKnowledgeDocumentsApi(knowledgeId, {
+        page: pagination.value.current,
+        pageSize: pagination.value.pageSize,
+        name: searchValue.value.trim() || undefined,
+      }),
     ])
     knowledge.value = knowledgeDetail
     documents.value = documentResult.items
+    documentTotal.value = documentResult.total
+    syncTableScroll()
     schedulePolling()
   } catch {
     if (!options.silent) {
       message.error('知识库详情获取失败')
       documents.value = []
+      documentTotal.value = 0
     } else {
       schedulePolling()
     }
@@ -158,6 +207,18 @@ const loadKnowledge = async (options: { silent?: boolean } = {}) => {
       loading.value = false
     }
   }
+}
+
+const handleTableChange = (nextPagination: { current?: number; pageSize?: number }) => {
+  const nextPageSize = nextPagination.pageSize ?? pagination.value.pageSize
+  pagination.value = {
+    current:
+      nextPageSize === pagination.value.pageSize
+        ? (nextPagination.current ?? pagination.value.current)
+        : 1,
+    pageSize: nextPageSize,
+  }
+  void loadKnowledge()
 }
 
 const runRecallTest = () => {
@@ -250,8 +311,11 @@ const confirmDeleteFile = (record: KnowledgeDocumentItem) => {
       if (!Number.isFinite(knowledgeId)) return
 
       await deleteKnowledgeDocumentApi(knowledgeId, record.id)
-      documents.value = documents.value.filter((item) => item.id !== record.id)
       message.success('文档已删除')
+      if (documents.value.length === 1 && pagination.value.current > 1) {
+        pagination.value.current -= 1
+      }
+      await loadKnowledge()
     },
   })
 }
@@ -275,13 +339,28 @@ const handleFileAction = (event: { key: string | number }, record: KnowledgeDocu
 watch(
   () => route.params.knowledgeId,
   () => {
+    pagination.value.current = 1
     void loadKnowledge()
   },
   { immediate: true },
 )
 
+watch(searchValue, () => {
+  pagination.value.current = 1
+  void loadKnowledge()
+})
+
+onMounted(() => {
+  tableResizeObserver = new ResizeObserver(syncTableScroll)
+  if (tableContainerRef.value) {
+    tableResizeObserver.observe(tableContainerRef.value)
+  }
+  syncTableScroll()
+})
+
 onUnmounted(() => {
   clearPollingTimer()
+  tableResizeObserver?.disconnect()
 })
 </script>
 
@@ -299,7 +378,7 @@ onUnmounted(() => {
               <h1>{{ knowledgeTitle }}</h1>
             </div>
             <p>
-              <Tag>{{ documents.length }} 文档</Tag>
+              <Tag>{{ documentTotal }} 文档</Tag>
               <Tag>{{ formatNumber(totalCharacterCount) }} 命中</Tag>
               <Tag>3 关联应用</Tag>
             </p>
@@ -323,15 +402,17 @@ onUnmounted(() => {
     </header>
 
     <main class="knowledge-files-main">
-      <div class="knowledge-table">
+      <div ref="tableContainerRef" class="knowledge-table">
         <Table
           row-key="id"
           size="small"
           :columns="columns"
-          :data-source="filteredDocuments"
+          :data-source="documents"
           :loading="loading"
           :pagination="tablePagination"
+          :scroll="tableScroll"
           :locale="{ emptyText: '暂无文档' }"
+          @change="handleTableChange"
         >
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'characterCount'">
