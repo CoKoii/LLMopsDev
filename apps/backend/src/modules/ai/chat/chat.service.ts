@@ -284,7 +284,7 @@ export class ChatService {
       });
       contextParts.push(
         [
-          `[${citationId}] 知识库：${item.knowledgeName}`,
+          `资料 ${citationId}：知识库：${item.knowledgeName}`,
           item.query ? `检索问题：${item.query}` : undefined,
           `文档：${item.documentName} / 片段 #${item.chunkIndex + 1}`,
           `匹配度：${item.score}`,
