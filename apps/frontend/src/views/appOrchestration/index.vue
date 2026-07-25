@@ -115,7 +115,6 @@ const knowledgeCatalog = ref<KnowledgeItem[]>([])
 const knowledgeCatalogCache = ref<KnowledgeItem[]>([])
 const knowledgeCatalogLoading = ref(false)
 const draftKnowledgeIds = ref<number[]>([])
-const activeKnowledgeSettingsId = ref<number>()
 const knowledgeSettingsDraft = ref<Required<AppKnowledgeRecallSettings>>({
   strategy: 'hybrid',
   limit: 5,
@@ -660,52 +659,24 @@ function toggleDraftKnowledgeSelection(id: number) {
   draftKnowledgeIds.value = [...next]
 }
 
-function pickKnowledgeSettings(ids: number[]) {
-  const selectedIds = new Set(ids)
-  return Object.entries(knowledgeConfig.settings).reduce<Record<number, AppKnowledgeRecallSettings>>(
-    (result, [key, value]) => {
-      const id = Number(key)
-      if (selectedIds.has(id)) {
-        result[id] = value
-      }
-      return result
-    },
-    {},
-  )
-}
-
 function confirmKnowledgeSelection() {
   const ids = [...new Set(draftKnowledgeIds.value)].slice(0, knowledgeLimit)
   knowledgeConfig.ids = ids
-  knowledgeConfig.settings = pickKnowledgeSettings(ids)
   knowledgeModalOpen.value = false
 }
 
-function getKnowledgeRecallSettings(id: number): Required<AppKnowledgeRecallSettings> {
-  return normalizeKnowledgeRecallSettings(knowledgeConfig.settings[id] ?? {})
-}
-
-function openKnowledgeSettings(id: number) {
-  activeKnowledgeSettingsId.value = id
-  knowledgeSettingsDraft.value = getKnowledgeRecallSettings(id)
+function openKnowledgeSettings() {
+  knowledgeSettingsDraft.value = normalizeKnowledgeRecallSettings(knowledgeConfig.settings)
   knowledgeSettingsOpen.value = true
 }
 
 function confirmKnowledgeSettings() {
-  const id = activeKnowledgeSettingsId.value
-  if (!id) return
-
-  knowledgeConfig.settings = {
-    ...knowledgeConfig.settings,
-    [id]: normalizeKnowledgeRecallSettings(knowledgeSettingsDraft.value),
-  }
+  knowledgeConfig.settings = normalizeKnowledgeRecallSettings(knowledgeSettingsDraft.value)
   knowledgeSettingsOpen.value = false
 }
 
 function removeSelectedKnowledge(id: number) {
-  const ids = knowledgeConfig.ids.filter((item) => item !== id)
-  knowledgeConfig.ids = ids
-  knowledgeConfig.settings = pickKnowledgeSettings(ids)
+  knowledgeConfig.ids = knowledgeConfig.ids.filter((item) => item !== id)
 }
 
 function openPublishHistory() {
@@ -1096,9 +1067,14 @@ onMounted(() => {
                   <ChevronDown :size="15" />
                   <h3>知识库</h3>
                 </div>
-                <Button type="text" size="small" @click="openKnowledgeModal"
-                  ><template #icon><Plus :size="16" /></template
-                ></Button>
+                <div class="config-section__actions">
+                  <Button type="text" size="small" @click="openKnowledgeSettings">
+                    <template #icon><Settings :size="14" /></template>
+                  </Button>
+                  <Button type="text" size="small" @click="openKnowledgeModal"
+                    ><template #icon><Plus :size="16" /></template
+                  ></Button>
+                </div>
               </div>
               <div v-if="selectedKnowledges.length" class="selected-plugin-list">
                 <article v-for="item in selectedKnowledges" :key="item.id" class="capability-item">
@@ -1111,9 +1087,6 @@ onMounted(() => {
                     <p>{{ item.description || '暂无描述' }}</p>
                   </div>
                   <div class="capability-item__actions">
-                    <Button type="text" size="small" @click="openKnowledgeSettings(item.id)">
-                      <template #icon><Settings :size="14" /></template>
-                    </Button>
                     <Button type="text" size="small" @click="removeSelectedKnowledge(item.id)">
                       <template #icon><Trash2 :size="14" /></template>
                     </Button>
@@ -1236,7 +1209,8 @@ onMounted(() => {
                       <p v-if="item.knowledgeQuery">检索问题：{{ item.knowledgeQuery }}</p>
                       <ol>
                         <li v-for="citation in item.knowledgeCitations" :key="citation.id">
-                          <strong>[{{ citation.id }}] {{ citation.knowledgeName }}</strong>
+                          <strong>{{ citation.knowledgeName }}</strong>
+                          <span v-if="citation.query">检索问题：{{ citation.query }}</span>
                           <span
                             >{{ citation.documentName }} · 片段 #{{
                               citation.chunkIndex + 1

@@ -824,7 +824,7 @@ export class KnowledgeService {
   // AI应用知识库召回
   async recallForApp(params: {
     knowledgeIds: number[];
-    settings?: Record<number, AppKnowledgeRecallSettings>;
+    settings?: AppKnowledgeRecallSettings;
     query: string;
     userId: number;
   }): Promise<AppKnowledgeRecallItem[]> {
@@ -843,12 +843,10 @@ export class KnowledgeService {
     const accessibleKnowledgeIds = knowledgeIds.filter((knowledgeId) =>
       knowledgeMap.has(knowledgeId),
     );
-    const needsQueryVector = accessibleKnowledgeIds.some((knowledgeId) => {
-      const { strategy } = this.normalizeRecallSettings(
-        params.settings?.[knowledgeId],
-      );
-      return strategy === "hybrid" || strategy === "vector";
-    });
+    const { strategy, limit } = this.normalizeRecallSettings(params.settings);
+    const needsQueryVector =
+      accessibleKnowledgeIds.length > 0 &&
+      (strategy === "hybrid" || strategy === "vector");
     const queryVector = needsQueryVector
       ? await this.createQueryVector(query)
       : undefined;
@@ -861,7 +859,7 @@ export class KnowledgeService {
           const recallResult = await this.executeRecall(
             knowledgeId,
             query,
-            params.settings?.[knowledgeId],
+            params.settings,
             { queryVector },
           );
           this.scheduleRecallCountIncrement(knowledgeId, recallResult.items);
@@ -875,7 +873,9 @@ export class KnowledgeService {
       )
     ).flat();
 
-    return results.sort((left, right) => right.score - left.score).slice(0, 8);
+    return results
+      .sort((left, right) => right.score - left.score)
+      .slice(0, limit);
   }
   // --------------------------------------------------------------------------------------------------
 

@@ -43,7 +43,7 @@ export type AiAppVersionConfig = {
   workflowIds?: number[];
   knowledge?: {
     ids?: number[];
-    settings?: Record<number, AiAppKnowledgeRecallSettings>;
+    settings?: AiAppKnowledgeRecallSettings;
   };
   toggles?: Record<string, boolean>;
   openingStatement?: {

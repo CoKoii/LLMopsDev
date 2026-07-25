@@ -7,7 +7,10 @@ import {
   type AppKnowledgeRecallItem,
   KnowledgeService,
 } from "../knowledge/knowledge.service";
-import { type AiAppVersionConfig } from "../app/entities/app-version.entity";
+import {
+  type AiAppKnowledgeRecallSettings,
+  type AiAppVersionConfig,
+} from "../app/entities/app-version.entity";
 import { AiRuntimeService } from "./ai-runtime.service";
 import { type DebugAppChatHistoryDto } from "./dto/debug-app-chat.dto";
 
@@ -27,14 +30,23 @@ const QUESTION_SUGGESTION_SYSTEM_PROMPT = [
 ].join("\n");
 const QUESTION_SUGGESTION_MODEL = "qwen2.5:0.5b";
 const QUESTION_SUGGESTION_BASE_URL = "http://localhost:11434/v1";
-const QUERY_REWRITE_SYSTEM_PROMPT = [
-  "你负责把用户追问改写成适合知识库检索的独立问题。",
+const KNOWLEDGE_QUERY_PLAN_MODEL = QUESTION_SUGGESTION_MODEL;
+const KNOWLEDGE_QUERY_PLAN_BASE_URL = QUESTION_SUGGESTION_BASE_URL;
+const KNOWLEDGE_QUERY_PLAN_SYSTEM_PROMPT = [
+  "你负责把用户问题规划成适合知识库检索的独立检索问题。",
   "结合最近聊天历史补全省略的主语、对象和约束。",
-  "只输出改写后的检索问题，不解释，不使用代码块。",
+  "如果用户同时问多个问题，拆成多个独立检索问题。",
+  "如果用户只问一个问题，只返回一个检索问题。",
+  "不回答问题，不解释。",
 ].join("\n");
 const QuestionSuggestionsSchema = z
   .object({
     suggestions: z.array(z.string().min(1)).length(3),
+  })
+  .strict();
+const KnowledgeQueryPlanSchema = z
+  .object({
+    queries: z.array(z.string().min(1)).min(1),
   })
   .strict();
 
@@ -47,6 +59,8 @@ type SseEvent =
 
 type KnowledgeCitation = {
   id: number;
+  query?: string;
+  queries?: string[];
   knowledgeId: number;
   knowledgeName: string;
   documentId: number;
@@ -59,6 +73,14 @@ type KnowledgeCitation = {
 type KnowledgeCitationEvent = {
   query: string;
   items: KnowledgeCitation[];
+};
+type KnowledgeRecallItemWithQuery = AppKnowledgeRecallItem & {
+  query?: string;
+  queries?: string[];
+};
+type KnowledgeConfig = {
+  ids: number[];
+  settings: AiAppKnowledgeRecallSettings;
 };
 
 @Injectable()
@@ -95,7 +117,7 @@ export class ChatService {
     return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
   }
 
-  private createRewriteMessages(
+  private createKnowledgeQueryPlanMessages(
     message: string,
     history: DebugAppChatHistoryDto[] = [],
   ): Array<["system" | "human", string]> {
@@ -108,13 +130,13 @@ export class ChatService {
       .join("\n");
 
     return [
-      ["system", QUERY_REWRITE_SYSTEM_PROMPT],
+      ["system", KNOWLEDGE_QUERY_PLAN_SYSTEM_PROMPT],
       [
         "human",
         [
           historyText ? `最近聊天历史：\n${historyText}` : "",
           `当前用户问题：${message}`,
-          "请输出适合知识库检索的独立问题。",
+          '请输出 JSON：{"queries":["检索问题1"]}',
         ]
           .filter(Boolean)
           .join("\n\n"),
@@ -122,53 +144,136 @@ export class ChatService {
     ];
   }
 
-  private async rewriteQuery(
-    model: ChatOpenAI,
+  private normalizeKnowledgeQueries(queries: string[], fallback: string) {
+    const normalizedQueries = [
+      ...new Set(queries.map((item) => item.trim()).filter(Boolean)),
+    ];
+
+    return normalizedQueries.length ? normalizedQueries : [fallback];
+  }
+
+  private async planKnowledgeQueries(
     message: string,
     history: DebugAppChatHistoryDto[] = [],
   ) {
-    const query = message.trim();
-    if (!history.length) return query;
+    const fallback = message.trim();
+    if (!fallback) return [];
 
     try {
-      const response = await model.invoke(
-        this.createRewriteMessages(query, history),
+      const model = new ChatOpenAI({
+        apiKey: "ollama",
+        model: KNOWLEDGE_QUERY_PLAN_MODEL,
+        maxRetries: 0,
+        temperature: 0,
+        configuration: { baseURL: KNOWLEDGE_QUERY_PLAN_BASE_URL },
+      });
+      const structuredModel = model.withStructuredOutput(
+        KnowledgeQueryPlanSchema,
+        {
+          name: "KnowledgeQueryPlan",
+          method: "jsonSchema",
+          strict: true,
+        },
       );
-      return response.text.trim() || query;
+      const response = await structuredModel.invoke(
+        this.createKnowledgeQueryPlanMessages(fallback, history),
+      );
+
+      return this.normalizeKnowledgeQueries(response.queries, fallback);
     } catch (error) {
       const warning = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`知识库检索问题改写失败: ${warning}`);
-      return query;
+      this.logger.warn(`知识库检索问题规划失败: ${warning}`);
+      return [fallback];
     }
   }
 
-  private resolveKnowledgeConfig(config: AiAppVersionConfig) {
+  private resolveKnowledgeConfig(config: AiAppVersionConfig): KnowledgeConfig {
     return {
       ids: config.knowledge?.ids ?? [],
       settings: config.knowledge?.settings ?? {},
     };
   }
 
-  private compressKnowledgeContext(items: AppKnowledgeRecallItem[]) {
-    const maxItems = 6;
+  private resolveKnowledgeContextItemLimit(knowledgeConfig: KnowledgeConfig) {
+    const limit = knowledgeConfig.settings.limit ?? 5;
+    return Math.min(20, Math.max(1, Math.floor(limit)));
+  }
+
+  private orderKnowledgeItemsForCompression(
+    items: KnowledgeRecallItemWithQuery[],
+  ) {
+    const groups = new Map<string, KnowledgeRecallItemWithQuery[]>();
+
+    for (const item of items) {
+      const key = item.query || "";
+      const group = groups.get(key) ?? [];
+      group.push(item);
+      groups.set(key, group);
+    }
+
+    const orderedItems: KnowledgeRecallItemWithQuery[] = [];
+    const groupedItems = [...groups.values()];
+    for (let index = 0; ; index += 1) {
+      let hasItem = false;
+      for (const group of groupedItems) {
+        const item = group[index];
+        if (!item) continue;
+        orderedItems.push(item);
+        hasItem = true;
+      }
+      if (!hasItem) break;
+    }
+
+    return orderedItems;
+  }
+
+  private dedupeKnowledgeRecallItems(items: KnowledgeRecallItemWithQuery[]) {
+    const itemMap = new Map<string, KnowledgeRecallItemWithQuery>();
+
+    for (const item of items) {
+      const chunkKey = `${item.knowledgeId}:${item.chunkId}`;
+      const existingItem = itemMap.get(chunkKey);
+      if (!existingItem) {
+        itemMap.set(chunkKey, {
+          ...item,
+          queries: item.query ? [item.query] : [],
+        });
+        continue;
+      }
+
+      if (item.query && !existingItem.queries?.includes(item.query)) {
+        existingItem.queries = [...(existingItem.queries ?? []), item.query];
+      }
+    }
+
+    return [...itemMap.values()];
+  }
+
+  private compressKnowledgeContext(
+    items: KnowledgeRecallItemWithQuery[],
+    itemLimitPerQuery = 5,
+  ) {
+    const queryCount = new Set(items.map((item) => item.query).filter(Boolean))
+      .size;
+    const maxItems = Math.max(6, (queryCount || 1) * itemLimitPerQuery);
     const maxItemChars = 900;
-    const maxTotalChars = 5000;
-    const usedChunkIds = new Set<number>();
+    const maxTotalChars = Math.max(5000, (queryCount || 1) * 3500);
     const citations: KnowledgeCitation[] = [];
     const contextParts: string[] = [];
     let totalChars = 0;
+    const uniqueItems = this.dedupeKnowledgeRecallItems(items);
 
-    for (const item of items) {
-      if (usedChunkIds.has(item.chunkId)) continue;
+    for (const item of this.orderKnowledgeItemsForCompression(uniqueItems)) {
       if (citations.length >= maxItems) break;
 
       const text = this.compactText(item.text, maxItemChars);
       if (!text || totalChars + text.length > maxTotalChars) break;
 
-      usedChunkIds.add(item.chunkId);
       const citationId = citations.length + 1;
       citations.push({
         id: citationId,
+        query: item.query,
+        queries: item.queries,
         knowledgeId: item.knowledgeId,
         knowledgeName: item.knowledgeName,
         documentId: item.documentId,
@@ -180,10 +285,13 @@ export class ChatService {
       contextParts.push(
         [
           `[${citationId}] 知识库：${item.knowledgeName}`,
+          item.query ? `检索问题：${item.query}` : undefined,
           `文档：${item.documentName} / 片段 #${item.chunkIndex + 1}`,
           `匹配度：${item.score}`,
           `内容：${text}`,
-        ].join("\n"),
+        ]
+          .filter(Boolean)
+          .join("\n"),
       );
       totalChars += text.length;
     }
@@ -325,20 +433,36 @@ export class ChatService {
       const draft = await this.aiRuntimeService.getDraft(appId, userId);
       const model = await this.aiRuntimeService.createModel(draft.config);
       const knowledgeConfig = this.resolveKnowledgeConfig(draft.config);
-      const query = knowledgeConfig.ids.length
-        ? await this.rewriteQuery(model, message, history)
-        : message.trim();
-      const recalledItems = await this.knowledgeService.recallForApp({
-        knowledgeIds: knowledgeConfig.ids,
-        settings: knowledgeConfig.settings,
-        query,
-        userId,
-      });
+      const queryPlans = knowledgeConfig.ids.length
+        ? await this.planKnowledgeQueries(message, history)
+        : [message.trim()];
+      const recalledItems = (
+        await Promise.all(
+          queryPlans.map(async (query) => {
+            const items = await this.knowledgeService.recallForApp({
+              knowledgeIds: knowledgeConfig.ids,
+              settings: knowledgeConfig.settings,
+              query,
+              userId,
+            });
+
+            return items.map((item) => ({ ...item, query }));
+          }),
+        )
+      ).flat();
+      const contextItemLimit =
+        this.resolveKnowledgeContextItemLimit(knowledgeConfig);
       const { context: knowledgeContext, citations } =
-        this.compressKnowledgeContext(recalledItems);
+        this.compressKnowledgeContext(recalledItems, contextItemLimit);
 
       if (citations.length) {
-        yield this.sse({ query, items: citations }, "knowledge");
+        yield this.sse(
+          {
+            query: queryPlans.join("；"),
+            items: citations,
+          },
+          "knowledge",
+        );
       }
 
       const { agent } = await this.aiRuntimeService.createAgentFromDraft(

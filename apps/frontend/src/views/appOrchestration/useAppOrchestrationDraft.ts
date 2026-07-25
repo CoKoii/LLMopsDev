@@ -29,7 +29,7 @@ export const knowledgeLimit = 5
 
 type AppKnowledgeConfig = {
   ids: number[]
-  settings: Record<number, AppKnowledgeRecallSettings>
+  settings: AppKnowledgeRecallSettings
 }
 
 export const configToggles = [
@@ -133,15 +133,6 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
   })
   const buildDraftConfig = (): AiAppVersionConfig => {
     const selectedKnowledgeIds = [...new Set(knowledgeConfig.ids)].slice(0, knowledgeLimit)
-    const selectedKnowledgeSettings = selectedKnowledgeIds.reduce<
-      Record<number, AppKnowledgeRecallSettings>
-    >((result, id) => {
-      const item = knowledgeConfig.settings[id]
-      if (item) {
-        result[id] = { ...item }
-      }
-      return result
-    }, {})
 
     return {
       prompt: promptContent.value,
@@ -151,7 +142,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
       workflowIds: [],
       knowledge: {
         ids: selectedKnowledgeIds,
-        settings: selectedKnowledgeSettings,
+        settings: { ...knowledgeConfig.settings },
       },
       pluginIds: [...new Set(pluginIds.value)],
       toggles: { ...toggleSettings },

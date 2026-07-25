@@ -62,6 +62,8 @@ export interface AppKnowledgeRecallSettings {
 
 export interface AppKnowledgeCitation {
   id: number
+  query?: string
+  queries?: string[]
   knowledgeId: number
   knowledgeName: string
   documentId: number
@@ -92,7 +94,7 @@ export interface AiAppVersionConfig {
   workflowIds?: number[]
   knowledge?: {
     ids?: number[]
-    settings?: Record<number, AppKnowledgeRecallSettings>
+    settings?: AppKnowledgeRecallSettings
   }
   toggles?: Record<string, boolean>
   openingStatement?: {
