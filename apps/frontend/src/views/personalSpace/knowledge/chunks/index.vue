@@ -275,6 +275,7 @@ watch(searchValue, () => {
             v-model:value="formModel.text"
             placeholder="在这里添加文档片段内容"
             :maxlength="20000"
+            :rows="8"
           />
         </label>
         <label>

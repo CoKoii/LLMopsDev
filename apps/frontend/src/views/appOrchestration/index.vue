@@ -13,63 +13,38 @@ import {
   type PluginItem,
 } from '@/api'
 import AppModal from '@/components/AppModal/AppModal.vue'
-import { renderMarkdown } from '@/utils/markdown'
 import {
-  BadgeDollarSign,
   BookOpen,
   Bot,
-  BotMessageSquare,
-  Calculator,
   Code2,
   ChevronDown,
-  CircleCheck,
-  CircleDot,
-  CircleEqual,
-  CircleHelp,
-  CircleStop,
-  CircleX,
-  Clock3,
   Copy,
+  Calculator,
   Database,
   Globe2,
-  History,
-  Hourglass,
   Image,
   Info,
   MessageCircle,
   MessagesSquare,
   MinusCircle,
-  PanelTop,
-  Paperclip,
   Search,
   Plus,
-  RefreshCw,
-  RotateCcw,
-  Save,
-  Send,
   Settings,
   Trash2,
-  User,
   UsersRound,
   Wrench,
   Workflow,
-  X,
 } from '@lucide/vue'
-import { Bubble, Prompts, Sender } from 'ant-design-x-vue'
+import { Prompts } from 'ant-design-x-vue'
 import type { BubbleListProps } from 'ant-design-x-vue'
 import {
   Button,
-  Drawer,
   Input,
   InputNumber,
-  Modal,
-  Popover,
   Radio,
   RadioGroup,
-  Select,
   Slider,
   Switch,
-  Tag,
   TextArea,
   message,
 } from 'antdv-next'
@@ -83,6 +58,14 @@ import {
   type CapabilityItem,
 } from './useAppOrchestrationDraft'
 import { useAppDebugSession } from './useAppDebugSession'
+import AppOrchestrationTopbar from './AppOrchestrationTopbar.vue'
+import DebugPreviewPanel from './DebugPreviewPanel.vue'
+import PromptOptimizeModal from './PromptOptimizeModal.vue'
+import PromptEditorPanel from './PromptEditorPanel.vue'
+import PublishConfigView from './PublishConfigView.vue'
+import PublishHistoryDrawer from './PublishHistoryDrawer.vue'
+import ResourceSelectionModals from './ResourceSelectionModals.vue'
+import StatsAnalysisView from './StatsAnalysisView.vue'
 
 type ChatMessage = {
   key: string
@@ -105,8 +88,8 @@ const publishHistoryOpen = ref(false)
 const promptOptimizeOpen = ref(false)
 const promptOptimizeSource = ref('')
 const promptOptimizeResult = ref('')
-const chatListRef = ref<HTMLElement>()
-const promptOptimizeResultRef = ref<HTMLElement>()
+const chatPreviewRef = ref<InstanceType<typeof DebugPreviewPanel>>()
+const promptOptimizeModalRef = ref<InstanceType<typeof PromptOptimizeModal>>()
 const pluginCatalog = ref<PluginItem[]>([])
 const pluginCatalogCache = ref<PluginItem[]>([])
 const pluginCategoryCatalog = ref<PluginCategoryItem[]>([])
@@ -359,87 +342,6 @@ function buildPluginGroups(plugins: PluginItem[], fallbackTitle: string) {
       items: group.items.sort((a, b) => a.name.localeCompare(b.name)),
     }))
 }
-const publishChannels = [
-  {
-    key: 'web',
-    title: '网页版',
-    description: '可通过访问PC网页立即开始对话。',
-    icon: PanelTop,
-    tone: '#e0f2fe',
-    status: 'configured',
-    action: 'visit',
-    link: 'https://www.llmops-imooc.com/web-app/WNFEKnzu',
-  },
-  {
-    key: 'wechat',
-    title: '微信公众号（订阅号、服务号）',
-    description: '接入微信公众号，自动回复用户消息，助力高效私域运营',
-    icon: MessagesSquare,
-    tone: '#dcfce7',
-    status: 'unconfigured',
-    action: 'configure',
-  },
-  {
-    key: 'feishu',
-    title: '飞书（Bot群聊机器人）',
-    description: '在飞书中直接 @Bot 对话，提高工作生产力',
-    icon: Send,
-    tone: '#e0f2fe',
-    status: 'unconfigured',
-    action: 'configure',
-  },
-]
-const chartRange = '过去7天'
-const chartDescription = '展示最近7天的会话数'
-const overviewMetrics = [
-  {
-    key: 'sessions',
-    label: '全部会话数',
-    value: '1,354',
-    unit: '次',
-    change: '0%',
-    icon: BotMessageSquare,
-  },
-  {
-    key: 'active-users',
-    label: '活跃用户数',
-    value: '1,012',
-    unit: '人',
-    change: '17.5%',
-    icon: UsersRound,
-  },
-  {
-    key: 'interactions',
-    label: '平均会话互动数',
-    value: '12',
-    unit: '次',
-    change: '34.1%',
-    icon: Hourglass,
-  },
-  {
-    key: 'token-speed',
-    label: 'Token输出速度',
-    value: '14.7',
-    unit: '次',
-    change: '34.1%',
-    icon: Calculator,
-  },
-  {
-    key: 'cost',
-    label: '费用消耗',
-    value: '14.78',
-    unit: '元',
-    change: '34.1%',
-    icon: BadgeDollarSign,
-  },
-]
-const detailMetrics = [
-  { key: 'sessions', title: '全部会话数' },
-  { key: 'active-users', title: '活跃用户数' },
-  { key: 'interactions', title: '平均会话互动数' },
-  { key: 'cost', title: '费用消耗' },
-]
-
 function createAssistantFooter(text: string, suggestions: string[] = []) {
   return h('div', { class: 'chat-message-footer' }, [
     h('div', { class: 'chat-message-footer__meta' }, [
@@ -526,6 +428,10 @@ function getCapabilityIcon(item: CapabilityItem) {
 
 function removeCapability(key: string) {
   capabilities.value = capabilities.value.filter((item) => item.key !== key)
+}
+
+function updateModelSettings(nextSettings: typeof settings) {
+  Object.assign(settings, nextSettings)
 }
 
 async function loadPluginCatalog() {
@@ -635,10 +541,6 @@ function openKnowledgeModal() {
   void loadKnowledgeCatalog()
 }
 
-function closeKnowledgeModal() {
-  knowledgeModalOpen.value = false
-}
-
 function toggleDraftKnowledgeSelection(id: number) {
   const next = new Set(draftKnowledgeIds.value)
   if (next.has(id)) {
@@ -708,9 +610,7 @@ async function generatePromptOptimization(source: string) {
       (chunk) => {
         promptOptimizeResult.value += chunk
         void nextTick(() => {
-          if (promptOptimizeResultRef.value) {
-            promptOptimizeResultRef.value.scrollTop = promptOptimizeResultRef.value.scrollHeight
-          }
+          promptOptimizeModalRef.value?.scrollResultToBottom()
         })
       },
       abortController.signal,
@@ -768,9 +668,7 @@ async function applyOptimizedPrompt() {
 
 async function scrollChatToBottom() {
   await nextTick()
-  if (chatListRef.value) {
-    chatListRef.value.scrollTop = chatListRef.value.scrollHeight
-  }
+  chatPreviewRef.value?.scrollToBottom()
 }
 
 onMounted(() => {
@@ -781,210 +679,32 @@ onMounted(() => {
 
 <template>
   <div class="app-orchestration">
-    <header class="workspace-topbar">
-      <div class="workspace-topbar__entity">
-        <div class="workspace-topbar__logo" :class="{ 'has-image': appAvatar }">
-          <img v-if="appAvatar" :src="appAvatar" alt="" />
-          <Bot v-else :size="18" />
-        </div>
-        <div class="workspace-topbar__identity">
-          <div>
-            <h1>{{ appName }}</h1>
-            <Copy :size="14" />
-          </div>
-          <p>
-            <User :size="13" />
-            <span>个人空间</span>
-            <Clock3 :size="13" />
-            <span>草稿</span>
-            <Tag color="processing">{{ autoSaveText }}</Tag>
-          </p>
-        </div>
-      </div>
-
-      <div class="workspace-topbar__center">
-        <nav class="app-orchestration__tabs" role="tablist" aria-label="应用编排页面">
-          <RouterLink
-            v-for="tab in pageTabs"
-            :key="tab.page"
-            v-slot="{ href, navigate }"
-            :to="{
-              name: 'app-orchestration',
-              params: { appId: route.params.appId, page: tab.page },
-            }"
-            custom
-          >
-            <a
-              class="app-orchestration__tab"
-              :class="{ 'is-active': activePage === tab.page }"
-              :href="href"
-              role="tab"
-              :aria-selected="activePage === tab.page"
-              @click="navigate"
-            >
-              {{ tab.label }}
-            </a>
-          </RouterLink>
-        </nav>
-      </div>
-
-      <div class="workspace-topbar__actions">
-        <Button shape="circle" aria-label="历史版本" @click="openPublishHistory">
-          <template #icon><History :size="18" /></template>
-        </Button>
-        <div class="publish-action">
-          <Button
-            class="publish-action__main"
-            type="primary"
-            :loading="publishing"
-            @click="publishVersion"
-          >
-            保存版本
-          </Button>
-          <Button class="publish-action__toggle" type="primary" aria-label="发布操作">
-            <ChevronDown :size="14" />
-          </Button>
-        </div>
-      </div>
-    </header>
+    <AppOrchestrationTopbar
+      :tabs="pageTabs"
+      :active-page="activePage"
+      :app-id="appId"
+      :app-name="appName"
+      :app-avatar="appAvatar"
+      :auto-save-text="autoSaveText"
+      :publishing="publishing"
+      @open-history="openPublishHistory"
+      @publish="publishVersion"
+    />
 
     <Transition name="orchestration-tab" mode="out-in">
       <main v-if="activePage === 'edit'" key="edit" class="app-orchestration__body">
-        <section class="app-orchestration__prompt orchestration-workspace-panel">
-          <div class="orchestration-panel__header">
-            <div class="app-orchestration__title-row">
-              <h2>应用编排</h2>
-              <Popover v-model:open="modelSettingsOpen" trigger="click" placement="bottomLeft">
-                <button class="app-orchestration__model-trigger" type="button">
-                  <Bot :size="14" />
-                  <span>{{ selectedModelLabel }}</span>
-                  <ChevronDown :size="14" />
-                </button>
-                <template #content>
-                  <section class="model-settings">
-                    <h3>模型设置</h3>
-                    <label class="model-settings__field">
-                      <span>模型</span>
-                      <Select
-                        v-model:value="selectedLlmId"
-                        :options="modelOptions"
-                        :loading="loading"
-                        allow-clear
-                        placeholder="请选择模型"
-                      />
-                    </label>
-                    <div class="model-settings__group">
-                      <span>参数</span>
-                      <label class="model-settings__row">
-                        <span>温度</span>
-                        <Slider
-                          v-model:value="settings.temperature"
-                          :min="0"
-                          :max="2"
-                          :step="0.01"
-                        />
-                        <div class="model-settings__number">
-                          <InputNumber
-                            v-model:value="settings.temperature"
-                            :min="0"
-                            :max="2"
-                            :step="0.01"
-                          />
-                        </div>
-                      </label>
-                      <label class="model-settings__row">
-                        <span>Top P</span>
-                        <Slider v-model:value="settings.topP" :min="0" :max="1" :step="0.01" />
-                        <div class="model-settings__number">
-                          <InputNumber
-                            v-model:value="settings.topP"
-                            :min="0"
-                            :max="1"
-                            :step="0.01"
-                          />
-                        </div>
-                      </label>
-                      <label class="model-settings__row">
-                        <span>存在惩罚</span>
-                        <Slider
-                          v-model:value="settings.presencePenalty"
-                          :min="0"
-                          :max="2"
-                          :step="0.01"
-                        />
-                        <div class="model-settings__number">
-                          <InputNumber
-                            v-model:value="settings.presencePenalty"
-                            :min="0"
-                            :max="2"
-                            :step="0.01"
-                          />
-                        </div>
-                      </label>
-                      <label class="model-settings__row">
-                        <span>频率惩罚</span>
-                        <Slider
-                          v-model:value="settings.frequencyPenalty"
-                          :min="0"
-                          :max="2"
-                          :step="0.01"
-                        />
-                        <div class="model-settings__number">
-                          <InputNumber
-                            v-model:value="settings.frequencyPenalty"
-                            :min="0"
-                            :max="2"
-                            :step="0.01"
-                          />
-                        </div>
-                      </label>
-                    </div>
-                    <div class="model-settings__group">
-                      <span>输入和输出设置</span>
-                      <label class="model-settings__row">
-                        <span>携带上下文轮数</span>
-                        <Slider
-                          v-model:value="settings.contextRounds"
-                          :min="1"
-                          :max="100"
-                          :step="1"
-                        />
-                        <div class="model-settings__number">
-                          <InputNumber
-                            v-model:value="settings.contextRounds"
-                            :min="1"
-                            :max="100"
-                            :step="1"
-                            :precision="0"
-                          />
-                        </div>
-                      </label>
-                    </div>
-                  </section>
-                </template>
-              </Popover>
-            </div>
-          </div>
-          <div class="app-orchestration__prompt-content">
-            <div class="app-orchestration__prompt-heading">
-              <h3>人设与回复逻辑</h3>
-              <Button
-                type="text"
-                size="small"
-                :loading="optimizingPrompt"
-                @click="openPromptOptimize"
-              >
-                <template #icon><RefreshCw :size="15" /></template>
-                优化
-              </Button>
-            </div>
-            <TextArea
-              v-model:value="promptContent"
-              class="app-orchestration__prompt-editor"
-              placeholder="描述 AI 应用的角色定位、任务范围和回复规则"
-            />
-          </div>
-        </section>
+        <PromptEditorPanel
+          v-model:model-settings-open="modelSettingsOpen"
+          v-model:selected-llm-id="selectedLlmId"
+          v-model:prompt-content="promptContent"
+          :selected-model-label="selectedModelLabel"
+          :model-options="modelOptions"
+          :loading="loading"
+          :settings="settings"
+          :optimizing-prompt="optimizingPrompt"
+          @update:settings="updateModelSettings"
+          @optimize="openPromptOptimize"
+        />
 
         <section class="app-orchestration__config orchestration-workspace-panel">
           <div class="orchestration-panel__header"><h2>应用能力</h2></div>
@@ -1151,380 +871,52 @@ onMounted(() => {
           </div>
         </section>
 
-        <section class="app-orchestration__preview orchestration-workspace-panel">
-          <div class="orchestration-panel__header preview-header">
-            <h2>预览与调试</h2>
-            <div class="preview-header__actions">
-              <Button type="text" size="small" @click="clearChat">
-                <template #icon><Trash2 :size="15" /></template>
-                清空对话
-              </Button>
-              <Button type="link" size="small" @click="openPublishHistory">
-                <template #icon><Save :size="15" /></template>
-                长期记忆
-              </Button>
-            </div>
-          </div>
-          <div ref="chatListRef" class="chat-preview">
-            <div v-if="displayMessages.length === 0" class="chat-preview__empty">
-              <div class="chat-preview__empty-avatar" :class="{ 'has-image': appAvatar }">
-                <img v-if="appAvatar" :src="appAvatar" alt="" />
-                <Bot v-else :size="24" />
-              </div>
-              <strong>{{ appName }}</strong>
-              <p v-if="openingStatementContent.trim()" class="chat-preview__opening">
-                {{ openingStatementContent }}
-              </p>
-              <div v-if="openingPresetQuestions.length" class="chat-preview__opening-questions">
-                <button
-                  v-for="question in openingPresetQuestions"
-                  :key="question"
-                  type="button"
-                  @click="submitSuggestedPrompt(question)"
-                >
-                  {{ question }}
-                </button>
-              </div>
-            </div>
-            <Bubble.List v-else :items="displayMessages" :roles="chatRoles">
-              <template #header="{ item }">
-                <div class="chat-message-header">
-                  <span>{{ item.role === 'assistant' ? appName : userName }}</span>
-                  <details
-                    v-if="item.role === 'assistant' && item.knowledgeCitations?.length"
-                    class="knowledge-citations"
-                  >
-                    <summary>
-                      <BookOpen :size="14" />
-                      <span>已搜索知识库</span>
-                      <ChevronDown :size="14" />
-                    </summary>
-                    <div class="knowledge-citations__panel">
-                      <p v-if="item.knowledgeQuery">检索问题：{{ item.knowledgeQuery }}</p>
-                      <ol>
-                        <li v-for="citation in item.knowledgeCitations" :key="citation.id">
-                          <strong>{{ citation.knowledgeName }}</strong>
-                          <span v-if="citation.query">检索问题：{{ citation.query }}</span>
-                          <span
-                            >{{ citation.documentName }} · 片段 #{{ citation.chunkIndex + 1 }}</span
-                          >
-                          <em>匹配度 {{ citation.score.toFixed(2) }}</em>
-                          <p>{{ citation.text }}</p>
-                        </li>
-                      </ol>
-                    </div>
-                  </details>
-                </div>
-              </template>
-              <template #message="{ item }">
-                <div
-                  class="chat-markdown"
-                  v-html="renderMarkdown(item.content || (item.pending ? '...' : ''))"
-                ></div>
-              </template>
-            </Bubble.List>
-          </div>
-          <Button v-if="responding" class="stop-button" @click="stopResponse">
-            <template #icon><CircleStop :size="14" /></template>
-            停止响应
-          </Button>
-          <footer class="chat-composer">
-            <div class="composer-row">
-              <Sender
-                v-model:value="senderValue"
-                :placeholder="responding ? '正在生成回复...' : '输入调试消息...'"
-                :auto-size="{ minRows: 1, maxRows: 4 }"
-                class="app-chat-composer"
-                @submit="(value) => submitDebugMessage(value, scrollChatToBottom)"
-              >
-                <template #prefix>
-                  <Button type="text" shape="circle">
-                    <template #icon><Paperclip :size="16" /></template>
-                  </Button>
-                </template>
-                <template #actions>
-                  <Button
-                    type="text"
-                    shape="circle"
-                    @click="submitDebugMessage(senderValue, scrollChatToBottom)"
-                  >
-                    <template #icon><Send :size="16" /></template>
-                  </Button>
-                </template>
-              </Sender>
-            </div>
-            <p>内容由AI生成，无法确保真实准确，仅供参考。</p>
-          </footer>
-        </section>
+        <DebugPreviewPanel
+          ref="chatPreviewRef"
+          v-model:sender-value="senderValue"
+          :app-name="appName"
+          :app-avatar="appAvatar"
+          :user-name="userName"
+          :opening-statement="openingStatementContent"
+          :opening-questions="openingPresetQuestions"
+          :messages="displayMessages"
+          :chat-roles="chatRoles"
+          :responding="responding"
+          @clear-chat="clearChat"
+          @open-memory="openPublishHistory"
+          @submit-suggested="submitSuggestedPrompt"
+          @submit-message="(value) => submitDebugMessage(value, scrollChatToBottom)"
+          @stop-response="stopResponse"
+        />
       </main>
 
-      <main v-else-if="activePage === 'publish'" key="publish" class="publish-config">
-        <div class="publish-config__notice">
-          如应用访问链接或二维码意外泄露，请及时重新生成或进行停止分发，避免资源出现异常消耗
-        </div>
+      <PublishConfigView v-else-if="activePage === 'publish'" key="publish" />
 
-        <div class="publish-config__table" role="table" aria-label="发布配置">
-          <div class="publish-config__head" role="row">
-            <span role="columnheader">发布渠道</span>
-            <span role="columnheader">状态</span>
-            <span role="columnheader">操作</span>
-          </div>
-
-          <article
-            v-for="channel in publishChannels"
-            :key="channel.key"
-            class="publish-config__row"
-            role="row"
-          >
-            <div class="publish-config__channel" role="cell">
-              <div class="publish-config__icon" :style="{ background: channel.tone }">
-                <component :is="channel.icon" :size="18" />
-              </div>
-              <div>
-                <strong>{{ channel.title }}</strong>
-                <span>{{ channel.description }}</span>
-              </div>
-            </div>
-
-            <div class="publish-config__status" role="cell">
-              <Tag v-if="channel.status === 'configured'" color="processing">
-                <template #icon><CircleCheck :size="13" /></template>
-                已发布
-              </Tag>
-              <Tag v-else>
-                <template #icon><CircleX :size="13" /></template>
-                未配置
-              </Tag>
-            </div>
-
-            <div class="publish-config__operation" role="cell">
-              <template v-if="channel.action === 'visit'">
-                <Input class="publish-config__link" :value="channel.link" readonly />
-                <Button type="primary">重新生成</Button>
-                <Button>立即访问</Button>
-              </template>
-              <Button v-else type="primary">
-                <template #icon><CircleDot :size="15" /></template>
-                立即配置
-              </Button>
-            </div>
-          </article>
-        </div>
-      </main>
-
-      <main v-else key="stats" class="stats-analysis">
-        <section class="stats-analysis__section">
-          <h2>概览指标 <span>(过去7天)</span></h2>
-
-          <div class="stats-overview">
-            <article v-for="metric in overviewMetrics" :key="metric.key" class="stats-card">
-              <div class="stats-card__title">
-                <span class="stats-card__icon">
-                  <component :is="metric.icon" :size="16" />
-                </span>
-                <span>{{ metric.label }}</span>
-                <CircleHelp :size="14" />
-              </div>
-
-              <div class="stats-card__value">
-                <strong>{{ metric.value }}</strong>
-                <span>{{ metric.unit }}</span>
-                <em>环比</em>
-                <span class="stats-card__change">
-                  <CircleEqual :size="13" />
-                  {{ metric.change }}
-                </span>
-              </div>
-            </article>
-          </div>
-        </section>
-
-        <section class="stats-analysis__section">
-          <h2>详细指标</h2>
-
-          <div class="stats-detail">
-            <article v-for="metric in detailMetrics" :key="metric.key" class="stats-chart">
-              <header>
-                <h3>
-                  {{ metric.title }}
-                  <CircleHelp :size="14" />
-                </h3>
-                <span>{{ chartRange }}</span>
-              </header>
-
-              <div class="stats-chart__placeholder">
-                <span>折线图图表</span>
-                <span>{{ chartDescription }}</span>
-              </div>
-            </article>
-          </div>
-        </section>
-      </main>
+      <StatsAnalysisView v-else key="stats" />
     </Transition>
 
-    <Teleport to="body">
-      <Transition name="side-modal">
-        <div v-if="pluginModalOpen" class="plugin-modal-mask" @click.self="pluginModalOpen = false">
-          <div
-            class="plugin-modal side-modal-panel"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="pluginModalTitle"
-          >
-            <aside class="plugin-modal__sidebar">
-              <h2 id="pluginModalTitle">选择插件</h2>
-              <Button type="primary" block>
-                <template #icon><Plus :size="15" /></template>
-                创建自定义插件
-              </Button>
-
-              <div class="plugin-modal__nav">
-                <button
-                  class="plugin-modal__nav-item"
-                  :class="{ 'is-active': activePluginSourceKey === 'custom' }"
-                  type="button"
-                  @click="selectPluginSource('custom')"
-                >
-                  <User :size="15" />
-                  <span>自定义插件</span>
-                </button>
-              </div>
-
-              <div class="plugin-modal__category-title">类别</div>
-              <div class="plugin-modal__nav">
-                <button
-                  v-for="category in pluginCategoryOptions"
-                  :key="category.key"
-                  class="plugin-modal__nav-item"
-                  :class="{
-                    'is-active':
-                      activePluginSourceKey === 'category' &&
-                      activePluginCategoryKey === category.key,
-                  }"
-                  type="button"
-                  @click="selectPluginCategory(category.key)"
-                >
-                  <component :is="category.icon" :size="15" />
-                  <span>{{ category.name }}</span>
-                </button>
-              </div>
-            </aside>
-
-            <section class="plugin-modal__content">
-              <div class="plugin-modal__header">
-                <h3>{{ activePluginSourceName }}</h3>
-                <button
-                  class="side-modal__close"
-                  type="button"
-                  aria-label="关闭"
-                  @click="pluginModalOpen = false"
-                >
-                  <X :size="18" />
-                </button>
-              </div>
-
-              <div class="plugin-modal__list">
-                <div v-if="pluginCatalogLoading">正在加载插件...</div>
-                <div v-else-if="pluginGroups.length === 0">{{ pluginEmptyText }}</div>
-                <section v-for="group in pluginGroups" :key="group.key" class="plugin-modal__group">
-                  <h4>{{ group.title }}</h4>
-                  <article
-                    v-for="item in group.items"
-                    :key="item.id"
-                    class="plugin-modal__item"
-                    :class="{ 'is-selected': selectedPluginIds.has(item.id) }"
-                  >
-                    <div class="plugin-modal__item-icon" :class="{ 'has-image': item.icon }">
-                      <img v-if="item.icon" :src="item.icon" alt="" />
-                      <Database v-else :size="18" />
-                    </div>
-                    <strong>{{ item.name }}</strong>
-                    <Button
-                      class="plugin-modal__add"
-                      size="small"
-                      :type="selectedPluginIds.has(item.id) ? 'default' : 'primary'"
-                      @click="togglePluginSelection(item.id)"
-                    >
-                      <template #icon>
-                        <CircleCheck v-if="selectedPluginIds.has(item.id)" :size="14" />
-                        <Plus v-else :size="14" />
-                      </template>
-                      {{ selectedPluginIds.has(item.id) ? '移除' : '添加' }}
-                    </Button>
-                  </article>
-                </section>
-              </div>
-            </section>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
-
-    <Teleport to="body">
-      <Transition name="side-modal">
-        <div v-if="knowledgeModalOpen" class="plugin-modal-mask" @click.self="closeKnowledgeModal">
-          <div
-            class="knowledge-modal side-modal-panel"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="knowledgeModalTitle"
-          >
-            <div class="knowledge-modal__header">
-              <h2 id="knowledgeModalTitle">选择引用知识库</h2>
-              <button
-                class="side-modal__close"
-                type="button"
-                aria-label="关闭"
-                @click="closeKnowledgeModal"
-              >
-                <X :size="18" />
-              </button>
-            </div>
-
-            <div class="knowledge-modal__list">
-              <div v-if="knowledgeCatalogLoading" class="knowledge-modal__empty">
-                正在加载知识库...
-              </div>
-              <div v-else-if="knowledgeCatalog.length === 0" class="knowledge-modal__empty">
-                {{ knowledgeEmptyText }}
-              </div>
-              <template v-else>
-                <button
-                  v-for="item in knowledgeCatalog"
-                  :key="item.id"
-                  type="button"
-                  class="knowledge-modal__item"
-                  :class="{ 'is-selected': selectedDraftKnowledgeIds.has(item.id) }"
-                  @click="toggleDraftKnowledgeSelection(item.id)"
-                >
-                  <span class="knowledge-modal__item-icon" :class="{ 'has-image': item.icon }">
-                    <img v-if="item.icon" :src="item.icon" alt="" />
-                    <BookOpen v-else :size="17" />
-                  </span>
-                  <span class="knowledge-modal__item-main">
-                    <strong>{{ item.name }}</strong>
-                    <span>{{ item.description || '暂无描述' }}</span>
-                  </span>
-                  <CircleCheck
-                    v-if="selectedDraftKnowledgeIds.has(item.id)"
-                    class="knowledge-modal__selected-icon"
-                    :size="16"
-                  />
-                </button>
-              </template>
-            </div>
-
-            <footer class="knowledge-modal__footer">
-              <span>{{ draftKnowledgeIds.length }} 个知识库被选中</span>
-              <div>
-                <Button @click="closeKnowledgeModal">取消</Button>
-                <Button type="primary" @click="confirmKnowledgeSelection">添加</Button>
-              </div>
-            </footer>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
+    <ResourceSelectionModals
+      v-model:plugin-open="pluginModalOpen"
+      v-model:knowledge-open="knowledgeModalOpen"
+      :active-plugin-source-key="activePluginSourceKey"
+      :active-plugin-category-key="activePluginCategoryKey"
+      :plugin-category-options="pluginCategoryOptions"
+      :active-plugin-source-name="activePluginSourceName"
+      :plugin-catalog-loading="pluginCatalogLoading"
+      :plugin-groups="pluginGroups"
+      :selected-plugin-ids="selectedPluginIds"
+      :plugin-empty-text="pluginEmptyText"
+      :knowledge-catalog-loading="knowledgeCatalogLoading"
+      :knowledge-catalog="knowledgeCatalog"
+      :selected-draft-knowledge-ids="selectedDraftKnowledgeIds"
+      :draft-knowledge-count="draftKnowledgeIds.length"
+      :knowledge-empty-text="knowledgeEmptyText"
+      @select-plugin-source="selectPluginSource"
+      @select-plugin-category="selectPluginCategory"
+      @toggle-plugin="togglePluginSelection"
+      @toggle-knowledge="toggleDraftKnowledgeSelection"
+      @confirm-knowledge="confirmKnowledgeSelection"
+    />
 
     <AppModal
       v-model:open="knowledgeSettingsOpen"
@@ -1573,100 +965,29 @@ onMounted(() => {
       </div>
     </AppModal>
 
-    <Drawer
+    <PublishHistoryDrawer
       v-model:open="publishHistoryOpen"
-      title="历史版本"
-      placement="right"
-      :size="420"
-      :closable="{ placement: 'end' }"
-    >
-      <div class="publish-history">
-        <div class="publish-history__app">
-          <div class="publish-history__icon" :class="{ 'has-image': appAvatar }">
-            <img v-if="appAvatar" :src="appAvatar" alt="" />
-            <Bot v-else :size="18" />
-          </div>
-          <div>
-            <strong>{{ appName }}</strong>
-            <span>最近编辑：{{ formatDateTime(lastSavedAt || appDraft?.updatedAt) }}</span>
-          </div>
-        </div>
-        <p class="publish-history__description">
-          {{ appDetail?.description || '暂无应用描述' }}
-        </p>
-        <p class="publish-history__count">共计 {{ publishedVersions.length }} 条发布记录</p>
-        <div class="publish-history__list">
-          <div v-if="publishedVersionsLoading">正在加载历史版本...</div>
-          <article
-            v-else
-            v-for="(item, index) in publishedVersions"
-            :key="item.id"
-            class="publish-history__item"
-          >
-            <div class="publish-history__item-main">
-              <div>
-                <strong>版本</strong>
-                <Tag>{{ item.version }}</Tag>
-                <Tag v-if="index === 0">当前版本</Tag>
-              </div>
-              <span>发布时间: {{ formatDateTime(item.publishedAt || item.createdAt) }}</span>
-            </div>
-            <Button size="small" :disabled="index === 0" @click="restoreVersion(item.id)">
-              <template #icon><RotateCcw :size="13" /></template>
-              回退
-            </Button>
-          </article>
-        </div>
-      </div>
-    </Drawer>
+      :app-name="appName"
+      :app-avatar="appAvatar"
+      :description="appDetail?.description || ''"
+      :last-edited-at="lastSavedAt || appDraft?.updatedAt"
+      :versions="publishedVersions"
+      :loading="publishedVersionsLoading"
+      :format-date-time="formatDateTime"
+      @restore="restoreVersion"
+    />
 
-    <Modal
-      v-model:open="promptOptimizeOpen"
-      width="108rem"
-      title="优化人设与回复逻辑"
-      :footer="null"
-      wrap-class-name="prompt-optimize-modal"
-      @cancel="closePromptOptimize"
-    >
-      <div class="prompt-optimize">
-        <section class="prompt-optimize__panel">
-          <header>
-            <h3>当前版本</h3>
-            <Tag>原文</Tag>
-          </header>
-          <pre>{{ promptOptimizeSource }}</pre>
-        </section>
-
-        <section class="prompt-optimize__panel">
-          <header>
-            <h3>优化版本</h3>
-            <Tag v-if="optimizingPrompt" color="processing">生成中</Tag>
-            <Tag v-else-if="promptOptimizeResult" color="success">可应用</Tag>
-          </header>
-          <pre
-            ref="promptOptimizeResultRef"
-            :class="{ 'is-empty': !promptOptimizeResult && optimizingPrompt }"
-            >{{ promptOptimizeDisplay }}</pre
-          >
-        </section>
-      </div>
-
-      <footer class="prompt-optimize__actions">
-        <Button @click="closePromptOptimize">取消</Button>
-        <div class="prompt-optimize__primary-actions">
-          <Button :loading="optimizingPrompt" @click="regeneratePromptOptimization"
-            >重新生成</Button
-          >
-          <Button
-            type="primary"
-            :disabled="!promptOptimizeResult || optimizingPrompt"
-            @click="applyOptimizedPrompt"
-          >
-            应用
-          </Button>
-        </div>
-      </footer>
-    </Modal>
+    <PromptOptimizeModal
+      ref="promptOptimizeModalRef"
+      :open="promptOptimizeOpen"
+      :source="promptOptimizeSource"
+      :result="promptOptimizeResult"
+      :display="promptOptimizeDisplay"
+      :optimizing="optimizingPrompt"
+      @close="closePromptOptimize"
+      @regenerate="regeneratePromptOptimization"
+      @apply="applyOptimizedPrompt"
+    />
   </div>
 </template>
 

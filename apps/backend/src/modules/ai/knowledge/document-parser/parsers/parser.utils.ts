@@ -13,7 +13,8 @@ export const normalizeText = (value: string) =>
   value
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
-    .replace(/\u0000/g, "")
+    .split("\u0000")
+    .join("")
     .trim();
 
 export const isContentType = (input: DocumentParserInput, value: string) =>

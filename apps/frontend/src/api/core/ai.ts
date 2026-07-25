@@ -22,7 +22,6 @@ export interface LlmItem {
   provider: string
   modelName: string
   url: string
-  apiKey: string
   createdAt?: string
   updatedAt?: string
 }
@@ -278,7 +277,9 @@ export interface ParsedDocument {
 export type CleanedDocument = ParsedDocument
 export type EnhancedDocument = ParsedDocument
 
-export type CreateLlmPayload = Omit<LlmItem, 'id' | 'createdAt' | 'updatedAt'>
+export type CreateLlmPayload = Omit<LlmItem, 'id' | 'createdAt' | 'updatedAt'> & {
+  apiKey: string
+}
 export type UpdateLlmPayload = Partial<CreateLlmPayload>
 
 export interface CreateAiAppPayload {

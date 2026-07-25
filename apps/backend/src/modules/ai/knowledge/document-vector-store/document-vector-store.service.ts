@@ -27,6 +27,15 @@ interface QdrantSearchResponse {
 
 const DEFAULT_QDRANT_URL = "http://127.0.0.1:6333";
 const DEFAULT_COLLECTION = "ai_knowledge_chunks";
+const VECTOR_UPSERT_BATCH_SIZE = 64;
+
+const chunkArray = <T>(items: T[], size: number) => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+};
 
 @Injectable()
 export class DocumentVectorStoreService {
@@ -65,6 +74,12 @@ export class DocumentVectorStoreService {
   async upsert(points: UpsertVectorPoint[]) {
     if (!points.length) return;
 
+    for (const batch of chunkArray(points, VECTOR_UPSERT_BATCH_SIZE)) {
+      await this.upsertBatch(batch);
+    }
+  }
+
+  private async upsertBatch(points: UpsertVectorPoint[]) {
     const response = await fetch(
       `${this.baseUrl}/collections/${this.collection}/points?wait=true`,
       {

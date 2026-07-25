@@ -8,7 +8,13 @@ import {
   type LoginParams,
 } from '../api/core/auth'
 import { message } from 'antdv-next'
-import { setAuthLifecycleHandlers } from '../api/request'
+
+let redirectToLoginHandler: (() => void) | undefined
+
+export const setAuthRedirectHandler = (handler: () => void) => {
+  redirectToLoginHandler = handler
+}
+
 export const useAuthStore = defineStore(
   'auth',
   () => {
@@ -68,8 +74,7 @@ export const useAuthStore = defineStore(
         clearAuth()
       }
 
-      const { default: router } = await import('../router')
-      void router.replace({ name: 'login' })
+      redirectToLoginHandler?.()
     }
 
     return {
@@ -90,14 +95,3 @@ export const useAuthStore = defineStore(
     },
   },
 )
-
-setAuthLifecycleHandlers({
-  refreshAccessToken: async () => {
-    const authStore = useAuthStore()
-    const refreshRes = await authStore.refreshAccessToken()
-    return refreshRes.accessToken
-  },
-  clearAuth: () => {
-    useAuthStore().clearAuth()
-  },
-})

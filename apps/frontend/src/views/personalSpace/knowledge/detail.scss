@@ -445,9 +445,7 @@
 
 :global(.recall-keywords-select .ant-select-content) {
   min-height: 3.2rem;
-  padding: 0.3rem 0.6rem;
   padding-inline-end: 0;
-  background: var(--touch-bg);
 }
 
 .recall-keywords-select :deep(.ant-select-selection-item-remove) {

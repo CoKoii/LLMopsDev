@@ -14,6 +14,7 @@ const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
 const DEFAULT_EMBEDDING_MODEL = "qwen3-embedding:4b";
 const MAX_EMBEDDING_REQUEST_ATTEMPTS = 2;
 const EMBEDDING_RETRY_DELAY_MS = 500;
+const EMBEDDING_BATCH_SIZE = 32;
 
 const wait = (milliseconds: number) =>
   new Promise<void>((resolve) => {
@@ -22,6 +23,14 @@ const wait = (milliseconds: number) =>
 
 const getErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+
+const chunkArray = <T>(items: T[], size: number) => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+};
 
 @Injectable()
 export class DocumentEmbeddingService {
@@ -46,7 +55,10 @@ export class DocumentEmbeddingService {
       return { model: this.model, dimension: 0, vectors: [] };
     }
 
-    const vectors = await this.embedTextsWithRetry(texts);
+    const vectors: number[][] = [];
+    for (const batch of chunkArray(texts, EMBEDDING_BATCH_SIZE)) {
+      vectors.push(...(await this.embedTextsWithRetry(batch)));
+    }
 
     const dimension = vectors[0]?.length ?? 0;
     return { model: this.model, dimension, vectors };

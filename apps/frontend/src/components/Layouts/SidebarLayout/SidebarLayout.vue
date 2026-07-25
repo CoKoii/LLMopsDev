@@ -3,6 +3,7 @@ import SideBar from '@/components/SideBar/SideBar.vue'
 import { Layout, LayoutContent, LayoutSider } from 'antdv-next'
 import type { CSSProperties } from 'vue'
 import { RouterView } from 'vue-router'
+import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
 const contentStyle: CSSProperties = {
   height: '100vh',
@@ -14,8 +15,12 @@ const siderStyle: CSSProperties = {
   height: '100vh',
 }
 
-function getRouteMeta(route: any) {
-  return route.meta as any
+function getPageTransition(route: RouteLocationNormalizedLoaded) {
+  return typeof route.meta.pageTransition === 'string' ? route.meta.pageTransition : 'workspace-fade'
+}
+
+function getShellKey(route: RouteLocationNormalizedLoaded) {
+  return typeof route.meta.shellKey === 'string' ? route.meta.shellKey : String(route.name)
 }
 </script>
 
@@ -28,11 +33,11 @@ function getRouteMeta(route: any) {
       <LayoutContent :style="contentStyle">
         <RouterView v-slot="{ Component, route }">
           <Transition
-            :name="getRouteMeta(route).pageTransition ?? 'workspace-fade'"
+            :name="getPageTransition(route)"
             mode="out-in"
             appear
           >
-            <component :is="Component" :key="getRouteMeta(route).shellKey ?? String(route.name)" />
+            <component :is="Component" :key="getShellKey(route)" />
           </Transition>
         </RouterView>
       </LayoutContent>

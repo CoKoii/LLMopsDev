@@ -239,9 +239,7 @@ const chunkEmbeddingText = (
 
 @Injectable()
 export class DocumentChunkerService {
-  async createChunks(
-    input: DocumentChunkerInput,
-  ): Promise<DocumentChunkDraft[]> {
+  createChunks(input: DocumentChunkerInput): DocumentChunkDraft[] {
     const maxTokens = resolveMaxTokens(input.chunkConfig);
     const separators = resolveSeparators(input.chunkConfig);
     const units = this.createParagraphUnits(input.document.blocks, separators);

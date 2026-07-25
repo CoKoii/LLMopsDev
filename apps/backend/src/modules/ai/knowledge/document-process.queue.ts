@@ -17,8 +17,9 @@ export interface KnowledgeDocumentProcessJobData {
 export const createDocumentProcessRedisOptions = (
   configService: ConfigService,
 ): RedisOptions => {
-  const { keyPrefix, maxRetriesPerRequest, ...options } =
-    createRedisOptions(configService);
+  const options = createRedisOptions(configService);
+  delete options.keyPrefix;
+  delete options.maxRetriesPerRequest;
 
   return {
     ...options,

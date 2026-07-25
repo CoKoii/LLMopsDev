@@ -221,20 +221,6 @@
   font-weight: 600;
 }
 
-.chunk-form textarea {
-  height: 19rem;
-  resize: none;
-  border: 0;
-  border-radius: 0.8rem;
-  background: var(--touch-bg);
-}
-
-:global(.chunk-keywords-select .ant-select-content) {
-  min-height: 3.2rem;
-  padding-inline-end: 0;
-  background: var(--touch-bg);
-}
-
 :global(.chunk-keywords-select .ant-select-suffix) {
   display: none !important;
 }

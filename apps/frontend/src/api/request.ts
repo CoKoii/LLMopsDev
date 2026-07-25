@@ -1,6 +1,5 @@
 import axios, { AxiosHeaders, type AxiosError, type InternalAxiosRequestConfig } from 'axios'
 import { message } from 'antdv-next'
-import router from '@/router'
 import { getAccessToken } from '@/utils/auth'
 
 type ApiErrorData = {
@@ -14,6 +13,7 @@ type RetryRequestConfig = InternalAxiosRequestConfig & {
 type AuthLifecycleHandlers = {
   refreshAccessToken?: () => Promise<string | undefined>
   clearAuth?: () => void
+  redirectToLogin?: () => void
 }
 
 let authLifecycleHandlers: AuthLifecycleHandlers = {}
@@ -41,9 +41,7 @@ const notifyError = (error: AxiosError<ApiErrorData>) => {
 
 const redirectToLogin = () => {
   authLifecycleHandlers.clearAuth?.()
-  if (router.currentRoute.value.name !== 'login') {
-    void router.push({ name: 'login' })
-  }
+  authLifecycleHandlers.redirectToLogin?.()
 }
 
 const refreshAccessTokenOnce = () => {
@@ -95,7 +93,6 @@ request.interceptors.response.use(
 
     if (status === 403) {
       notifyError(error)
-      redirectToLogin()
       return Promise.reject(error)
     }
 

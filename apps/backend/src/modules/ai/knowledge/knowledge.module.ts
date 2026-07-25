@@ -13,6 +13,7 @@ import { KnowledgeDocumentChunk } from "./entities/knowledge-document-chunk.enti
 import { KnowledgeDocument } from "./entities/knowledge-document.entity";
 import { Knowledge } from "./entities/knowledge.entity";
 import { KnowledgeController } from "./knowledge.controller";
+import { KnowledgeRecallService } from "./knowledge-recall.service";
 import { KnowledgeService } from "./knowledge.service";
 
 @Module({
@@ -35,6 +36,7 @@ import { KnowledgeService } from "./knowledge.service";
     DocumentVectorStoreService,
     DocumentProcessQueueService,
     DocumentProcessProcessor,
+    KnowledgeRecallService,
   ],
   exports: [KnowledgeService],
 })

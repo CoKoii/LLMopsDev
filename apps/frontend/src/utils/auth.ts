@@ -1,9 +1,18 @@
+const getPersistedAuth = () => {
+  try {
+    return JSON.parse(localStorage.getItem('auth') || '{}') as {
+      accessToken?: string
+      refreshToken?: string
+    }
+  } catch {
+    return {}
+  }
+}
+
 export function getAccessToken() {
-  const auth = JSON.parse(localStorage.getItem('auth') || '{}')
-  return auth.accessToken
+  return getPersistedAuth().accessToken
 }
 
 export function getRefreshToken() {
-  const auth = JSON.parse(localStorage.getItem('auth') || '{}')
-  return auth.refreshToken
+  return getPersistedAuth().refreshToken
 }

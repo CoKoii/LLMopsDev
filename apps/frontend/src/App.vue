@@ -1,20 +1,21 @@
 <script setup lang="ts">
 import { ConfigProvider } from 'antdv-next'
 import { RouterView } from 'vue-router'
+import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
 import { createAntdTheme } from '@/styles/theme'
 
 const antdTheme = createAntdTheme()
 
-function getRouteMeta(route: any) {
-  return route.meta as any
+function getAppTransition(route: RouteLocationNormalizedLoaded) {
+  return typeof route.meta.appTransition === 'string' ? route.meta.appTransition : 'app-shell'
 }
 </script>
 
 <template>
   <ConfigProvider :theme="antdTheme">
     <RouterView v-slot="{ Component, route }">
-      <Transition :name="getRouteMeta(route).appTransition ?? 'app-shell'" mode="out-in">
+      <Transition :name="getAppTransition(route)" mode="out-in">
         <component :is="Component" :key="route.matched[0]?.path ?? route.fullPath" />
       </Transition>
     </RouterView>

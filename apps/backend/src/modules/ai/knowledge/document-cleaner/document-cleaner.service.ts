@@ -36,11 +36,25 @@ const RULES = [
 const URL_OR_EMAIL_PATTERN =
   /https?:\/\/\S+|www\.\S+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 
+const shouldRemoveCharacter = (value: string) => {
+  const code = value.charCodeAt(0);
+  return (
+    code === 0 ||
+    (code >= 0x200b && code <= 0x200f) ||
+    (code >= 0x202a && code <= 0x202e) ||
+    code === 0xfeff ||
+    (code >= 0x00 && code <= 0x08) ||
+    code === 0x0b ||
+    code === 0x0c ||
+    (code >= 0x0e && code <= 0x1f) ||
+    code === 0x7f
+  );
+};
+
 const removeControlCharacters = (value: string) =>
-  value
-    .replace(/\u0000/g, "")
-    .replace(/[\u200b-\u200f\u202a-\u202e\ufeff]/g, "")
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+  Array.from(value)
+    .filter((item) => !shouldRemoveCharacter(item))
+    .join("");
 
 const isPageMarkLine = (value: string) => {
   const text = value.trim();

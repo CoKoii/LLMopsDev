@@ -1,4 +1,5 @@
 import request from '../request'
+import { getRefreshToken } from '@/utils/auth'
 
 // 登录接口
 export type LoginParams = {
@@ -53,11 +54,11 @@ export type RefreshResponse = {
 }
 
 export const refreshAccessTokenApi = async (): Promise<RefreshResponse> => {
-  const auth = JSON.parse(localStorage.getItem('auth') || '{}')
+  const refreshToken = getRefreshToken()
   return request.post('/auth/refresh', undefined, {
     authAction: 'refresh',
     headers: {
-      Authorization: `Bearer ${auth.refreshToken}`,
+      Authorization: `Bearer ${refreshToken}`,
     },
   })
 }

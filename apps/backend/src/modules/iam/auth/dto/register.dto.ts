@@ -8,7 +8,12 @@ export class RegisterDto {
   @IsString({ message: "密码必须为字符串" })
   @Length(6, 20, { message: "密码长度应在$constraint1到$constraint2之间" })
   password!: string;
+
   @IsOptional()
+  @IsString({ message: "二次确认密码必须为字符串" })
   @IsNotEmpty({ message: "二次确认密码不能为空" })
+  @Length(6, 20, {
+    message: "二次确认密码长度应在$constraint1到$constraint2之间",
+  })
   confirmPassword?: string;
 }

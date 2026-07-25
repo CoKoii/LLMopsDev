@@ -11,12 +11,28 @@ import { QueryLlmsDto } from "./dto/query-llms.dto";
 import { UpdateLlmDto } from "./dto/update-llm.dto";
 import { Llm } from "./entities/llm.entity";
 
+type LlmSafeResponse = Omit<Llm, "apiKey">;
+
 @Injectable()
 export class LlmService {
   constructor(
     @InjectRepository(Llm)
     private readonly llmRepository: Repository<Llm>,
   ) {}
+
+  private toSafeResponse(llm: Llm): LlmSafeResponse {
+    return {
+      id: llm.id,
+      provider: llm.provider,
+      modelName: llm.modelName,
+      url: llm.url,
+      createdAt: llm.createdAt,
+      updatedAt: llm.updatedAt,
+      deletedAt: llm.deletedAt,
+      createdBy: llm.createdBy,
+      updatedBy: llm.updatedBy,
+    };
+  }
 
   // --------------------------------------------------------------------------------------------------
   // 创建大模型
@@ -28,7 +44,7 @@ export class LlmService {
 
   // --------------------------------------------------------------------------------------------------
   // 获取大模型列表
-  async list(query: QueryLlmsDto): Promise<PageResult<Llm>> {
+  async list(query: QueryLlmsDto): Promise<PageResult<LlmSafeResponse>> {
     const { page, pageSize, skip } = resolvePageQuery(query);
     const name = query.name?.trim();
     const queryBuilder = this.llmRepository
@@ -44,7 +60,12 @@ export class LlmService {
     }
 
     const [items, total] = await queryBuilder.getManyAndCount();
-    return createPageResult(items, total, page, pageSize);
+    return createPageResult(
+      items.map((item) => this.toSafeResponse(item)),
+      total,
+      page,
+      pageSize,
+    );
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -53,7 +74,7 @@ export class LlmService {
   async findOne(id: number) {
     const llm = await this.llmRepository.findOne({ where: { id } });
     if (!llm) throw new NotFoundException("大模型不存在");
-    return llm;
+    return this.toSafeResponse(llm);
   }
   // --------------------------------------------------------------------------------------------------
 
