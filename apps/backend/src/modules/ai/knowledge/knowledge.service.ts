@@ -111,7 +111,7 @@ const extractRecallTerms = (query: string) => {
 
   for (const match of normalizedQuery.matchAll(/[\u3400-\u9fff]{2,}/g)) {
     const word = match[0];
-    terms.push(word);
+    if (word.length <= 6) terms.push(word);
 
     for (let index = 0; index <= word.length - 2; index += 1) {
       terms.push(word.slice(index, index + 2));
@@ -122,6 +122,7 @@ const extractRecallTerms = (query: string) => {
     terms.map((term) => term.trim()).filter((term) => term.length >= 2),
   );
 };
+const limitRecallTerms = (terms: string[]) => terms.slice(0, 16);
 
 const recallTermWeight = (term: string) =>
   /[\u3400-\u9fff]/.test(term)
@@ -415,7 +416,7 @@ export class KnowledgeService {
     limit: number,
     minScore: number,
   ): Promise<RecallMatch[]> {
-    const terms = extractRecallTerms(query);
+    const terms = limitRecallTerms(extractRecallTerms(query));
     if (!terms.length) return [];
 
     const params = Object.fromEntries(
@@ -424,6 +425,12 @@ export class KnowledgeService {
         `%${escapeLikeValue(term)}%`,
       ]),
     );
+    const rankExpression = terms
+      .map(
+        (term, index) =>
+          `CASE WHEN LOWER(chunk.searchText) LIKE :term${index} THEN ${recallTermWeight(term)} ELSE 0 END`,
+      )
+      .join(" + ");
     const chunks = await this.chunkRepository
       .createQueryBuilder("chunk")
       .innerJoin("chunk.document", "document")
@@ -432,11 +439,13 @@ export class KnowledgeService {
       .andWhere("document.enabled = :enabled", { enabled: true })
       .andWhere(
         `(${terms
-          .map((_, index) => `chunk.text LIKE :term${index}`)
+          .map((_, index) => `LOWER(chunk.searchText) LIKE :term${index}`)
           .join(" OR ")})`,
         params,
       )
-      .orderBy("chunk.id", "DESC")
+      .addSelect(`(${rankExpression})`, "lexical_rank")
+      .orderBy("lexical_rank", "DESC")
+      .addOrderBy("chunk.id", "DESC")
       .take(limit)
       .getMany();
 
@@ -464,7 +473,7 @@ export class KnowledgeService {
     const terms = extractRecallTerms(query);
     if (!terms.length) return 0;
 
-    const text = normalizeRecallText(chunk.text);
+    const text = normalizeRecallText(chunk.searchText || chunk.text);
     const headingText = normalizeRecallText(
       chunk.metadata.headingPath.join(" "),
     );
@@ -484,7 +493,10 @@ export class KnowledgeService {
       }
     }
 
-    return totalWeight ? matchedWeight / totalWeight : 0;
+    const effectiveTotalWeight = Math.min(totalWeight, 10);
+    return effectiveTotalWeight
+      ? Math.min(1, matchedWeight / effectiveTotalWeight)
+      : 0;
   }
 
   private calculateRecallRankScore(
@@ -549,7 +561,8 @@ export class KnowledgeService {
   ) {
     const { strategy, limit, minScore } =
       this.normalizeRecallSettings(settings);
-    const recallLimit = strategy === "hybrid" ? Math.max(limit * 8, 20) : limit;
+    const recallLimit =
+      strategy === "vector" ? limit : Math.min(200, Math.max(limit * 12, 60));
     const recallTasks: Array<Promise<RecallMatch[]>> = [];
 
     if (strategy === "hybrid" || strategy === "vector") {
