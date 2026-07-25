@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
@@ -75,10 +76,16 @@ export interface AppKnowledgeRecallItem {
   metadata: Record<string, unknown>;
 }
 
-interface KnowledgeRecallResultItem
-  extends Omit<AppKnowledgeRecallItem, "knowledgeId" | "knowledgeName"> {
+interface KnowledgeRecallResultItem extends Omit<
+  AppKnowledgeRecallItem,
+  "knowledgeId" | "knowledgeName"
+> {
   source: KnowledgeRecallStrategy;
 }
+
+type KnowledgeRecallExecutionOptions = {
+  queryVector?: number[];
+};
 
 const clampScore = (score: number) =>
   Math.max(0, Math.min(1, Number(score.toFixed(4))));
@@ -141,6 +148,8 @@ const normalizeChunkKeywords = (keywords: string[] | undefined) =>
 
 @Injectable()
 export class KnowledgeService {
+  private readonly logger = new Logger(KnowledgeService.name);
+
   constructor(
     @InjectRepository(Knowledge)
     private readonly knowledgeRepository: Repository<Knowledge>,
@@ -365,9 +374,16 @@ export class KnowledgeService {
   }
 
   private async syncDocumentChunkCount(documentId: number) {
-    const chunkCount = await this.chunkRepository.count({ where: { documentId } });
+    const chunkCount = await this.chunkRepository.count({
+      where: { documentId },
+    });
     await this.documentRepository.update({ id: documentId }, { chunkCount });
     return chunkCount;
+  }
+
+  private async createQueryVector(query: string) {
+    const embeddingResult = await this.documentEmbeddingService.embed([query]);
+    return embeddingResult.vectors[0] ?? [];
   }
 
   private async searchVectorRecall(
@@ -375,9 +391,9 @@ export class KnowledgeService {
     query: string,
     limit: number,
     minScore: number,
+    queryVector?: number[],
   ): Promise<RecallMatch[]> {
-    const embeddingResult = await this.documentEmbeddingService.embed([query]);
-    const vector = embeddingResult.vectors[0] ?? [];
+    const vector = queryVector ?? (await this.createQueryVector(query));
     const points = await this.documentVectorStoreService.search({
       vector,
       knowledgeId,
@@ -485,9 +501,7 @@ export class KnowledgeService {
     const codePenalty = isCodeOnly && lexicalScore < 0.6 ? 0.12 : 0;
     const vectorScore = match.vectorScore ?? 0;
     const textScore = match.textScore ?? lexicalScore;
-    const baseScore = vectorScore
-      ? vectorScore + textScore * 0.04
-      : textScore;
+    const baseScore = vectorScore ? vectorScore + textScore * 0.04 : textScore;
 
     return baseScore - metadataPenalty - shortTextPenalty - codePenalty;
   }
@@ -506,7 +520,10 @@ export class KnowledgeService {
         chunkId: match.chunkId,
         score: Math.max(existing.score, match.score),
         source: existing.source === match.source ? match.source : "hybrid",
-        vectorScore: Math.max(existing.vectorScore ?? 0, match.vectorScore ?? 0),
+        vectorScore: Math.max(
+          existing.vectorScore ?? 0,
+          match.vectorScore ?? 0,
+        ),
         textScore: Math.max(existing.textScore ?? 0, match.textScore ?? 0),
       });
     }
@@ -528,35 +545,33 @@ export class KnowledgeService {
     knowledgeId: number,
     query: string,
     settings: AppKnowledgeRecallSettings = {},
+    options: KnowledgeRecallExecutionOptions = {},
   ) {
-    const { strategy, limit, minScore } = this.normalizeRecallSettings(settings);
-    const matches: RecallMatch[] = [];
+    const { strategy, limit, minScore } =
+      this.normalizeRecallSettings(settings);
+    const recallLimit = strategy === "hybrid" ? Math.max(limit * 8, 20) : limit;
+    const recallTasks: Array<Promise<RecallMatch[]>> = [];
 
     if (strategy === "hybrid" || strategy === "vector") {
-      matches.push(
-        ...(await this.searchVectorRecall(
+      recallTasks.push(
+        this.searchVectorRecall(
           knowledgeId,
           query,
-          strategy === "hybrid" ? Math.max(limit * 8, 20) : limit,
+          recallLimit,
           minScore,
-        )),
+          options.queryVector,
+        ),
       );
     }
 
     if (strategy === "hybrid" || strategy === "text") {
-      matches.push(
-        ...(await this.searchTextRecall(
-          knowledgeId,
-          query,
-          strategy === "hybrid" ? Math.max(limit * 8, 20) : limit,
-          minScore,
-        )),
+      recallTasks.push(
+        this.searchTextRecall(knowledgeId, query, recallLimit, minScore),
       );
     }
 
-    const candidateLimit =
-      strategy === "hybrid" ? Math.max(limit * 8, 20) : limit;
-    const mergedMatches = this.mergeRecallMatches(matches, candidateLimit);
+    const matches = (await Promise.all(recallTasks)).flat();
+    const mergedMatches = this.mergeRecallMatches(matches, recallLimit);
     const chunks = mergedMatches.length
       ? await this.chunkRepository.find({
           where: {
@@ -589,7 +604,17 @@ export class KnowledgeService {
       .filter((item): item is NonNullable<typeof item> => Boolean(item))
       .sort((left, right) => right.rankScore - left.rankScore)
       .slice(0, limit)
-      .map(({ rankScore, ...item }) => item);
+      .map((item) => ({
+        chunkId: item.chunkId,
+        documentId: item.documentId,
+        documentName: item.documentName,
+        chunkIndex: item.chunkIndex,
+        score: item.score,
+        source: item.source,
+        text: item.text,
+        searchText: item.searchText,
+        metadata: item.metadata,
+      }));
 
     return {
       strategy,
@@ -619,6 +644,20 @@ export class KnowledgeService {
         1,
       );
     }
+  }
+
+  private scheduleRecallCountIncrement(
+    knowledgeId: number,
+    items: Array<Pick<KnowledgeRecallResultItem, "documentId" | "chunkId">>,
+  ) {
+    if (!items.length) return;
+
+    void this.incrementRecallCounts(knowledgeId, items).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? error.stack : undefined;
+
+      this.logger.warn(`知识库召回次数更新失败: ${message}`, stack);
+    });
   }
 
   // --------------------------------------------------------------------------------------------------
@@ -788,31 +827,42 @@ export class KnowledgeService {
       },
     });
     const knowledgeMap = new Map(knowledges.map((item) => [item.id, item]));
-    const results: AppKnowledgeRecallItem[] = [];
-
-    for (const knowledgeId of knowledgeIds) {
-      const knowledge = knowledgeMap.get(knowledgeId);
-      if (!knowledge) continue;
-
-      const recallResult = await this.executeRecall(
-        knowledgeId,
-        query,
+    const accessibleKnowledgeIds = knowledgeIds.filter((knowledgeId) =>
+      knowledgeMap.has(knowledgeId),
+    );
+    const needsQueryVector = accessibleKnowledgeIds.some((knowledgeId) => {
+      const { strategy } = this.normalizeRecallSettings(
         params.settings?.[knowledgeId],
       );
-      await this.incrementRecallCounts(knowledgeId, recallResult.items);
+      return strategy === "hybrid" || strategy === "vector";
+    });
+    const queryVector = needsQueryVector
+      ? await this.createQueryVector(query)
+      : undefined;
+    const results = (
+      await Promise.all(
+        accessibleKnowledgeIds.map(async (knowledgeId) => {
+          const knowledge = knowledgeMap.get(knowledgeId);
+          if (!knowledge) return [];
 
-      results.push(
-        ...recallResult.items.map((item) => ({
-          ...item,
-          knowledgeId,
-          knowledgeName: knowledge.name,
-        })),
-      );
-    }
+          const recallResult = await this.executeRecall(
+            knowledgeId,
+            query,
+            params.settings?.[knowledgeId],
+            { queryVector },
+          );
+          this.scheduleRecallCountIncrement(knowledgeId, recallResult.items);
 
-    return results
-      .sort((left, right) => right.score - left.score)
-      .slice(0, 8);
+          return recallResult.items.map((item) => ({
+            ...item,
+            knowledgeId,
+            knowledgeName: knowledge.name,
+          }));
+        }),
+      )
+    ).flat();
+
+    return results.sort((left, right) => right.score - left.score).slice(0, 8);
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -868,7 +918,11 @@ export class KnowledgeService {
     dto: CreateKnowledgeDocumentChunkDto,
     userId: number,
   ) {
-    const document = await this.findOwnedDocument(knowledgeId, documentId, userId);
+    const document = await this.findOwnedDocument(
+      knowledgeId,
+      documentId,
+      userId,
+    );
     const text = dto.text.trim();
     if (!text) throw new BadRequestException("片段内容不能为空");
 
@@ -894,7 +948,8 @@ export class KnowledgeService {
       characterCount: metadata.characterCount,
       recallCount: 0,
       enabled: true,
-      embeddingModel: document.embeddingModel ?? this.documentEmbeddingService.model,
+      embeddingModel:
+        document.embeddingModel ?? this.documentEmbeddingService.model,
       embeddingDimension: document.embeddingDimension,
       vectorId: randomUUID(),
       metadata,
@@ -918,14 +973,19 @@ export class KnowledgeService {
     dto: UpdateKnowledgeDocumentChunkDto,
     userId: number,
   ) {
-    const document = await this.findOwnedDocument(knowledgeId, documentId, userId);
+    const document = await this.findOwnedDocument(
+      knowledgeId,
+      documentId,
+      userId,
+    );
     const chunk = await this.chunkRepository.findOne({
       where: { id: chunkId, knowledgeId, documentId },
     });
     if (!chunk) throw new NotFoundException("文档片段不存在");
 
     const nextText = dto.text?.trim();
-    const shouldUpdateVector = nextText !== undefined && nextText !== chunk.text;
+    const shouldUpdateVector =
+      nextText !== undefined && nextText !== chunk.text;
 
     if (nextText !== undefined) {
       if (!nextText) throw new BadRequestException("片段内容不能为空");

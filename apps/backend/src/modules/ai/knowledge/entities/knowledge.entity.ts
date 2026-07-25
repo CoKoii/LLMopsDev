@@ -1,7 +1,8 @@
-import { Column, Entity, PrimaryGeneratedColumn } from "typeorm";
+import { Column, Entity, Index, PrimaryGeneratedColumn } from "typeorm";
 import { AuditableEntity } from "../../../../common/database/base.entity";
 
 @Entity({ name: "ai_knowledge", comment: "知识库" })
+@Index(["createdBy", "status"])
 export class Knowledge extends AuditableEntity {
   @PrimaryGeneratedColumn({ comment: "主键ID" })
   id!: number;

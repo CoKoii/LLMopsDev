@@ -233,7 +233,8 @@ export class AppService {
         next.capabilities === undefined
           ? current.capabilities
           : next.capabilities,
-      pluginIds: next.pluginIds === undefined ? current.pluginIds : next.pluginIds,
+      pluginIds:
+        next.pluginIds === undefined ? current.pluginIds : next.pluginIds,
       workflowIds:
         next.workflowIds === undefined ? current.workflowIds : next.workflowIds,
       knowledge:

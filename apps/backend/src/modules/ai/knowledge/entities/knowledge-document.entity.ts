@@ -59,6 +59,7 @@ export enum KnowledgeDocumentIndexStatus {
 
 @Entity({ name: "ai_knowledge_documents", comment: "知识库文档" })
 @Index(["knowledgeId", "fileId"], { unique: true })
+@Index(["knowledgeId", "enabled"])
 export class KnowledgeDocument extends AuditableEntity {
   @PrimaryGeneratedColumn({ comment: "主键ID" })
   id!: number;

@@ -128,7 +128,10 @@ const createKeywords = (document: CleanedDocument) => {
       candidates.push(...keywordCandidatesFromText(block.text));
     }
     if (block.metadata?.method && block.metadata?.path) {
-      candidates.push(String(block.metadata.method), String(block.metadata.path));
+      candidates.push(
+        String(block.metadata.method),
+        String(block.metadata.path),
+      );
     }
     if (block.type === "table") {
       candidates.push(...(block.rows?.[0] ?? []));
@@ -138,13 +141,14 @@ const createKeywords = (document: CleanedDocument) => {
   return unique(candidates.map(compact).filter(Boolean)).slice(0, MAX_KEYWORDS);
 };
 
-const createBlockMetadata = (block: ParsedDocumentBlock) => ({
-  ...block.metadata,
-  enhancedBy: "rule",
-  sourceBlockId: block.id,
-  sourceBlockType: block.type,
-  sourceTextLength: block.text.length,
-} satisfies Record<string, ParsedDocumentMetadataValue>);
+const createBlockMetadata = (block: ParsedDocumentBlock) =>
+  ({
+    ...block.metadata,
+    enhancedBy: "rule",
+    sourceBlockId: block.id,
+    sourceBlockType: block.type,
+    sourceTextLength: block.text.length,
+  }) satisfies Record<string, ParsedDocumentMetadataValue>;
 
 @Injectable()
 export class DocumentEnhancerService {

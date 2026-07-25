@@ -14,6 +14,8 @@ import { Knowledge } from "./knowledge.entity";
 
 @Entity({ name: "ai_knowledge_document_chunks", comment: "知识库文档切块" })
 @Index(["knowledgeId", "documentId", "chunkIndex"], { unique: true })
+@Index(["knowledgeId", "enabled"])
+@Index(["documentId", "enabled"])
 @Index(["vectorId"])
 export class KnowledgeDocumentChunk extends AuditableEntity {
   @PrimaryGeneratedColumn({ comment: "主键ID" })

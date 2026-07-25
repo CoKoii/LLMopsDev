@@ -23,7 +23,7 @@ export class CsvDocumentParser implements DocumentFormatParser {
       relaxColumnCount: true,
       skipEmptyLines: true,
       trim: true,
-    }) as string[][];
+    });
     const builder = createBlockBuilder();
 
     builder.add("table", createTableText(rows), {

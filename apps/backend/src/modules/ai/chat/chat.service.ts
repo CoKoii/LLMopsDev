@@ -127,17 +127,18 @@ export class ChatService {
     message: string,
     history: DebugAppChatHistoryDto[] = [],
   ) {
-    if (!history.length) return message.trim();
+    const query = message.trim();
+    if (!history.length) return query;
 
     try {
       const response = await model.invoke(
-        this.createRewriteMessages(message, history),
+        this.createRewriteMessages(query, history),
       );
-      return response.text.trim() || message.trim();
+      return response.text.trim() || query;
     } catch (error) {
       const warning = error instanceof Error ? error.message : String(error);
       this.logger.warn(`知识库检索问题改写失败: ${warning}`);
-      return message.trim();
+      return query;
     }
   }
 

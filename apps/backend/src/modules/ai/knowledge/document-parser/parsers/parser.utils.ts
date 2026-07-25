@@ -42,7 +42,7 @@ export const createBlockBuilder = () => {
     if (type === "heading" && extra.level) {
       while (
         headingStack.length &&
-        headingStack[headingStack.length - 1]!.level >= extra.level
+        headingStack[headingStack.length - 1].level >= extra.level
       ) {
         headingStack.pop();
       }
@@ -89,7 +89,7 @@ export const extractEndpoint = (text: string) => {
   if (!match) return undefined;
 
   return {
-    method: match[1]!,
-    path: match[2]!,
+    method: match[1],
+    path: match[2],
   };
 };

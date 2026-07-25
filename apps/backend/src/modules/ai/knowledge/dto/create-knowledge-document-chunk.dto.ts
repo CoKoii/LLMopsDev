@@ -1,4 +1,10 @@
-import { ArrayMaxSize, IsArray, IsOptional, IsString, Length } from "class-validator";
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsOptional,
+  IsString,
+  Length,
+} from "class-validator";
 
 export class CreateKnowledgeDocumentChunkDto {
   @IsString({ message: "片段内容必须为字符串" })
