@@ -32,10 +32,7 @@ function getRouteMeta(route: any) {
             mode="out-in"
             appear
           >
-            <component
-              :is="Component"
-              :key="getRouteMeta(route).shellKey ?? String(route.name)"
-            />
+            <component :is="Component" :key="getRouteMeta(route).shellKey ?? String(route.name)" />
           </Transition>
         </RouterView>
       </LayoutContent>

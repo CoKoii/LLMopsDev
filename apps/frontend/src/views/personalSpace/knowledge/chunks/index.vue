@@ -9,22 +9,8 @@ import {
   type KnowledgeDocumentItem,
 } from '@/api'
 import AppModal from '@/components/AppModal/AppModal.vue'
-import {
-  BookOutlined,
-  DeleteOutlined,
-  PlusOutlined,
-  SearchOutlined,
-} from '@antdv-next/icons'
-import {
-  Button,
-  Input,
-  message,
-  Modal,
-  Select,
-  Switch,
-  Tag,
-  TextArea,
-} from 'antdv-next'
+import { BookOutlined, DeleteOutlined, PlusOutlined, SearchOutlined } from '@antdv-next/icons'
+import { Button, Input, message, Modal, Select, Switch, Tag, TextArea } from 'antdv-next'
 import { computed, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
@@ -42,8 +28,7 @@ const formModel = reactive({
   keywords: [] as string[],
 })
 
-const parseRouteNumber = (value: unknown) =>
-  Number(Array.isArray(value) ? value[0] : value)
+const parseRouteNumber = (value: unknown) => Number(Array.isArray(value) ? value[0] : value)
 
 const knowledgeId = computed(() => parseRouteNumber(route.params.knowledgeId))
 const documentId = computed(() => parseRouteNumber(route.params.documentId))
@@ -120,7 +105,10 @@ const submitChunk = async () => {
   try {
     const payload = {
       text,
-      keywords: formModel.keywords.map((item) => item.trim()).filter(Boolean).slice(0, 10),
+      keywords: formModel.keywords
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .slice(0, 10),
     }
     if (editingChunk.value) {
       await updateKnowledgeDocumentChunkApi(
@@ -203,7 +191,12 @@ watch(searchValue, () => {
       </div>
 
       <div class="knowledge-chunks-toolbar">
-        <Input v-model:value="searchValue" class="knowledge-chunks-search" placeholder="输入关键词搜索片段" allow-clear>
+        <Input
+          v-model:value="searchValue"
+          class="knowledge-chunks-search"
+          placeholder="输入关键词搜索片段"
+          allow-clear
+        >
           <template #prefix>
             <SearchOutlined />
           </template>
@@ -245,7 +238,13 @@ watch(searchValue, () => {
             <span>{{ formatNumber(chunk.characterCount) }} 字符</span>
             <span>{{ formatNumber(chunk.recallCount || 0) }} 命中</span>
             <div class="chunk-card__actions">
-              <Button type="text" shape="circle" title="删除片段" aria-label="删除片段" @click="confirmDeleteChunk(chunk)">
+              <Button
+                type="text"
+                shape="circle"
+                title="删除片段"
+                aria-label="删除片段"
+                @click="confirmDeleteChunk(chunk)"
+              >
                 <template #icon>
                   <DeleteOutlined />
                 </template>

@@ -590,7 +590,11 @@ onUnmounted(() => {
         >
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">
-              <button class="knowledge-document-link" type="button" @click.stop="openDocumentChunks(record)">
+              <button
+                class="knowledge-document-link"
+                type="button"
+                @click.stop="openDocumentChunks(record)"
+              >
                 {{ record.name }}
               </button>
             </template>

@@ -218,7 +218,6 @@ const chatRoles = computed<ChatRoles>(() => ({
 }))
 const suggestedPrompts = computed(() => debugStore.getSuggestions(appId.value))
 const selectedPluginIds = computed(() => new Set(pluginIds.value))
-const selectedKnowledgeIds = computed(() => new Set(knowledgeConfig.ids))
 const selectedDraftKnowledgeIds = computed(() => new Set(draftKnowledgeIds.value))
 const openingPresetQuestions = computed(() =>
   openingQuestions.value
@@ -293,12 +292,7 @@ const pluginEmptyText = computed(() =>
 const knowledgeEmptyText = computed(() =>
   knowledgeCatalogLoading.value ? '正在加载知识库...' : '暂无可引用知识库',
 )
-function clampSettingValue(
-  value: number | undefined,
-  min: number,
-  max: number,
-  fallback: number,
-) {
+function clampSettingValue(value: number | undefined, min: number, max: number, fallback: number) {
   return Number.isFinite(value) ? Math.min(max, Math.max(min, Number(value))) : fallback
 }
 
@@ -1212,9 +1206,7 @@ onMounted(() => {
                           <strong>{{ citation.knowledgeName }}</strong>
                           <span v-if="citation.query">检索问题：{{ citation.query }}</span>
                           <span
-                            >{{ citation.documentName }} · 片段 #{{
-                              citation.chunkIndex + 1
-                            }}</span
+                            >{{ citation.documentName }} · 片段 #{{ citation.chunkIndex + 1 }}</span
                           >
                           <em>匹配度 {{ citation.score.toFixed(2) }}</em>
                           <p>{{ citation.text }}</p>
@@ -1513,7 +1505,6 @@ onMounted(() => {
                     <strong>{{ item.name }}</strong>
                     <span>{{ item.description || '暂无描述' }}</span>
                   </span>
-                  <Tag v-if="selectedKnowledgeIds.has(item.id)" color="processing">已关联</Tag>
                   <CircleCheck
                     v-if="selectedDraftKnowledgeIds.has(item.id)"
                     class="knowledge-modal__selected-icon"

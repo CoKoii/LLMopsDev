@@ -740,9 +740,13 @@ export const updateKnowledgeDocumentChunkApi = async (
   chunkId: number,
   payload: UpdateKnowledgeDocumentChunkPayload,
 ): Promise<KnowledgeDocumentChunkItem> => {
-  return request.put(`/ai/knowledge/${knowledgeId}/documents/${documentId}/chunks/${chunkId}`, payload, {
-    timeout: 60000,
-  })
+  return request.put(
+    `/ai/knowledge/${knowledgeId}/documents/${documentId}/chunks/${chunkId}`,
+    payload,
+    {
+      timeout: 60000,
+    },
+  )
 }
 
 export const deleteKnowledgeDocumentChunkApi = async (

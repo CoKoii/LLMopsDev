@@ -121,11 +121,7 @@ watch(searchValue, () => {
         <ListBox :items="listItems" :loading="loading" :actions="false" @open="openDetail" />
       </div>
     </Transition>
-    <PluginDetailDrawer
-      v-model:open="detailOpen"
-      :plugin="detailRecord"
-      :loading="detailLoading"
-    />
+    <PluginDetailDrawer v-model:open="detailOpen" :plugin="detailRecord" :loading="detailLoading" />
   </ListPage>
 </template>
 

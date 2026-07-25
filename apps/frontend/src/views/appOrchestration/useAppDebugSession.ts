@@ -60,9 +60,7 @@ export function useAppDebugSession(
         history,
         signal: debugAbortController.signal,
         onContent: async (chunk) => {
-          const target = debugStore
-            .getMessages(appId.value)
-            .find((item) => item.key === `a-${key}`)
+          const target = debugStore.getMessages(appId.value).find((item) => item.key === `a-${key}`)
           debugStore.updateMessage(appId.value, `a-${key}`, {
             content: `${target?.content || ''}${chunk}`,
           })
