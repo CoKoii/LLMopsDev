@@ -3,6 +3,11 @@ import { ChatOpenAI } from "@langchain/openai";
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { Readable } from "node:stream";
 import { z } from "zod";
+import {
+  type AppKnowledgeRecallItem,
+  KnowledgeService,
+} from "../knowledge/knowledge.service";
+import { type AiAppVersionConfig } from "../app/entities/app-version.entity";
 import { AiRuntimeService } from "./ai-runtime.service";
 import { type DebugAppChatHistoryDto } from "./dto/debug-app-chat.dto";
 
@@ -22,6 +27,11 @@ const QUESTION_SUGGESTION_SYSTEM_PROMPT = [
 ].join("\n");
 const QUESTION_SUGGESTION_MODEL = "qwen2.5:0.5b";
 const QUESTION_SUGGESTION_BASE_URL = "http://localhost:11434/v1";
+const QUERY_REWRITE_SYSTEM_PROMPT = [
+  "你负责把用户追问改写成适合知识库检索的独立问题。",
+  "结合最近聊天历史补全省略的主语、对象和约束。",
+  "只输出改写后的检索问题，不解释，不使用代码块。",
+].join("\n");
 const QuestionSuggestionsSchema = z
   .object({
     suggestions: z.array(z.string().min(1)).length(3),
@@ -32,13 +42,33 @@ type SseEvent =
   | { content: string }
   | { message: string }
   | { elapsedMs: number; tokens?: number }
-  | { items: string[] };
+  | { items: string[] }
+  | KnowledgeCitationEvent;
+
+type KnowledgeCitation = {
+  id: number;
+  knowledgeId: number;
+  knowledgeName: string;
+  documentId: number;
+  documentName: string;
+  chunkIndex: number;
+  score: number;
+  text: string;
+};
+
+type KnowledgeCitationEvent = {
+  query: string;
+  items: KnowledgeCitation[];
+};
 
 @Injectable()
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
 
-  constructor(private readonly aiRuntimeService: AiRuntimeService) {}
+  constructor(
+    private readonly aiRuntimeService: AiRuntimeService,
+    private readonly knowledgeService: KnowledgeService,
+  ) {}
 
   private sse(data: SseEvent, event?: string) {
     const prefix = event ? `event: ${event}\n` : "";
@@ -58,6 +88,109 @@ export class ChatService {
     messages.push(["human", message]);
 
     return messages;
+  }
+
+  private compactText(value: string, maxLength: number) {
+    const text = value.replace(/\s+/g, " ").trim();
+    return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+  }
+
+  private createRewriteMessages(
+    message: string,
+    history: DebugAppChatHistoryDto[] = [],
+  ): Array<["system" | "human", string]> {
+    const historyText = history
+      .slice(-8)
+      .map((item) => {
+        const role = item.role === "assistant" ? "AI" : "用户";
+        return `${role}: ${this.compactText(item.content, 500)}`;
+      })
+      .join("\n");
+
+    return [
+      ["system", QUERY_REWRITE_SYSTEM_PROMPT],
+      [
+        "human",
+        [
+          historyText ? `最近聊天历史：\n${historyText}` : "",
+          `当前用户问题：${message}`,
+          "请输出适合知识库检索的独立问题。",
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+      ],
+    ];
+  }
+
+  private async rewriteQuery(
+    model: ChatOpenAI,
+    message: string,
+    history: DebugAppChatHistoryDto[] = [],
+  ) {
+    if (!history.length) return message.trim();
+
+    try {
+      const response = await model.invoke(
+        this.createRewriteMessages(message, history),
+      );
+      return response.text.trim() || message.trim();
+    } catch (error) {
+      const warning = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`知识库检索问题改写失败: ${warning}`);
+      return message.trim();
+    }
+  }
+
+  private resolveKnowledgeConfig(config: AiAppVersionConfig) {
+    return {
+      ids: config.knowledge?.ids ?? [],
+      settings: config.knowledge?.settings ?? {},
+    };
+  }
+
+  private compressKnowledgeContext(items: AppKnowledgeRecallItem[]) {
+    const maxItems = 6;
+    const maxItemChars = 900;
+    const maxTotalChars = 5000;
+    const usedChunkIds = new Set<number>();
+    const citations: KnowledgeCitation[] = [];
+    const contextParts: string[] = [];
+    let totalChars = 0;
+
+    for (const item of items) {
+      if (usedChunkIds.has(item.chunkId)) continue;
+      if (citations.length >= maxItems) break;
+
+      const text = this.compactText(item.text, maxItemChars);
+      if (!text || totalChars + text.length > maxTotalChars) break;
+
+      usedChunkIds.add(item.chunkId);
+      const citationId = citations.length + 1;
+      citations.push({
+        id: citationId,
+        knowledgeId: item.knowledgeId,
+        knowledgeName: item.knowledgeName,
+        documentId: item.documentId,
+        documentName: item.documentName,
+        chunkIndex: item.chunkIndex,
+        score: item.score,
+        text: this.compactText(item.text, 180),
+      });
+      contextParts.push(
+        [
+          `[${citationId}] 知识库：${item.knowledgeName}`,
+          `文档：${item.documentName} / 片段 #${item.chunkIndex + 1}`,
+          `匹配度：${item.score}`,
+          `内容：${text}`,
+        ].join("\n"),
+      );
+      totalChars += text.length;
+    }
+
+    return {
+      citations,
+      context: contextParts.join("\n\n"),
+    };
   }
 
   private async createQuestionSuggestions(
@@ -188,9 +321,30 @@ export class ChatService {
     let output = "";
 
     try {
-      const { agent, draft } = await this.aiRuntimeService.createAgent(
-        appId,
+      const draft = await this.aiRuntimeService.getDraft(appId, userId);
+      const model = await this.aiRuntimeService.createModel(draft.config);
+      const knowledgeConfig = this.resolveKnowledgeConfig(draft.config);
+      const query = knowledgeConfig.ids.length
+        ? await this.rewriteQuery(model, message, history)
+        : message.trim();
+      const recalledItems = await this.knowledgeService.recallForApp({
+        knowledgeIds: knowledgeConfig.ids,
+        settings: knowledgeConfig.settings,
+        query,
         userId,
+      });
+      const { context: knowledgeContext, citations } =
+        this.compressKnowledgeContext(recalledItems);
+
+      if (citations.length) {
+        yield this.sse({ query, items: citations }, "knowledge");
+      }
+
+      const { agent } = await this.aiRuntimeService.createAgentFromDraft(
+        draft,
+        model,
+        userId,
+        { knowledgeContext },
       );
       const messages = this.createMessages(message, history);
 

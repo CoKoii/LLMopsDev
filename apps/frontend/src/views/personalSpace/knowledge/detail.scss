@@ -1,3 +1,5 @@
+@use '../../../styles/recall-settings';
+
 .knowledge-files-page {
   display: flex;
   flex-direction: column;
@@ -408,55 +410,15 @@
   font-size: 2rem;
 }
 
-.recall-settings {
-  display: flex;
-  flex-direction: column;
-  gap: 2.2rem;
-}
-
 .recall-detail label {
   display: flex;
   flex-direction: column;
   gap: 0.8rem;
 }
 
-.recall-settings__row {
-  display: grid;
-  grid-template-columns: 11rem minmax(0, 1fr);
-  align-items: center;
-  gap: 2rem;
-}
-
-.recall-settings__row > span,
 .recall-detail label > span {
   color: var(--font-active-color);
   font-weight: 600;
-}
-
-.recall-settings__options {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: center;
-  gap: 1.6rem;
-  min-width: 0;
-}
-
-.recall-settings__options :deep(.ant-radio-wrapper) {
-  display: flex;
-  align-items: center;
-  margin-inline-end: 0;
-  white-space: nowrap;
-}
-
-.recall-setting-control {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 11rem;
-  align-items: center;
-  gap: 2rem;
-}
-
-.recall-setting-control :deep(.ant-input-number) {
-  width: 100%;
 }
 
 .recall-detail {

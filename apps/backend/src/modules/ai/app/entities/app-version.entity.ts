@@ -16,6 +16,12 @@ export enum AiAppVersionStatus {
   ARCHIVED = "ARCHIVED",
 }
 
+export type AiAppKnowledgeRecallSettings = {
+  strategy?: "hybrid" | "vector" | "text";
+  limit?: number;
+  minScore?: number;
+};
+
 export type AiAppVersionConfig = {
   prompt?: string;
   llmId?: number | null;
@@ -35,7 +41,10 @@ export type AiAppVersionConfig = {
   }>;
   pluginIds?: number[];
   workflowIds?: number[];
-  knowledgeIds?: number[];
+  knowledge?: {
+    ids?: number[];
+    settings?: Record<number, AiAppKnowledgeRecallSettings>;
+  };
   toggles?: Record<string, boolean>;
   openingStatement?: {
     content?: string;

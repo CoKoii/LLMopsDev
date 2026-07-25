@@ -75,6 +75,12 @@ export function useAppDebugSession(
             tokens: meta.tokens,
           })
         },
+        onKnowledge: ({ query, items }) => {
+          debugStore.updateMessage(appId.value, `a-${key}`, {
+            knowledgeQuery: query,
+            knowledgeCitations: items,
+          })
+        },
         onSuggestions: (items) => {
           debugStore.setSuggestions(appId.value, items)
         },

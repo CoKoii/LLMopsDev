@@ -53,6 +53,33 @@ interface RecallMatch {
   textScore?: number;
 }
 
+type KnowledgeRecallStrategy = "hybrid" | "vector" | "text";
+
+export interface AppKnowledgeRecallSettings {
+  strategy?: KnowledgeRecallStrategy;
+  limit?: number;
+  minScore?: number;
+}
+
+export interface AppKnowledgeRecallItem {
+  knowledgeId: number;
+  knowledgeName: string;
+  chunkId: number;
+  documentId: number;
+  documentName: string;
+  chunkIndex: number;
+  score: number;
+  source: KnowledgeRecallStrategy;
+  text: string;
+  searchText: string;
+  metadata: Record<string, unknown>;
+}
+
+interface KnowledgeRecallResultItem
+  extends Omit<AppKnowledgeRecallItem, "knowledgeId" | "knowledgeName"> {
+  source: KnowledgeRecallStrategy;
+}
+
 const clampScore = (score: number) =>
   Math.max(0, Math.min(1, Number(score.toFixed(4))));
 
@@ -489,6 +516,111 @@ export class KnowledgeService {
       .slice(0, limit);
   }
 
+  private normalizeRecallSettings(settings: AppKnowledgeRecallSettings = {}) {
+    const strategy = settings.strategy ?? "hybrid";
+    const limit = Math.min(20, Math.max(1, Math.floor(settings.limit ?? 5)));
+    const minScore = Math.min(1, Math.max(0, settings.minScore ?? 0.4));
+
+    return { strategy, limit, minScore };
+  }
+
+  private async executeRecall(
+    knowledgeId: number,
+    query: string,
+    settings: AppKnowledgeRecallSettings = {},
+  ) {
+    const { strategy, limit, minScore } = this.normalizeRecallSettings(settings);
+    const matches: RecallMatch[] = [];
+
+    if (strategy === "hybrid" || strategy === "vector") {
+      matches.push(
+        ...(await this.searchVectorRecall(
+          knowledgeId,
+          query,
+          strategy === "hybrid" ? Math.max(limit * 8, 20) : limit,
+          minScore,
+        )),
+      );
+    }
+
+    if (strategy === "hybrid" || strategy === "text") {
+      matches.push(
+        ...(await this.searchTextRecall(
+          knowledgeId,
+          query,
+          strategy === "hybrid" ? Math.max(limit * 8, 20) : limit,
+          minScore,
+        )),
+      );
+    }
+
+    const candidateLimit =
+      strategy === "hybrid" ? Math.max(limit * 8, 20) : limit;
+    const mergedMatches = this.mergeRecallMatches(matches, candidateLimit);
+    const chunks = mergedMatches.length
+      ? await this.chunkRepository.find({
+          where: {
+            id: In(mergedMatches.map((item) => item.chunkId)),
+            knowledgeId,
+          },
+          relations: { document: true },
+        })
+      : [];
+    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const items = mergedMatches
+      .map((match) => {
+        const chunk = chunkMap.get(match.chunkId);
+        if (!chunk?.enabled || !chunk.document?.enabled) return undefined;
+        const rankScore = this.calculateRecallRankScore(query, match, chunk);
+
+        return {
+          rankScore,
+          chunkId: chunk.id,
+          documentId: chunk.documentId,
+          documentName: chunk.document.name,
+          chunkIndex: chunk.chunkIndex,
+          score: clampScore(rankScore),
+          source: match.source,
+          text: chunk.text,
+          searchText: chunk.searchText,
+          metadata: chunk.metadata as unknown as Record<string, unknown>,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      .sort((left, right) => right.rankScore - left.rankScore)
+      .slice(0, limit)
+      .map(({ rankScore, ...item }) => item);
+
+    return {
+      strategy,
+      limit,
+      minScore,
+      items,
+    };
+  }
+
+  private async incrementRecallCounts(
+    knowledgeId: number,
+    items: Array<Pick<KnowledgeRecallResultItem, "documentId" | "chunkId">>,
+  ) {
+    const documentIds = [...new Set(items.map((item) => item.documentId))];
+    if (documentIds.length) {
+      await this.documentRepository.increment(
+        { id: In(documentIds), knowledgeId },
+        "recallCount",
+        1,
+      );
+    }
+    const chunkIds = items.map((item) => item.chunkId);
+    if (chunkIds.length) {
+      await this.chunkRepository.increment(
+        { id: In(chunkIds), knowledgeId },
+        "recallCount",
+        1,
+      );
+    }
+  }
+
   // --------------------------------------------------------------------------------------------------
   // 创建知识库
   async create(createKnowledgeDto: CreateKnowledgeDto, userId: number) {
@@ -619,86 +751,12 @@ export class KnowledgeService {
     const query = dto.query.trim();
     if (!query) throw new BadRequestException("检索文本不能为空");
 
-    const strategy = dto.strategy ?? "hybrid";
-    const limit = dto.limit ?? 5;
-    const minScore = dto.minScore ?? 0;
-    const matches: RecallMatch[] = [];
-
-    if (strategy === "hybrid" || strategy === "vector") {
-      matches.push(
-        ...(await this.searchVectorRecall(
-          knowledgeId,
-          query,
-          strategy === "hybrid" ? Math.max(limit * 8, 20) : limit,
-          minScore,
-        )),
-      );
-    }
-
-    if (strategy === "hybrid" || strategy === "text") {
-      matches.push(
-        ...(await this.searchTextRecall(
-          knowledgeId,
-          query,
-          strategy === "hybrid" ? Math.max(limit * 8, 20) : limit,
-          minScore,
-        )),
-      );
-    }
-
-    const candidateLimit =
-      strategy === "hybrid" ? Math.max(limit * 8, 20) : limit;
-    const mergedMatches = this.mergeRecallMatches(matches, candidateLimit);
-    const chunks = mergedMatches.length
-      ? await this.chunkRepository.find({
-          where: {
-            id: In(mergedMatches.map((item) => item.chunkId)),
-            knowledgeId,
-          },
-          relations: { document: true },
-        })
-      : [];
-    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
-    const items = mergedMatches
-      .map((match) => {
-        const chunk = chunkMap.get(match.chunkId);
-        if (!chunk?.enabled || !chunk.document?.enabled) return undefined;
-        const rankScore = this.calculateRecallRankScore(query, match, chunk);
-
-        return {
-          rankScore,
-          chunkId: chunk.id,
-          documentId: chunk.documentId,
-          documentName: chunk.document.name,
-          chunkIndex: chunk.chunkIndex,
-          score: clampScore(rankScore),
-          source: match.source,
-          text: chunk.text,
-          searchText: chunk.searchText,
-          metadata: chunk.metadata,
-        };
-      })
-      .filter((item): item is NonNullable<typeof item> => Boolean(item))
-      .sort((left, right) => right.rankScore - left.rankScore)
-      .slice(0, limit)
-      .map(({ rankScore, ...item }) => item);
-
-    const documentIds = [...new Set(items.map((item) => item.documentId))];
-    if (documentIds.length) {
-      await this.documentRepository.increment(
-        { id: In(documentIds), knowledgeId },
-        "recallCount",
-        1,
-      );
-    }
-    const chunkIds = items.map((item) => item.chunkId);
-    if (chunkIds.length) {
-      await this.chunkRepository.increment(
-        { id: In(chunkIds), knowledgeId },
-        "recallCount",
-        1,
-      );
-    }
+    const { strategy, limit, minScore, items } = await this.executeRecall(
+      knowledgeId,
+      query,
+      dto,
+    );
+    await this.incrementRecallCounts(knowledgeId, items);
 
     return {
       query,
@@ -707,6 +765,54 @@ export class KnowledgeService {
       minScore,
       items,
     };
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // AI应用知识库召回
+  async recallForApp(params: {
+    knowledgeIds: number[];
+    settings?: Record<number, AppKnowledgeRecallSettings>;
+    query: string;
+    userId: number;
+  }): Promise<AppKnowledgeRecallItem[]> {
+    const query = params.query.trim();
+    if (!query || !params.knowledgeIds.length) return [];
+
+    const knowledgeIds = [...new Set(params.knowledgeIds)].slice(0, 5);
+    const knowledges = await this.knowledgeRepository.find({
+      where: {
+        id: In(knowledgeIds),
+        createdBy: params.userId,
+        status: true,
+      },
+    });
+    const knowledgeMap = new Map(knowledges.map((item) => [item.id, item]));
+    const results: AppKnowledgeRecallItem[] = [];
+
+    for (const knowledgeId of knowledgeIds) {
+      const knowledge = knowledgeMap.get(knowledgeId);
+      if (!knowledge) continue;
+
+      const recallResult = await this.executeRecall(
+        knowledgeId,
+        query,
+        params.settings?.[knowledgeId],
+      );
+      await this.incrementRecallCounts(knowledgeId, recallResult.items);
+
+      results.push(
+        ...recallResult.items.map((item) => ({
+          ...item,
+          knowledgeId,
+          knowledgeName: knowledge.name,
+        })),
+      );
+    }
+
+    return results
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 8);
   }
   // --------------------------------------------------------------------------------------------------
 

@@ -7,6 +7,7 @@ import {
   restoreAiAppVersionApi,
   streamAiAppPromptOptimizeApi,
   updateAiAppDraftApi,
+  type AppKnowledgeRecallSettings,
   type AiAppItem,
   type AiAppVersionConfig,
   type AiAppVersionItem,
@@ -24,6 +25,12 @@ export type CapabilityItem = {
 }
 
 export const openingQuestionLimit = 3
+export const knowledgeLimit = 5
+
+type AppKnowledgeConfig = {
+  ids: number[]
+  settings: Record<number, AppKnowledgeRecallSettings>
+}
 
 export const configToggles = [
   {
@@ -82,6 +89,10 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
   const selectedLlmId = ref<number | null>(null)
   const capabilities = ref<CapabilityItem[]>(createInitialCapabilities())
   const pluginIds = ref<number[]>([])
+  const knowledgeConfig = reactive<AppKnowledgeConfig>({
+    ids: [],
+    settings: {},
+  })
   const openingStatementContent = ref('')
   const openingQuestions = ref<string[]>([''])
   const loading = ref(false)
@@ -120,27 +131,43 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
     if (savingDraft.value) return '正在自动保存...'
     return lastSavedAt.value ? `已自动保存 ${formatTime(lastSavedAt.value)}` : '草稿'
   })
+  const buildDraftConfig = (): AiAppVersionConfig => {
+    const selectedKnowledgeIds = [...new Set(knowledgeConfig.ids)].slice(0, knowledgeLimit)
+    const selectedKnowledgeSettings = selectedKnowledgeIds.reduce<
+      Record<number, AppKnowledgeRecallSettings>
+    >((result, id) => {
+      const item = knowledgeConfig.settings[id]
+      if (item) {
+        result[id] = { ...item }
+      }
+      return result
+    }, {})
 
-  const buildDraftConfig = (): AiAppVersionConfig => ({
-    prompt: promptContent.value,
-    llmId: selectedLlmId.value,
-    modelSettings: { ...settings },
-    capabilities: capabilities.value.map((item) => ({ ...item })),
-    workflowIds: [],
-    knowledgeIds: [],
-    pluginIds: [...new Set(pluginIds.value)],
-    toggles: { ...toggleSettings },
-    openingStatement: {
-      content: openingStatementContent.value,
-      questions: openingQuestions.value
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .slice(0, openingQuestionLimit),
-    },
-  })
+    return {
+      prompt: promptContent.value,
+      llmId: selectedLlmId.value,
+      modelSettings: { ...settings },
+      capabilities: capabilities.value.map((item) => ({ ...item })),
+      workflowIds: [],
+      knowledge: {
+        ids: selectedKnowledgeIds,
+        settings: selectedKnowledgeSettings,
+      },
+      pluginIds: [...new Set(pluginIds.value)],
+      toggles: { ...toggleSettings },
+      openingStatement: {
+        content: openingStatementContent.value,
+        questions: openingQuestions.value
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .slice(0, openingQuestionLimit),
+      },
+    }
+  }
 
   const hydrateDraft = (version: AiAppVersionItem) => {
     const config = version.config
+    const configKnowledge = config.knowledge ?? {}
     promptContent.value = config.prompt || ''
     selectedLlmId.value = config.llmId ?? null
     Object.assign(settings, {
@@ -160,6 +187,11 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
         }))
       : []
     pluginIds.value = config.pluginIds?.length ? [...new Set(config.pluginIds)] : []
+    const nextKnowledgeIds = configKnowledge.ids ?? []
+    knowledgeConfig.ids = nextKnowledgeIds.length
+      ? [...new Set(nextKnowledgeIds)].slice(0, knowledgeLimit)
+      : []
+    knowledgeConfig.settings = { ...(configKnowledge.settings ?? {}) }
     openingStatementContent.value = config.openingStatement?.content || ''
     openingQuestions.value = config.openingStatement?.questions?.length
       ? config.openingStatement.questions.slice(0, openingQuestionLimit)
@@ -298,6 +330,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
     selectedLlmId,
     capabilities,
     pluginIds,
+    knowledgeConfig,
     openingStatementContent,
     openingQuestions,
     settings,

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import type { AppKnowledgeCitation } from '@/api'
 
 export type AppDebugMessage = {
   key: string
@@ -8,6 +9,8 @@ export type AppDebugMessage = {
   pending?: boolean
   elapsedMs?: number
   tokens?: number
+  knowledgeQuery?: string
+  knowledgeCitations?: AppKnowledgeCitation[]
 }
 
 export const useAppDebugStore = defineStore('appDebug', () => {

@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { FilesModule } from "../../files/files.module";
+import { Knowledge } from "../knowledge/entities/knowledge.entity";
 import { Llm } from "../llm/entities/llm.entity";
 import { Plugin } from "../plugin/entities/plugin.entity";
 import { AppController } from "./app.controller";
@@ -11,7 +12,14 @@ import { AiApp } from "./entities/app.entity";
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([AiApp, AiAppCategory, AiAppVersion, Llm, Plugin]),
+    TypeOrmModule.forFeature([
+      AiApp,
+      AiAppCategory,
+      AiAppVersion,
+      Llm,
+      Plugin,
+      Knowledge,
+    ]),
     FilesModule,
   ],
   controllers: [AppController],

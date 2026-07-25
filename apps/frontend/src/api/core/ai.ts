@@ -52,6 +52,24 @@ export interface AiAppItem {
 }
 
 export type AiAppVersionStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'
+export type KnowledgeRecallStrategy = 'hybrid' | 'vector' | 'text'
+
+export interface AppKnowledgeRecallSettings {
+  strategy?: KnowledgeRecallStrategy
+  limit?: number
+  minScore?: number
+}
+
+export interface AppKnowledgeCitation {
+  id: number
+  knowledgeId: number
+  knowledgeName: string
+  documentId: number
+  documentName: string
+  chunkIndex: number
+  score: number
+  text: string
+}
 
 export interface AiAppVersionConfig {
   prompt?: string
@@ -72,7 +90,10 @@ export interface AiAppVersionConfig {
   }>
   pluginIds?: number[]
   workflowIds?: number[]
-  knowledgeIds?: number[]
+  knowledge?: {
+    ids?: number[]
+    settings?: Record<number, AppKnowledgeRecallSettings>
+  }
   toggles?: Record<string, boolean>
   openingStatement?: {
     content?: string
@@ -89,6 +110,14 @@ export interface AppVersionPluginItem {
   published?: boolean
 }
 
+export interface AppVersionKnowledgeItem {
+  id: number
+  icon?: string | null
+  name: string
+  description?: string | null
+  status: boolean
+}
+
 export interface AiAppVersionItem {
   id: number
   appId: number
@@ -96,6 +125,7 @@ export interface AiAppVersionItem {
   status: AiAppVersionStatus
   config: AiAppVersionConfig
   plugins?: AppVersionPluginItem[]
+  knowledges?: AppVersionKnowledgeItem[]
   publishedAt?: string | null
   createdAt?: string
   updatedAt?: string
@@ -318,8 +348,6 @@ export interface UpdateKnowledgeDocumentChunkPayload {
   enabled?: boolean
 }
 
-export type KnowledgeRecallStrategy = 'hybrid' | 'vector' | 'text'
-
 export interface RecallTestPayload {
   query: string
   strategy?: KnowledgeRecallStrategy
@@ -508,6 +536,7 @@ type StreamAiAppDebugParams = {
   }>
   onContent: (content: string) => void
   onMeta?: (meta: { elapsedMs: number; tokens?: number }) => void
+  onKnowledge?: (payload: { query: string; items: AppKnowledgeCitation[] }) => void
   onSuggestions?: (items: string[]) => void
   onError?: (message: string) => void
   signal?: AbortSignal
@@ -519,6 +548,7 @@ export const streamAiAppDebugApi = async ({
   history,
   onContent,
   onMeta,
+  onKnowledge,
   onSuggestions,
   onError,
   signal,
@@ -561,14 +591,26 @@ export const streamAiAppDebugApi = async ({
       content?: string
       elapsedMs?: number
       tokens?: number
-      items?: string[]
+      query?: string
+      items?: string[] | AppKnowledgeCitation[]
     }
     if (eventName === 'error') {
       onError?.((payload as { message?: string }).message || '调试接口请求失败')
       return
     }
     if (eventName === 'suggestions') {
-      onSuggestions?.(Array.isArray(payload.items) ? payload.items : [])
+      onSuggestions?.(
+        Array.isArray(payload.items)
+          ? payload.items.filter((item): item is string => typeof item === 'string')
+          : [],
+      )
+      return
+    }
+    if (eventName === 'knowledge') {
+      onKnowledge?.({
+        query: typeof payload.query === 'string' ? payload.query : '',
+        items: Array.isArray(payload.items) ? (payload.items as AppKnowledgeCitation[]) : [],
+      })
       return
     }
     if (eventName === 'meta' && payload.elapsedMs !== undefined) {

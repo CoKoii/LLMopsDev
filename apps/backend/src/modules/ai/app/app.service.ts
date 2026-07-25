@@ -8,6 +8,7 @@ import {
   resolvePageQuery,
 } from "../../../common/http/page-query.dto";
 import { Llm } from "../llm/entities/llm.entity";
+import { Knowledge } from "../knowledge/entities/knowledge.entity";
 import { Plugin } from "../plugin/entities/plugin.entity";
 import { CreateAppDto } from "./dto/create-app.dto";
 import { QueryAppsDto } from "./dto/query-apps.dto";
@@ -39,8 +40,13 @@ type AppVersionPluginSummary = Pick<
   } | null;
   published?: boolean;
 };
+type AppVersionKnowledgeSummary = Pick<
+  Knowledge,
+  "id" | "icon" | "name" | "description" | "status"
+>;
 type AppVersionItem = AiAppVersion & {
   plugins: AppVersionPluginSummary[];
+  knowledges: AppVersionKnowledgeSummary[];
 };
 
 const createDefaultDraftConfig = (): AiAppVersionConfig => ({
@@ -49,7 +55,10 @@ const createDefaultDraftConfig = (): AiAppVersionConfig => ({
   capabilities: [],
   pluginIds: [],
   workflowIds: [],
-  knowledgeIds: [],
+  knowledge: {
+    ids: [],
+    settings: {},
+  },
   toggles: {
     longTermMemory: false,
     questionSuggestions: false,
@@ -71,6 +80,8 @@ export class AppService {
     private readonly llmRepository: Repository<Llm>,
     @InjectRepository(Plugin)
     private readonly pluginRepository: Repository<Plugin>,
+    @InjectRepository(Knowledge)
+    private readonly knowledgeRepository: Repository<Knowledge>,
     private readonly dataSource: DataSource,
     private readonly filesService: FilesService,
   ) {}
@@ -100,6 +111,18 @@ export class AppService {
     };
   }
 
+  private withAccessibleKnowledgeIcon(
+    knowledge: Knowledge,
+  ): AppVersionKnowledgeSummary {
+    return {
+      id: knowledge.id,
+      icon: this.filesService.createAccessibleUrl(knowledge.icon),
+      name: knowledge.name,
+      description: knowledge.description,
+      status: knowledge.status,
+    };
+  }
+
   private async loadVersionPlugins(
     config: AiAppVersionConfig,
   ): Promise<AppVersionPluginSummary[]> {
@@ -124,12 +147,39 @@ export class AppService {
       );
   }
 
-  private async withVersionPlugins(
+  private async loadVersionKnowledges(
+    config: AiAppVersionConfig,
+    userId: number,
+  ): Promise<AppVersionKnowledgeSummary[]> {
+    const knowledgeIds = [...new Set(config.knowledge?.ids ?? [])];
+    if (!knowledgeIds.length) return [];
+
+    const knowledges = await this.knowledgeRepository.find({
+      where: { id: In(knowledgeIds), createdBy: userId },
+    });
+    const knowledgeMap = new Map(
+      knowledges.map((knowledge) => [
+        knowledge.id,
+        this.withAccessibleKnowledgeIcon(knowledge),
+      ]),
+    );
+
+    return knowledgeIds
+      .map((id) => knowledgeMap.get(id))
+      .filter(
+        (knowledge): knowledge is AppVersionKnowledgeSummary =>
+          knowledge !== undefined,
+      );
+  }
+
+  private async withVersionRelations(
     version: AiAppVersion,
+    userId: number,
   ): Promise<AppVersionItem> {
     return {
       ...version,
       plugins: await this.loadVersionPlugins(version.config),
+      knowledges: await this.loadVersionKnowledges(version.config, userId),
     };
   }
 
@@ -173,12 +223,27 @@ export class AppService {
     if (!next) return current;
 
     return {
-      ...current,
-      ...next,
+      prompt: next.prompt === undefined ? current.prompt : next.prompt,
+      llmId: next.llmId === undefined ? current.llmId : next.llmId,
       modelSettings: {
         ...current.modelSettings,
         ...next.modelSettings,
       },
+      capabilities:
+        next.capabilities === undefined
+          ? current.capabilities
+          : next.capabilities,
+      pluginIds: next.pluginIds === undefined ? current.pluginIds : next.pluginIds,
+      workflowIds:
+        next.workflowIds === undefined ? current.workflowIds : next.workflowIds,
+      knowledge:
+        next.knowledge === undefined
+          ? current.knowledge
+          : {
+              ids: next.knowledge.ids ?? current.knowledge?.ids ?? [],
+              settings:
+                next.knowledge.settings ?? current.knowledge?.settings ?? {},
+            },
       toggles: {
         ...current.toggles,
         ...next.toggles,
@@ -364,7 +429,10 @@ export class AppService {
   // --------------------------------------------------------------------------------------------------
   // 获取AI应用草稿版本
   async getDraft(id: number, userId: number) {
-    return this.withVersionPlugins(await this.ensureDraftVersion(id, userId));
+    return this.withVersionRelations(
+      await this.ensureDraftVersion(id, userId),
+      userId,
+    );
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -373,7 +441,10 @@ export class AppService {
   async updateDraft(id: number, dto: UpdateAppDraftDto, userId: number) {
     const draft = await this.ensureDraftVersion(id, userId);
     draft.config = this.mergeConfig(draft.config, dto.config);
-    return this.withVersionPlugins(await this.appVersionRepository.save(draft));
+    return this.withVersionRelations(
+      await this.appVersionRepository.save(draft),
+      userId,
+    );
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -389,7 +460,7 @@ export class AppService {
       order: { id: "DESC" },
     });
     return Promise.all(
-      versions.map((version) => this.withVersionPlugins(version)),
+      versions.map((version) => this.withVersionRelations(version, userId)),
     );
   }
   // --------------------------------------------------------------------------------------------------
@@ -401,7 +472,7 @@ export class AppService {
     const publishedVersions = await this.listVersions(id, userId);
     const version = this.getNextPublishedVersion(publishedVersions);
 
-    return this.withVersionPlugins(
+    return this.withVersionRelations(
       await this.appVersionRepository.save(
         this.appVersionRepository.create({
           appId: id,
@@ -411,6 +482,7 @@ export class AppService {
           publishedAt: new Date(),
         }),
       ),
+      userId,
     );
   }
   // --------------------------------------------------------------------------------------------------
@@ -428,7 +500,10 @@ export class AppService {
 
     const draft = await this.ensureDraftVersion(id, userId);
     draft.config = target.config;
-    return this.withVersionPlugins(await this.appVersionRepository.save(draft));
+    return this.withVersionRelations(
+      await this.appVersionRepository.save(draft),
+      userId,
+    );
   }
   // --------------------------------------------------------------------------------------------------
 

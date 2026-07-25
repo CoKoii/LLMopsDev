@@ -36,5 +36,6 @@ import { KnowledgeService } from "./knowledge.service";
     DocumentProcessQueueService,
     DocumentProcessProcessor,
   ],
+  exports: [KnowledgeService],
 })
 export class KnowledgeModule {}

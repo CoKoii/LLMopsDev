@@ -1,12 +1,18 @@
 <script setup lang="ts">
 import { useAuthStore } from '@/stores/auth'
 import {
+  listKnowledgeApi,
   listPluginCategoriesApi,
   listPluginsApi,
+  type AppKnowledgeCitation,
+  type AppKnowledgeRecallSettings,
+  type AppVersionKnowledgeItem,
   type AppVersionPluginItem,
+  type KnowledgeItem,
   type PluginCategoryItem,
   type PluginItem,
 } from '@/api'
+import AppModal from '@/components/AppModal/AppModal.vue'
 import { renderMarkdown } from '@/utils/markdown'
 import {
   BadgeDollarSign,
@@ -58,6 +64,8 @@ import {
   InputNumber,
   Modal,
   Popover,
+  Radio,
+  RadioGroup,
   Select,
   Slider,
   Switch,
@@ -69,6 +77,7 @@ import { computed, h, nextTick, onMounted, ref, type Component, type VNode } fro
 import { useRoute } from 'vue-router'
 import {
   configToggles,
+  knowledgeLimit,
   openingQuestionLimit,
   useAppOrchestrationDraft,
   type CapabilityItem,
@@ -81,6 +90,8 @@ type ChatMessage = {
   content: string
   footer?: VNode
   pending?: boolean
+  knowledgeQuery?: string
+  knowledgeCitations?: AppKnowledgeCitation[]
 }
 
 const route = useRoute()
@@ -88,6 +99,8 @@ const authStore = useAuthStore()
 const allPluginCategoryKey = '__all__'
 const modelSettingsOpen = ref(false)
 const pluginModalOpen = ref(false)
+const knowledgeModalOpen = ref(false)
+const knowledgeSettingsOpen = ref(false)
 const publishHistoryOpen = ref(false)
 const promptOptimizeOpen = ref(false)
 const promptOptimizeSource = ref('')
@@ -98,10 +111,21 @@ const pluginCatalog = ref<PluginItem[]>([])
 const pluginCatalogCache = ref<PluginItem[]>([])
 const pluginCategoryCatalog = ref<PluginCategoryItem[]>([])
 const pluginCatalogLoading = ref(false)
+const knowledgeCatalog = ref<KnowledgeItem[]>([])
+const knowledgeCatalogCache = ref<KnowledgeItem[]>([])
+const knowledgeCatalogLoading = ref(false)
+const draftKnowledgeIds = ref<number[]>([])
+const activeKnowledgeSettingsId = ref<number>()
+const knowledgeSettingsDraft = ref<Required<AppKnowledgeRecallSettings>>({
+  strategy: 'hybrid',
+  limit: 5,
+  minScore: 0.4,
+})
 const activePluginSourceKey = ref<PluginSourceKey>('custom')
 const activePluginCategoryKey = ref(allPluginCategoryKey)
 let promptOptimizeAbortController: AbortController | undefined
 let pluginCatalogRequestId = 0
+let knowledgeCatalogRequestId = 0
 const pageTabs = [
   { page: 'edit', label: '编辑' },
   { page: 'publish', label: '发布配置' },
@@ -136,6 +160,7 @@ const {
   selectedLlmId,
   capabilities,
   pluginIds,
+  knowledgeConfig,
   openingStatementContent,
   openingQuestions,
   settings,
@@ -194,6 +219,8 @@ const chatRoles = computed<ChatRoles>(() => ({
 }))
 const suggestedPrompts = computed(() => debugStore.getSuggestions(appId.value))
 const selectedPluginIds = computed(() => new Set(pluginIds.value))
+const selectedKnowledgeIds = computed(() => new Set(knowledgeConfig.ids))
+const selectedDraftKnowledgeIds = computed(() => new Set(draftKnowledgeIds.value))
 const openingPresetQuestions = computed(() =>
   openingQuestions.value
     .map((item) => item.trim())
@@ -233,6 +260,18 @@ const selectedPlugins = computed<AppVersionPluginItem[]>(() => {
     .map((id) => pluginLookup.get(id))
     .filter((item): item is AppVersionPluginItem => item !== undefined)
 })
+const selectedKnowledges = computed<AppVersionKnowledgeItem[]>(() => {
+  const knowledgeLookup = new Map<number, AppVersionKnowledgeItem>()
+  for (const item of appDraft.value?.knowledges ?? []) {
+    knowledgeLookup.set(item.id, item)
+  }
+  for (const item of knowledgeCatalogCache.value) {
+    knowledgeLookup.set(item.id, item)
+  }
+  return knowledgeConfig.ids
+    .map((id) => knowledgeLookup.get(id))
+    .filter((item): item is AppVersionKnowledgeItem => item !== undefined)
+})
 const pluginCategoryOptions = computed(() =>
   buildPluginCategoryOptions(pluginCategoryCatalog.value),
 )
@@ -252,6 +291,28 @@ const activePluginSourceName = computed(() => {
 const pluginEmptyText = computed(() =>
   activePluginSourceKey.value === 'custom' ? '暂无自定义插件' : '当前分类下没有已发布插件',
 )
+const knowledgeEmptyText = computed(() =>
+  knowledgeCatalogLoading.value ? '正在加载知识库...' : '暂无可引用知识库',
+)
+function clampSettingValue(
+  value: number | undefined,
+  min: number,
+  max: number,
+  fallback: number,
+) {
+  return Number.isFinite(value) ? Math.min(max, Math.max(min, Number(value))) : fallback
+}
+
+function normalizeKnowledgeRecallSettings(
+  settings: AppKnowledgeRecallSettings,
+): Required<AppKnowledgeRecallSettings> {
+  return {
+    strategy: settings.strategy ?? 'hybrid',
+    limit: Math.round(clampSettingValue(settings.limit, 1, 20, 5)),
+    minScore: clampSettingValue(settings.minScore, 0, 1, 0.4),
+  }
+}
+
 function buildPluginCategoryOptions(categories: PluginCategoryItem[]): PluginCategoryOption[] {
   return [
     {
@@ -550,6 +611,101 @@ function togglePluginSelection(id: number) {
 
 function removeSelectedPlugin(id: number) {
   pluginIds.value = pluginIds.value.filter((item) => item !== id)
+}
+
+async function loadKnowledgeCatalog() {
+  const requestId = ++knowledgeCatalogRequestId
+  knowledgeCatalogLoading.value = true
+  try {
+    const result = await listKnowledgeApi({ page: 1, pageSize: 200 })
+    if (requestId !== knowledgeCatalogRequestId) return
+    knowledgeCatalog.value = result.items
+    mergeKnowledgeCatalogCache(result.items)
+  } finally {
+    if (requestId === knowledgeCatalogRequestId) {
+      knowledgeCatalogLoading.value = false
+    }
+  }
+}
+
+function mergeKnowledgeCatalogCache(items: KnowledgeItem[]) {
+  const next = new Map(knowledgeCatalogCache.value.map((item) => [item.id, item]))
+  for (const item of items) {
+    next.set(item.id, item)
+  }
+  knowledgeCatalogCache.value = [...next.values()]
+}
+
+function openKnowledgeModal() {
+  draftKnowledgeIds.value = [...knowledgeConfig.ids]
+  knowledgeModalOpen.value = true
+  void loadKnowledgeCatalog()
+}
+
+function closeKnowledgeModal() {
+  knowledgeModalOpen.value = false
+}
+
+function toggleDraftKnowledgeSelection(id: number) {
+  const next = new Set(draftKnowledgeIds.value)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    if (next.size >= knowledgeLimit) {
+      message.warning(`最多关联 ${knowledgeLimit} 个知识库`)
+      return
+    }
+    next.add(id)
+  }
+  draftKnowledgeIds.value = [...next]
+}
+
+function pickKnowledgeSettings(ids: number[]) {
+  const selectedIds = new Set(ids)
+  return Object.entries(knowledgeConfig.settings).reduce<Record<number, AppKnowledgeRecallSettings>>(
+    (result, [key, value]) => {
+      const id = Number(key)
+      if (selectedIds.has(id)) {
+        result[id] = value
+      }
+      return result
+    },
+    {},
+  )
+}
+
+function confirmKnowledgeSelection() {
+  const ids = [...new Set(draftKnowledgeIds.value)].slice(0, knowledgeLimit)
+  knowledgeConfig.ids = ids
+  knowledgeConfig.settings = pickKnowledgeSettings(ids)
+  knowledgeModalOpen.value = false
+}
+
+function getKnowledgeRecallSettings(id: number): Required<AppKnowledgeRecallSettings> {
+  return normalizeKnowledgeRecallSettings(knowledgeConfig.settings[id] ?? {})
+}
+
+function openKnowledgeSettings(id: number) {
+  activeKnowledgeSettingsId.value = id
+  knowledgeSettingsDraft.value = getKnowledgeRecallSettings(id)
+  knowledgeSettingsOpen.value = true
+}
+
+function confirmKnowledgeSettings() {
+  const id = activeKnowledgeSettingsId.value
+  if (!id) return
+
+  knowledgeConfig.settings = {
+    ...knowledgeConfig.settings,
+    [id]: normalizeKnowledgeRecallSettings(knowledgeSettingsDraft.value),
+  }
+  knowledgeSettingsOpen.value = false
+}
+
+function removeSelectedKnowledge(id: number) {
+  const ids = knowledgeConfig.ids.filter((item) => item !== id)
+  knowledgeConfig.ids = ids
+  knowledgeConfig.settings = pickKnowledgeSettings(ids)
 }
 
 function openPublishHistory() {
@@ -940,13 +1096,30 @@ onMounted(() => {
                   <ChevronDown :size="15" />
                   <h3>知识库</h3>
                 </div>
-                <Button type="text" size="small"
+                <Button type="text" size="small" @click="openKnowledgeModal"
                   ><template #icon><Plus :size="16" /></template
                 ></Button>
               </div>
-              <p class="config-section__description">
-                引用文本类型的数据，实现知识问答，应用最多支持关联 5 个知识库。
-              </p>
+              <div v-if="selectedKnowledges.length" class="selected-plugin-list">
+                <article v-for="item in selectedKnowledges" :key="item.id" class="capability-item">
+                  <div class="capability-item__icon" :class="{ 'has-image': item.icon }">
+                    <img v-if="item.icon" :src="item.icon" alt="" />
+                    <BookOpen v-else :size="16" />
+                  </div>
+                  <div>
+                    <h4>{{ item.name }}</h4>
+                    <p>{{ item.description || '暂无描述' }}</p>
+                  </div>
+                  <div class="capability-item__actions">
+                    <Button type="text" size="small" @click="openKnowledgeSettings(item.id)">
+                      <template #icon><Settings :size="14" /></template>
+                    </Button>
+                    <Button type="text" size="small" @click="removeSelectedKnowledge(item.id)">
+                      <template #icon><Trash2 :size="14" /></template>
+                    </Button>
+                  </div>
+                </article>
+              </div>
             </div>
 
             <div class="config-section" v-for="item in configToggles" :key="item.key">
@@ -1047,6 +1220,36 @@ onMounted(() => {
               </div>
             </div>
             <Bubble.List v-else :items="displayMessages" :roles="chatRoles">
+              <template #header="{ item }">
+                <div class="chat-message-header">
+                  <span>{{ item.role === 'assistant' ? appName : userName }}</span>
+                  <details
+                    v-if="item.role === 'assistant' && item.knowledgeCitations?.length"
+                    class="knowledge-citations"
+                  >
+                    <summary>
+                      <BookOpen :size="14" />
+                      <span>已搜索知识库</span>
+                      <ChevronDown :size="14" />
+                    </summary>
+                    <div class="knowledge-citations__panel">
+                      <p v-if="item.knowledgeQuery">检索问题：{{ item.knowledgeQuery }}</p>
+                      <ol>
+                        <li v-for="citation in item.knowledgeCitations" :key="citation.id">
+                          <strong>[{{ citation.id }}] {{ citation.knowledgeName }}</strong>
+                          <span
+                            >{{ citation.documentName }} · 片段 #{{
+                              citation.chunkIndex + 1
+                            }}</span
+                          >
+                          <em>匹配度 {{ citation.score.toFixed(2) }}</em>
+                          <p>{{ citation.text }}</p>
+                        </li>
+                      </ol>
+                    </div>
+                  </details>
+                </div>
+              </template>
               <template #message="{ item }">
                 <div
                   class="chat-markdown"
@@ -1290,6 +1493,120 @@ onMounted(() => {
         </div>
       </Transition>
     </Teleport>
+
+    <Teleport to="body">
+      <Transition name="side-modal">
+        <div v-if="knowledgeModalOpen" class="plugin-modal-mask" @click.self="closeKnowledgeModal">
+          <div
+            class="knowledge-modal side-modal-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="knowledgeModalTitle"
+          >
+            <div class="knowledge-modal__header">
+              <h2 id="knowledgeModalTitle">选择引用知识库</h2>
+              <button
+                class="side-modal__close"
+                type="button"
+                aria-label="关闭"
+                @click="closeKnowledgeModal"
+              >
+                <X :size="18" />
+              </button>
+            </div>
+
+            <div class="knowledge-modal__list">
+              <div v-if="knowledgeCatalogLoading" class="knowledge-modal__empty">
+                正在加载知识库...
+              </div>
+              <div v-else-if="knowledgeCatalog.length === 0" class="knowledge-modal__empty">
+                {{ knowledgeEmptyText }}
+              </div>
+              <template v-else>
+                <button
+                  v-for="item in knowledgeCatalog"
+                  :key="item.id"
+                  type="button"
+                  class="knowledge-modal__item"
+                  :class="{ 'is-selected': selectedDraftKnowledgeIds.has(item.id) }"
+                  @click="toggleDraftKnowledgeSelection(item.id)"
+                >
+                  <span class="knowledge-modal__item-icon" :class="{ 'has-image': item.icon }">
+                    <img v-if="item.icon" :src="item.icon" alt="" />
+                    <BookOpen v-else :size="17" />
+                  </span>
+                  <span class="knowledge-modal__item-main">
+                    <strong>{{ item.name }}</strong>
+                    <span>{{ item.description || '暂无描述' }}</span>
+                  </span>
+                  <Tag v-if="selectedKnowledgeIds.has(item.id)" color="processing">已关联</Tag>
+                  <CircleCheck
+                    v-if="selectedDraftKnowledgeIds.has(item.id)"
+                    class="knowledge-modal__selected-icon"
+                    :size="16"
+                  />
+                </button>
+              </template>
+            </div>
+
+            <footer class="knowledge-modal__footer">
+              <span>{{ draftKnowledgeIds.length }} 个知识库被选中</span>
+              <div>
+                <Button @click="closeKnowledgeModal">取消</Button>
+                <Button type="primary" @click="confirmKnowledgeSelection">添加</Button>
+              </div>
+            </footer>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <AppModal
+      v-model:open="knowledgeSettingsOpen"
+      width="56rem"
+      title="检索设置"
+      ok-text="确定"
+      cancel-text="取消"
+      @ok="confirmKnowledgeSettings"
+    >
+      <div class="recall-settings">
+        <div class="recall-settings__row">
+          <span>检索策略</span>
+          <RadioGroup
+            v-model:value="knowledgeSettingsDraft.strategy"
+            class="recall-settings__options"
+          >
+            <Radio value="hybrid">混合检索</Radio>
+            <Radio value="vector">向量检索</Radio>
+            <Radio value="text">全文检索</Radio>
+          </RadioGroup>
+        </div>
+        <div class="recall-settings__row">
+          <span>最大召回数量</span>
+          <div class="recall-setting-control">
+            <Slider v-model:value="knowledgeSettingsDraft.limit" :min="1" :max="20" :step="1" />
+            <InputNumber v-model:value="knowledgeSettingsDraft.limit" :min="1" :max="20" />
+          </div>
+        </div>
+        <div class="recall-settings__row">
+          <span>最小匹配度</span>
+          <div class="recall-setting-control">
+            <Slider
+              v-model:value="knowledgeSettingsDraft.minScore"
+              :min="0"
+              :max="1"
+              :step="0.01"
+            />
+            <InputNumber
+              v-model:value="knowledgeSettingsDraft.minScore"
+              :min="0"
+              :max="1"
+              :step="0.01"
+            />
+          </div>
+        </div>
+      </div>
+    </AppModal>
 
     <Drawer
       v-model:open="publishHistoryOpen"
