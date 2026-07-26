@@ -1,8 +1,10 @@
 import { AIMessage, type BaseMessageLike } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { Readable } from "node:stream";
 import { z } from "zod";
+import { getAiEnvironment } from "../../../common/config/env";
 import {
   type AppKnowledgeRecallItem,
   KnowledgeService,
@@ -27,8 +29,6 @@ const QUESTION_SUGGESTION_SYSTEM_PROMPT = [
   "内容要像用户下一步会直接发送的话。",
   "优先生成具体、可点击的短命令。",
 ].join("\n");
-const LOCAL_STRUCTURED_OUTPUT_MODEL = "qwen2.5:0.5b";
-const LOCAL_STRUCTURED_OUTPUT_BASE_URL = "http://localhost:11434/v1";
 const KNOWLEDGE_QUERY_REWRITE_SYSTEM_PROMPT = [
   "你负责将用户问题改写成用于知识库检索的问题。",
   "请遵循以下规则：",
@@ -98,6 +98,7 @@ export class ChatService {
   constructor(
     private readonly aiRuntimeService: AiRuntimeService,
     private readonly knowledgeService: KnowledgeService,
+    private readonly configService: ConfigService,
   ) {}
 
   private sse(data: SseEvent, event?: string) {
@@ -125,13 +126,15 @@ export class ChatService {
     return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
   }
 
-  private createLocalStructuredOutputModel(temperature = 0) {
+  private createStructuredOutputModel(temperature = 0) {
+    const config = getAiEnvironment(this.configService).structuredOutput;
+
     return new ChatOpenAI({
-      apiKey: "ollama",
-      model: LOCAL_STRUCTURED_OUTPUT_MODEL,
+      apiKey: config.apiKey,
+      model: config.model,
       maxRetries: 0,
       temperature,
-      configuration: { baseURL: LOCAL_STRUCTURED_OUTPUT_BASE_URL },
+      configuration: { baseURL: config.baseUrl },
     });
   }
 
@@ -169,7 +172,7 @@ export class ChatService {
     if (!fallback) return [];
 
     try {
-      const model = this.createLocalStructuredOutputModel();
+      const model = this.createStructuredOutputModel();
       const structuredModel = model.withStructuredOutput(
         KnowledgeQueryRewriteSchema,
         {
@@ -318,7 +321,7 @@ export class ChatService {
     userMessage: string,
     assistantMessage: string,
   ): Promise<string[]> {
-    const model = this.createLocalStructuredOutputModel(1.5);
+    const model = this.createStructuredOutputModel(1.5);
     const structuredModel = model.withStructuredOutput(
       QuestionSuggestionsSchema,
       {

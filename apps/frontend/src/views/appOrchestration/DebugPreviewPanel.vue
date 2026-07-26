@@ -19,6 +19,16 @@ export type DebugChatMessage = {
 
 type ChatRoles = NonNullable<BubbleListProps['roles']>
 
+type KnowledgeCitationView = {
+  queries: string[]
+  knowledgeNames: string[]
+  showItemKnowledgeName: boolean
+}
+
+type DebugChatDisplayMessage = DebugChatMessage & {
+  knowledgeCitationView: KnowledgeCitationView
+}
+
 const props = defineProps<{
   appName: string
   appAvatar: string
@@ -45,6 +55,36 @@ const senderModel = computed({
   get: () => props.senderValue,
   set: (value: string) => emit('update:senderValue', value),
 })
+
+const normalizeTextList = (items: Array<string | undefined>) => [
+  ...new Set(items.map((item) => item?.trim()).filter((item): item is string => Boolean(item))),
+]
+
+const createKnowledgeCitationView = (message: DebugChatMessage): KnowledgeCitationView => {
+  const citations = message.knowledgeCitations ?? []
+  if (!citations.length) {
+    return { queries: [], knowledgeNames: [], showItemKnowledgeName: false }
+  }
+
+  const queries = normalizeTextList([
+    message.knowledgeQuery,
+    ...citations.flatMap((citation) => citation.queries ?? []),
+  ])
+  const knowledgeNames = normalizeTextList(citations.map((citation) => citation.knowledgeName))
+
+  return {
+    queries,
+    knowledgeNames,
+    showItemKnowledgeName: knowledgeNames.length > 1,
+  }
+}
+
+const displayMessages = computed<DebugChatDisplayMessage[]>(() =>
+  props.messages.map((message) => ({
+    ...message,
+    knowledgeCitationView: createKnowledgeCitationView(message),
+  })),
+)
 
 function scrollToBottom() {
   if (chatListRef.value) {
@@ -93,7 +133,7 @@ defineExpose({ scrollToBottom })
         </div>
       </div>
 
-      <Bubble.List v-else :items="messages" :roles="chatRoles">
+      <Bubble.List v-else :items="displayMessages" :roles="chatRoles">
         <template #header="{ item }">
           <div class="chat-message-header">
             <span>{{ item.role === 'assistant' ? appName : userName }}</span>
@@ -103,19 +143,37 @@ defineExpose({ scrollToBottom })
             >
               <summary>
                 <BookOpen :size="14" />
-                <span>已搜索知识库</span>
+                <span>已搜索知识库 · {{ item.knowledgeCitations.length }} 个片段</span>
                 <ChevronDown :size="14" />
               </summary>
               <div class="knowledge-citations__panel">
-                <p v-if="item.knowledgeQuery">检索问题：{{ item.knowledgeQuery }}</p>
+                <div
+                  v-if="
+                    item.knowledgeCitationView.queries.length ||
+                    item.knowledgeCitationView.knowledgeNames.length
+                  "
+                  class="knowledge-citations__summary"
+                >
+                  <p v-if="item.knowledgeCitationView.queries.length">
+                    <span>检索问题</span>
+                    <strong>{{ item.knowledgeCitationView.queries.join('；') }}</strong>
+                  </p>
+                  <p v-if="item.knowledgeCitationView.knowledgeNames.length">
+                    <span>命中知识库</span>
+                    <strong>{{ item.knowledgeCitationView.knowledgeNames.join('、') }}</strong>
+                  </p>
+                </div>
                 <ol>
                   <li v-for="citation in item.knowledgeCitations" :key="citation.id">
-                    <strong>{{ citation.knowledgeName }}</strong>
-                    <span v-if="citation.queries?.length">
-                      检索问题：{{ citation.queries.join('；') }}
+                    <div class="knowledge-citations__item-head">
+                      <strong
+                        >{{ citation.documentName }} · 片段 #{{ citation.chunkIndex + 1 }}</strong
+                      >
+                      <em>匹配度 {{ citation.score.toFixed(2) }}</em>
+                    </div>
+                    <span v-if="item.knowledgeCitationView.showItemKnowledgeName">
+                      {{ citation.knowledgeName }}
                     </span>
-                    <span>{{ citation.documentName }} · 片段 #{{ citation.chunkIndex + 1 }}</span>
-                    <em>匹配度 {{ citation.score.toFixed(2) }}</em>
                     <p>{{ citation.text }}</p>
                   </li>
                 </ol>
@@ -661,11 +719,31 @@ defineExpose({ scrollToBottom })
   border-radius: var(--radius-md);
 }
 
-.knowledge-citations__panel > p {
+.knowledge-citations__summary {
+  display: grid;
+  gap: 0.4rem;
+  padding-bottom: var(--space-1);
+  border-bottom: 0.1rem solid var(--color-border-light);
+}
+
+.knowledge-citations__summary p {
+  display: grid;
+  grid-template-columns: 6rem minmax(0, 1fr);
+  gap: var(--space-2);
   margin: 0;
   color: var(--color-text-muted);
   font-size: 1.2rem;
   line-height: 1.8rem;
+}
+
+.knowledge-citations__summary span {
+  color: var(--color-text-subtle);
+}
+
+.knowledge-citations__summary strong {
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font-weight: 500;
 }
 
 .knowledge-citations__panel ol {
@@ -678,26 +756,36 @@ defineExpose({ scrollToBottom })
 
 .knowledge-citations__panel li {
   display: grid;
-  gap: 0.3rem;
+  gap: 0.4rem;
   min-width: 0;
 }
 
-.knowledge-citations__panel strong,
-.knowledge-citations__panel span,
-.knowledge-citations__panel em {
+.knowledge-citations__item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.knowledge-citations__item-head strong,
+.knowledge-citations__item-head em,
+.knowledge-citations__panel li > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.knowledge-citations__panel strong {
+.knowledge-citations__item-head strong {
+  min-width: 0;
   color: var(--color-text-strong);
   font-size: 1.3rem;
   font-weight: 600;
 }
 
-.knowledge-citations__panel span,
-.knowledge-citations__panel em {
+.knowledge-citations__item-head em,
+.knowledge-citations__panel li > span {
+  flex: none;
   color: var(--color-text-muted);
   font-size: 1.2rem;
   font-style: normal;

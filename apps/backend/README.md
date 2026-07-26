@@ -389,8 +389,10 @@ AI 模块是可选模块，由 `AI_ENABLED` 控制是否注册 `/api/ai/*` 接�
 | --- | --- | --- |
 | `AI_ENABLED` | 是否启用 AI 模块 | 必填 |
 | `AI_API_KEY` | AI 服务 API Key | 启用 AI 时必填；关闭 AI 时可为空字符串 |
-| `AI_BASE_URL` | AI 服务 Base URL，兼容 OpenAI 协议时可配置 | 必填，可为空字符串 |
+| `AI_BASE_URL` | AI 服务 Base URL，兼容 OpenAI 协议时可配置 | 启用 AI 时必填 |
 | `AI_CHAT_MODEL` | 对话模型名称 | 启用 AI 时必填；关闭 AI 时可为空字符串 |
+| `AI_STRUCTURED_OUTPUT_MODEL` | 结构化输出模型名称 | 启用 AI 时必填 |
+| `AI_EMBEDDING_MODEL` | Embedding 模型名称 | 启用 AI 时必填 |
 | `AI_TEMPERATURE` | 模型温度，范围 `0` 到 `2` | 必填 |
 
 示例：
@@ -398,8 +400,10 @@ AI 模块是可选模块，由 `AI_ENABLED` 控制是否注册 `/api/ai/*` 接�
 ```env
 AI_ENABLED=false
 AI_API_KEY=
-AI_BASE_URL=
-AI_CHAT_MODEL=
+AI_BASE_URL=https://api.gemai.cc/v1
+AI_CHAT_MODEL=gpt-5.6-luna
+AI_STRUCTURED_OUTPUT_MODEL=gpt-5.6-luna
+AI_EMBEDDING_MODEL=qwen3-embedding-8b
 AI_TEMPERATURE=0.7
 ```
 

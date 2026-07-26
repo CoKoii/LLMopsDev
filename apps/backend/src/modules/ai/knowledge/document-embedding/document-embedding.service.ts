@@ -1,17 +1,13 @@
+import { OpenAIEmbeddings } from "@langchain/openai";
 import { BadGatewayException, Injectable } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { getAiEnvironment } from "../../../../common/config/env";
 import type { EmbeddingResult } from "./document-embedding.types";
-
-interface OllamaEmbedResponse {
-  model?: string;
-  embeddings?: number[][];
-}
 
 interface EmbedOptions {
   onStart?: () => Promise<void> | void;
 }
 
-const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
-const DEFAULT_EMBEDDING_MODEL = "qwen3-embedding:4b";
 const MAX_EMBEDDING_REQUEST_ATTEMPTS = 2;
 const EMBEDDING_RETRY_DELAY_MS = 500;
 const EMBEDDING_BATCH_SIZE = 32;
@@ -34,12 +30,20 @@ const chunkArray = <T>(items: T[], size: number) => {
 
 @Injectable()
 export class DocumentEmbeddingService {
-  readonly model =
-    process.env.OLLAMA_EMBEDDING_MODEL ?? DEFAULT_EMBEDDING_MODEL;
+  readonly model: string;
 
-  private readonly baseUrl = (
-    process.env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL
-  ).replace(/\/+$/, "");
+  private readonly embeddings: OpenAIEmbeddings;
+
+  constructor(configService: ConfigService) {
+    const config = getAiEnvironment(configService).embedding;
+    this.model = config.model;
+    this.embeddings = new OpenAIEmbeddings({
+      apiKey: config.apiKey,
+      model: config.model,
+      batchSize: EMBEDDING_BATCH_SIZE,
+      configuration: { baseURL: config.baseUrl },
+    });
+  }
 
   async embed(
     input: string[],
@@ -90,27 +94,11 @@ export class DocumentEmbeddingService {
   }
 
   private async embedTexts(input: string[]): Promise<number[][]> {
-    const response = await fetch(`${this.baseUrl}/api/embed`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: this.model,
-        input,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new BadGatewayException(
-        `Ollama embedding 调用失败：${response.status} ${await response.text()}`,
-      );
+    try {
+      return await this.embeddings.embedDocuments(input);
+    } catch (error) {
+      const message = getErrorMessage(error);
+      throw new BadGatewayException(`在线 embedding 调用失败：${message}`);
     }
-
-    const data = (await response.json()) as OllamaEmbedResponse;
-    const embeddings = data.embeddings ?? [];
-    if (embeddings.length !== input.length) {
-      throw new BadGatewayException("Ollama embedding 返回数量与输入不一致");
-    }
-
-    return embeddings;
   }
 }
