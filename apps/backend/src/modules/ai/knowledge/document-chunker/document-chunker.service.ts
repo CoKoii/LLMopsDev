@@ -219,24 +219,6 @@ const overlapTail = (text: string) => {
     : tail;
 };
 
-const chunkPrelude = (headingPath: string[]) =>
-  headingPath.length ? `章节：${headingPath.join(" / ")}` : "";
-
-const chunkEmbeddingText = (
-  documentTitle: string,
-  headingPath: string[],
-  overlap: string,
-  text: string,
-) =>
-  [
-    `文档：${documentTitle}`,
-    headingPath.length ? `章节：${headingPath.join(" / ")}` : undefined,
-    overlap ? `上文：${overlap}` : undefined,
-    text,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-
 @Injectable()
 export class DocumentChunkerService {
   createChunks(input: DocumentChunkerInput): DocumentChunkDraft[] {
@@ -336,18 +318,7 @@ export class DocumentChunkerService {
       const previousText = chunks[chunks.length - 1]?.text;
       const overlap = previousText ? overlapTail(previousText) : "";
       const text = merged.text;
-      const prelude = chunkPrelude(merged.headingPath);
-      const embeddingText = chunkEmbeddingText(
-        input.document.title,
-        merged.headingPath,
-        overlap,
-        text,
-      );
-      const searchText = [
-        prelude,
-        overlap ? `上文：${overlap}` : undefined,
-        text,
-      ]
+      const indexText = [overlap, text]
         .filter(Boolean)
         .join("\n\n");
       const chunkIndex = chunks.length;
@@ -374,8 +345,8 @@ export class DocumentChunkerService {
       chunks.push({
         chunkIndex,
         text,
-        searchText,
-        embeddingText,
+        searchText: indexText,
+        embeddingText: indexText,
         tokenCount: metadata.tokenCount,
         characterCount: metadata.characterCount,
         metadata,

@@ -19,34 +19,44 @@ const PROMPT_OPTIMIZE_SYSTEM_PROMPT = [
   "润色用户提供的人设与回复逻辑，使表达更清晰、通顺、自然。",
   "只调整措辞和逻辑顺序，保留原意、角色、约束和信息量。",
   "不要新增角色、任务、规则、示例或业务设定；不要扩写。",
-  "输出长度接近原文，最多不超过原文 1.2 倍；原文很短则保持同等长度。",
+  "优化结果长度接近原文，最多不超过原文 1.2 倍；原文很短则保持同等长度。",
   "保留原有 Markdown 结构；无结构时不要强行添加复杂结构。",
-  "只返回润色后的正文，不解释，不使用代码块。",
 ].join("\n");
 const QUESTION_SUGGESTION_SYSTEM_PROMPT = [
   "生成聊天输入框下方的快捷提问按钮。",
   "内容要像用户下一步会直接发送的话。",
   "优先生成具体、可点击的短命令。",
 ].join("\n");
-const QUESTION_SUGGESTION_MODEL = "qwen2.5:0.5b";
-const QUESTION_SUGGESTION_BASE_URL = "http://localhost:11434/v1";
-const KNOWLEDGE_QUERY_PLAN_MODEL = QUESTION_SUGGESTION_MODEL;
-const KNOWLEDGE_QUERY_PLAN_BASE_URL = QUESTION_SUGGESTION_BASE_URL;
-const KNOWLEDGE_QUERY_PLAN_SYSTEM_PROMPT = [
-  "你负责把用户问题规划成适合知识库检索的独立检索问题。",
-  "结合最近聊天历史补全省略的主语、对象和约束。",
-  "如果用户同时问多个问题，拆成多个独立检索问题。",
-  "如果用户只问一个问题，只返回一个检索问题。",
-  "不回答问题，不解释。",
+const LOCAL_STRUCTURED_OUTPUT_MODEL = "qwen2.5:0.5b";
+const LOCAL_STRUCTURED_OUTPUT_BASE_URL = "http://localhost:11434/v1";
+const KNOWLEDGE_QUERY_REWRITE_SYSTEM_PROMPT = [
+  "你负责将用户问题改写成用于知识库检索的问题。",
+  "请遵循以下规则：",
+  "- 不回答问题。",
+  "- 不增加历史中不存在的信息。",
+  "- 不猜测用户意图。",
+  "- 如果存在代词（它、这个、那里、前面的接口等），必须根据聊天记录替换成明确对象。",
+  "- 如果问题已经完整，不做修改。",
+  "- 只生成一句检索问题。",
+  "示例：",
+  "用户：登录接口路径是什么",
+  "LLM：登录接口路径是 POST /api/auth/login。",
+  "用户：它成功后返回什么",
+  "检索问题：登录接口成功后返回什么",
 ].join("\n");
 const QuestionSuggestionsSchema = z
   .object({
     suggestions: z.array(z.string().min(1)).length(3),
   })
   .strict();
-const KnowledgeQueryPlanSchema = z
+const KnowledgeQueryRewriteSchema = z
   .object({
-    queries: z.array(z.string().min(1)).min(1),
+    query: z.string().min(1),
+  })
+  .strict();
+const PromptOptimizeSchema = z
+  .object({
+    prompt: z.string().min(1),
   })
   .strict();
 
@@ -59,8 +69,7 @@ type SseEvent =
 
 type KnowledgeCitation = {
   id: number;
-  query?: string;
-  queries?: string[];
+  query: string;
   knowledgeId: number;
   knowledgeName: string;
   documentId: number;
@@ -75,8 +84,7 @@ type KnowledgeCitationEvent = {
   items: KnowledgeCitation[];
 };
 type KnowledgeRecallItemWithQuery = AppKnowledgeRecallItem & {
-  query?: string;
-  queries?: string[];
+  query: string;
 };
 type KnowledgeConfig = {
   ids: number[];
@@ -117,73 +125,56 @@ export class ChatService {
     return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
   }
 
-  private createKnowledgeQueryPlanMessages(
+  private createKnowledgeQueryRewriteMessages(
     message: string,
     history: DebugAppChatHistoryDto[] = [],
-  ): Array<["system" | "human", string]> {
-    const historyText = history
-      .slice(-8)
-      .map((item) => {
-        const role = item.role === "assistant" ? "AI" : "用户";
-        return `${role}: ${this.compactText(item.content, 500)}`;
-      })
-      .join("\n");
-
-    return [
-      ["system", KNOWLEDGE_QUERY_PLAN_SYSTEM_PROMPT],
-      [
-        "human",
-        [
-          historyText ? `最近聊天历史：\n${historyText}` : "",
-          `当前用户问题：${message}`,
-          '请输出 JSON：{"queries":["检索问题1"]}',
-        ]
-          .filter(Boolean)
-          .join("\n\n"),
-      ],
-    ];
-  }
-
-  private normalizeKnowledgeQueries(queries: string[], fallback: string) {
-    const normalizedQueries = [
-      ...new Set(queries.map((item) => item.trim()).filter(Boolean)),
+  ): BaseMessageLike[] {
+    const messages: BaseMessageLike[] = [
+      ["system", KNOWLEDGE_QUERY_REWRITE_SYSTEM_PROMPT],
     ];
 
-    return normalizedQueries.length ? normalizedQueries : [fallback];
+    for (const item of history.slice(-8)) {
+      const content = this.compactText(item.content, 500);
+      if (!content) continue;
+      messages.push([ ages.pu
+    return messages;
   }
 
-  private async planKnowledgeQueries(
+  private async rewriteKnowledgeQuery(
     message: string,
     history: DebugAppChatHistoryDto[] = [],
   ) {
     const fallback = message.trim();
-    if (!fallback) return [];
+    if (!fallback) return "";
 
     try {
       const model = new ChatOpenAI({
         apiKey: "ollama",
-        model: KNOWLEDGE_QUERY_PLAN_MODEL,
+        model: LOCAL_STRUCTURED_OUTPUT_MODEL,
         maxRetries: 0,
         temperature: 0,
-        configuration: { baseURL: KNOWLEDGE_QUERY_PLAN_BASE_URL },
+        configuration: { baseURL: LOCAL_STRUCTURED_OUTPUT_BASE_URL },
       });
       const structuredModel = model.withStructuredOutput(
-        KnowledgeQueryPlanSchema,
+        KnowledgeQueryRewriteSchema,
         {
-          name: "KnowledgeQueryPlan",
-          method: "jsonSchema",
-          strict: true,
+          name: "KnowledgeQueryRewrite",
         },
       );
       const response = await structuredModel.invoke(
-        this.createKnowledgeQueryPlanMessages(fallback, history),
+        this.createKnowledgeQueryRewriteMessages(fallback, history),
+      );
+      const query = response.query.trim() || fallback;
+
+      this.logger.log(
+        `知识库检索问题改写完成: message="${this.compactText(fallback, 120)}", history=${history.length}, query="${this.compactText(query, 120)}"`,
       );
 
-      return this.normalizeKnowledgeQueries(response.queries, fallback);
+      return query;
     } catch (error) {
       const warning = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`知识库检索问题规划失败: ${warning}`);
-      return [fallback];
+      this.logger.warn(`知识库检索问题改写失败，使用原问题检索: ${warning}`);
+      return fallback;
     }
   }
 
@@ -199,51 +190,12 @@ export class ChatService {
     return Math.min(20, Math.max(1, Math.floor(limit)));
   }
 
-  private orderKnowledgeItemsForCompression(
-    items: KnowledgeRecallItemWithQuery[],
-  ) {
-    const groups = new Map<string, KnowledgeRecallItemWithQuery[]>();
-
-    for (const item of items) {
-      const key = item.query || "";
-      const group = groups.get(key) ?? [];
-      group.push(item);
-      groups.set(key, group);
-    }
-
-    const orderedItems: KnowledgeRecallItemWithQuery[] = [];
-    const groupedItems = [...groups.values()];
-    for (let index = 0; ; index += 1) {
-      let hasItem = false;
-      for (const group of groupedItems) {
-        const item = group[index];
-        if (!item) continue;
-        orderedItems.push(item);
-        hasItem = true;
-      }
-      if (!hasItem) break;
-    }
-
-    return orderedItems;
-  }
-
   private dedupeKnowledgeRecallItems(items: KnowledgeRecallItemWithQuery[]) {
     const itemMap = new Map<string, KnowledgeRecallItemWithQuery>();
 
     for (const item of items) {
       const chunkKey = `${item.knowledgeId}:${item.chunkId}`;
-      const existingItem = itemMap.get(chunkKey);
-      if (!existingItem) {
-        itemMap.set(chunkKey, {
-          ...item,
-          queries: item.query ? [item.query] : [],
-        });
-        continue;
-      }
-
-      if (item.query && !existingItem.queries?.includes(item.query)) {
-        existingItem.queries = [...(existingItem.queries ?? []), item.query];
-      }
+      if (!itemMap.has(chunkKey)) itemMap.set(chunkKey, item);
     }
 
     return [...itemMap.values()];
@@ -251,19 +203,17 @@ export class ChatService {
 
   private compressKnowledgeContext(
     items: KnowledgeRecallItemWithQuery[],
-    itemLimitPerQuery = 5,
+    itemLimit = 5,
   ) {
-    const queryCount = new Set(items.map((item) => item.query).filter(Boolean))
-      .size;
-    const maxItems = Math.max(6, (queryCount || 1) * itemLimitPerQuery);
+    const maxItems = Math.max(6, itemLimit);
     const maxItemChars = 900;
-    const maxTotalChars = Math.max(5000, (queryCount || 1) * 3500);
+    const maxTotalChars = 5000;
     const citations: KnowledgeCitation[] = [];
     const contextParts: string[] = [];
     let totalChars = 0;
     const uniqueItems = this.dedupeKnowledgeRecallItems(items);
 
-    for (const item of this.orderKnowledgeItemsForCompression(uniqueItems)) {
+    for (const item of uniqueItems) {
       if (citations.length >= maxItems) break;
 
       const text = this.compactText(item.text, maxItemChars);
@@ -273,7 +223,6 @@ export class ChatService {
       citations.push({
         id: citationId,
         query: item.query,
-        queries: item.queries,
         knowledgeId: item.knowledgeId,
         knowledgeName: item.knowledgeName,
         documentId: item.documentId,
@@ -308,17 +257,15 @@ export class ChatService {
   ): Promise<string[]> {
     const model = new ChatOpenAI({
       apiKey: "ollama",
-      model: QUESTION_SUGGESTION_MODEL,
+      model: LOCAL_STRUCTURED_OUTPUT_MODEL,
       maxRetries: 0,
       temperature: 1.5,
-      configuration: { baseURL: QUESTION_SUGGESTION_BASE_URL },
+      configuration: { baseURL: LOCAL_STRUCTURED_OUTPUT_BASE_URL },
     });
     const structuredModel = model.withStructuredOutput(
       QuestionSuggestionsSchema,
       {
         name: "QuestionSuggestions",
-        method: "jsonSchema",
-        strict: true,
       },
     );
     const response = await structuredModel.invoke([
@@ -336,6 +283,17 @@ export class ChatService {
       ["system", PROMPT_OPTIMIZE_SYSTEM_PROMPT],
       ["human", `请润色下面的人设与回复逻辑，不要扩写：\n\n${sourcePrompt}`],
     ];
+  }
+
+  private async runPromptOptimize(model: ChatOpenAI, sourcePrompt: string) {
+    const structuredModel = model.withStructuredOutput(PromptOptimizeSchema, {
+      name: "PromptOptimize",
+    });
+    const response = await structuredModel.invoke(
+      this.createPromptOptimizeMessages(sourcePrompt),
+    );
+
+    return response.prompt.trim();
   }
 
   private getTotalTokens(messages: BaseMessageLike[]) {
@@ -357,11 +315,7 @@ export class ChatService {
 
     const draft = await this.aiRuntimeService.getDraft(appId, userId);
     const model = await this.aiRuntimeService.createModel(draft.config);
-    const response = await model.invoke(
-      this.createPromptOptimizeMessages(sourcePrompt),
-    );
-
-    const optimizedPrompt = response.text.trim();
+    const optimizedPrompt = await this.runPromptOptimize(model, sourcePrompt);
     if (!optimizedPrompt) {
       throw new BadRequestException("模型未生成有效优化结果");
     }
@@ -391,15 +345,12 @@ export class ChatService {
 
       const draft = await this.aiRuntimeService.getDraft(appId, userId);
       const model = await this.aiRuntimeService.createModel(draft.config);
-      const stream = await model.stream(
-        this.createPromptOptimizeMessages(sourcePrompt),
-      );
+      const optimizedPrompt = await this.runPromptOptimize(model, sourcePrompt);
 
-      for await (const chunk of stream) {
-        if (chunk.text) {
-          yield this.sse({ content: chunk.text });
-        }
+      if (!optimizedPrompt) {
+        throw new BadRequestException("模型未生成有效优化结果");
       }
+      yield this.sse({ content: optimizedPrompt });
 
       yield SSE_DONE;
     } catch (error) {
@@ -433,23 +384,20 @@ export class ChatService {
       const draft = await this.aiRuntimeService.getDraft(appId, userId);
       const model = await this.aiRuntimeService.createModel(draft.config);
       const knowledgeConfig = this.resolveKnowledgeConfig(draft.config);
-      const queryPlans = knowledgeConfig.ids.length
-        ? await this.planKnowledgeQueries(message, history)
-        : [message.trim()];
-      const recalledItems = (
-        await Promise.all(
-          queryPlans.map(async (query) => {
-            const items = await this.knowledgeService.recallForApp({
+      const knowledgeQuery = knowledgeConfig.ids.length
+        ? await this.rewriteKnowledgeQuery(message, history)
+        : message.trim();
+      const recalledItems: KnowledgeRecallItemWithQuery[] = knowledgeConfig.ids
+        .length
+        ? (
+            await this.knowledgeService.recallForApp({
               knowledgeIds: knowledgeConfig.ids,
               settings: knowledgeConfig.settings,
-              query,
+              query: knowledgeQuery,
               userId,
-            });
-
-            return items.map((item) => ({ ...item, query }));
-          }),
-        )
-      ).flat();
+            })
+          ).map((item) => ({ ...item, query: knowledgeQuery }))
+        : [];
       const contextItemLimit =
         this.resolveKnowledgeContextItemLimit(knowledgeConfig);
       const { context: knowledgeContext, citations } =
@@ -458,7 +406,7 @@ export class ChatService {
       if (citations.length) {
         yield this.sse(
           {
-            query: queryPlans.join("；"),
+            query: knowledgeQuery,
             items: citations,
           },
           "knowledge",

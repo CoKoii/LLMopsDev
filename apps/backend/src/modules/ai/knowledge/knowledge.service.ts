@@ -210,36 +210,12 @@ export class KnowledgeService {
     await this.chunkRepository.delete({ documentId });
   }
 
-  private createChunkSearchText(chunk: KnowledgeDocumentChunk) {
-    const headingPath = chunk.metadata.headingPath ?? [];
-    return [
-      headingPath.length ? `章节：${headingPath.join(" / ")}` : undefined,
-      chunk.text,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-  }
-
-  private createChunkEmbeddingText(
-    document: KnowledgeDocument,
-    chunk: KnowledgeDocumentChunk,
-  ) {
-    const headingPath = chunk.metadata.headingPath ?? [];
-    return [
-      `文档：${document.name}`,
-      headingPath.length ? `章节：${headingPath.join(" / ")}` : undefined,
-      chunk.text,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-  }
-
   private async upsertChunkVector(
     document: KnowledgeDocument,
     chunk: KnowledgeDocumentChunk,
   ) {
     const embeddingResult = await this.documentEmbeddingService.embed([
-      this.createChunkEmbeddingText(document, chunk),
+      chunk.text,
     ]);
     const vector = embeddingResult.vectors[0] ?? [];
 
@@ -539,7 +515,7 @@ export class KnowledgeService {
       createdBy: userId,
       updatedBy: userId,
     });
-    chunk.searchText = this.createChunkSearchText(chunk);
+    chunk.searchText = chunk.text;
 
     const savedChunk = await this.upsertChunkVector(document, chunk);
     await this.syncDocumentChunkCount(documentId);
@@ -594,7 +570,7 @@ export class KnowledgeService {
     }
 
     chunk.updatedBy = userId;
-    chunk.searchText = this.createChunkSearchText(chunk);
+    chunk.searchText = chunk.text;
 
     return shouldUpdateVector
       ? this.upsertChunkVector(document, chunk)

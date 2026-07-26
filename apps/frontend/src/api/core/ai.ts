@@ -62,7 +62,6 @@ export interface AppKnowledgeRecallSettings {
 export interface AppKnowledgeCitation {
   id: number
   query?: string
-  queries?: string[]
   knowledgeId: number
   knowledgeName: string
   documentId: number
