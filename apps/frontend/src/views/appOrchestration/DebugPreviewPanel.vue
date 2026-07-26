@@ -111,7 +111,9 @@ defineExpose({ scrollToBottom })
                 <ol>
                   <li v-for="citation in item.knowledgeCitations" :key="citation.id">
                     <strong>{{ citation.knowledgeName }}</strong>
-                    <span v-if="citation.query">检索问题：{{ citation.query }}</span>
+                    <span v-if="citation.queries?.length">
+                      检索问题：{{ citation.queries.join('；') }}
+                    </span>
                     <span>{{ citation.documentName }} · 片段 #{{ citation.chunkIndex + 1 }}</span>
                     <em>匹配度 {{ citation.score.toFixed(2) }}</em>
                     <p>{{ citation.text }}</p>
