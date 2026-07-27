@@ -36,5 +36,10 @@ export const createAiEnvironment = (get: EnvironmentGetter) => {
         ENV.AI_EMBEDDING_MODEL,
       ),
     },
+    rerank: {
+      apiKey,
+      baseUrl,
+      model: getRequiredString(get(ENV.AI_RERANK_MODEL), ENV.AI_RERANK_MODEL),
+    },
   };
 };

@@ -1,22 +1,41 @@
-import { BadRequestException, Injectable, Logger } from "@nestjs/common";
-import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository } from "typeorm";
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  OnModuleInit,
+} from "@nestjs/common";
+import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
+import { DataSource, In, Repository } from "typeorm";
 import { DocumentEmbeddingService } from "./document-embedding/document-embedding.service";
+import { DocumentRerankerService } from "./document-reranker/document-reranker.service";
 import { DocumentVectorStoreService } from "./document-vector-store/document-vector-store.service";
 import { RecallTestDto } from "./dto/recall-test.dto";
 import { KnowledgeDocumentChunk } from "./entities/knowledge-document-chunk.entity";
 import { KnowledgeDocument } from "./entities/knowledge-document.entity";
 import { Knowledge } from "./entities/knowledge.entity";
 
+type KnowledgeRecallStrategy = "hybrid" | "vector" | "text";
+
 interface RecallMatch {
   chunkId: number;
   score: number;
-  source: "vector" | "text" | "hybrid";
-  vectorScore?: number;
-  textScore?: number;
+  source: KnowledgeRecallStrategy;
 }
 
-type KnowledgeRecallStrategy = "hybrid" | "vector" | "text";
+interface RecallCandidate extends RecallMatch {
+  chunk: KnowledgeDocumentChunk;
+}
+
+interface RecallAccumulator {
+  chunkId: number;
+  source: KnowledgeRecallStrategy;
+  rrfScore: number;
+}
+
+interface TextRecallRow {
+  chunkId: number | string;
+  score: number | string;
+}
 
 export interface AppKnowledgeRecallSettings {
   strategy?: KnowledgeRecallStrategy;
@@ -41,19 +60,18 @@ export interface AppKnowledgeRecallItem {
 type KnowledgeRecallResultItem = Omit<
   AppKnowledgeRecallItem,
   "knowledgeId" | "knowledgeName"
-> & {
-  source: KnowledgeRecallStrategy;
-};
+>;
 
 type KnowledgeRecallExecutionOptions = {
   queryVector?: number[];
 };
 
+const RRF_K = 60;
+const MAX_RERANK_CANDIDATES = 50;
+const DEFAULT_TEXT_SEARCH_TERMS_LIMIT = 24;
+
 const clampScore = (score: number) =>
   Math.max(0, Math.min(1, Number(score.toFixed(4))));
-
-const escapeLikeValue = (value: string) =>
-  value.replace(/[\\%_]/g, (match) => `\\${match}`);
 
 const normalizeRecallText = (value: string) =>
   value.toLowerCase().replace(/\s+/g, " ").trim();
@@ -73,7 +91,7 @@ const extractRecallTerms = (query: string) => {
 
   for (const match of normalizedQuery.matchAll(/[\u3400-\u9fff]{2,}/g)) {
     const word = match[0];
-    if (word.length <= 6) terms.push(word);
+    if (word.length <= 12) terms.push(word);
 
     for (let index = 0; index <= word.length - 2; index += 1) {
       terms.push(word.slice(index, index + 2));
@@ -82,24 +100,51 @@ const extractRecallTerms = (query: string) => {
 
   return uniqueStrings(
     terms.map((term) => term.trim()).filter((term) => term.length >= 2),
+  ).slice(0, DEFAULT_TEXT_SEARCH_TERMS_LIMIT);
+};
+
+const toTsQueryTerm = (value: string) =>
+  value.replace(/[^\p{L}\p{N}_]+/gu, " ").trim();
+
+const createTsQuery = (terms: string[]) =>
+  terms
+    .flatMap((term) => toTsQueryTerm(term).split(/\s+/))
+    .map((term) => term.trim())
+    .filter(Boolean)
+    .map((term) => `${term}:*`)
+    .join(" | ");
+
+const normalizeRerankScores = (
+  results: Array<{ index: number; score: number }>,
+) => {
+  const validResults = results.filter((item) => Number.isFinite(item.score));
+  if (!validResults.length) return new Map<number, number>();
+
+  const scores = validResults.map((item) => item.score);
+  const minScore = Math.min(...scores);
+  const maxScore = Math.max(...scores);
+  const isUnitRange = minScore >= 0 && maxScore <= 1;
+  const range = maxScore - minScore;
+
+  return new Map(
+    validResults.map((item) => [
+      item.index,
+      isUnitRange
+        ? clampScore(item.score)
+        : range
+          ? clampScore((item.score - minScore) / range)
+          : clampScore(item.score),
+    ]),
   );
 };
 
-const limitRecallTerms = (terms: string[]) => terms.slice(0, 16);
-
-const recallTermWeight = (term: string) =>
-  /[\u3400-\u9fff]/.test(term)
-    ? Math.min(term.length, 6)
-    : Math.min(Math.ceil(term.length / 2), 6);
-
-const looksLikeMetadataBlock = (text: string) =>
-  /^\s*[A-Za-z][\w.-]{1,40}\s*:/u.test(text);
-
 @Injectable()
-export class KnowledgeRecallService {
+export class KnowledgeRecallService implements OnModuleInit {
   private readonly logger = new Logger(KnowledgeRecallService.name);
 
   constructor(
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
     @InjectRepository(Knowledge)
     private readonly knowledgeRepository: Repository<Knowledge>,
     @InjectRepository(KnowledgeDocument)
@@ -107,8 +152,16 @@ export class KnowledgeRecallService {
     @InjectRepository(KnowledgeDocumentChunk)
     private readonly chunkRepository: Repository<KnowledgeDocumentChunk>,
     private readonly documentEmbeddingService: DocumentEmbeddingService,
+    private readonly documentRerankerService: DocumentRerankerService,
     private readonly documentVectorStoreService: DocumentVectorStoreService,
   ) {}
+
+  onModuleInit() {
+    void this.ensurePostgresTextSearch().catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`知识库全文索引初始化失败: ${message}`);
+    });
+  }
 
   async recallTest(knowledgeId: number, dto: RecallTestDto) {
     const query = dto.query.trim();
@@ -193,23 +246,21 @@ export class KnowledgeRecallService {
 
   private async searchVectorRecall(
     knowledgeId: number,
-    query: string,
     limit: number,
-    minScore: number,
     queryVector?: number[],
   ): Promise<RecallMatch[]> {
-    const vector = queryVector ?? (await this.createQueryVector(query));
+    const vector = queryVector ?? [];
+    if (!vector.length) return [];
+
     const points = await this.documentVectorStoreService.search({
       vector,
       knowledgeId,
       limit,
-      scoreThreshold: minScore || undefined,
     });
 
     return points.map((point) => ({
       chunkId: point.payload.chunkId,
       score: point.score,
-      vectorScore: point.score,
       source: "vector",
     }));
   }
@@ -218,135 +269,157 @@ export class KnowledgeRecallService {
     knowledgeId: number,
     query: string,
     limit: number,
-    minScore: number,
   ): Promise<RecallMatch[]> {
-    const terms = limitRecallTerms(extractRecallTerms(query));
-    if (!terms.length) return [];
-
-    const params = Object.fromEntries(
-      terms.map((term, index) => [
-        `term${index}`,
-        `%${escapeLikeValue(term)}%`,
-      ]),
-    );
-    const rankExpression = terms
-      .map(
-        (term, index) =>
-          `CASE WHEN LOWER(chunk.searchText) LIKE :term${index} THEN ${recallTermWeight(term)} ELSE 0 END`,
-      )
-      .join(" + ");
-    const chunks = await this.chunkRepository
-      .createQueryBuilder("chunk")
-      .innerJoin("chunk.document", "document")
-      .where("chunk.knowledgeId = :knowledgeId", { knowledgeId })
-      .andWhere("chunk.enabled = :chunkEnabled", { chunkEnabled: true })
-      .andWhere("document.enabled = :enabled", { enabled: true })
-      .andWhere(
-        `(${terms
-          .map((_, index) => `LOWER(chunk.searchText) LIKE :term${index}`)
-          .join(" OR ")})`,
-        params,
-      )
-      .addSelect(`(${rankExpression})`, "lexical_rank")
-      .orderBy("lexical_rank", "DESC")
-      .addOrderBy("chunk.id", "DESC")
-      .take(limit)
-      .getMany();
-
-    return chunks
-      .map((chunk) => ({
-        chunk,
-        score: this.calculateRecallLexicalScore(query, chunk),
-      }))
-      .sort((left, right) => right.score - left.score)
-      .map(({ chunk, score }) => {
-        return {
-          chunkId: chunk.id,
-          score,
-          textScore: score,
-          source: "text" as const,
-        };
-      })
-      .filter((item) => item.score >= minScore);
-  }
-
-  private calculateRecallLexicalScore(
-    query: string,
-    chunk: KnowledgeDocumentChunk,
-  ) {
     const terms = extractRecallTerms(query);
-    if (!terms.length) return 0;
+    const tsQuery = createTsQuery(terms);
+    if (!terms.length || !tsQuery) return [];
 
-    const text = normalizeRecallText(chunk.searchText || chunk.text);
-    const headingText = normalizeRecallText(
-      (chunk.metadata.headingPath ?? []).join(" "),
+    const rows = await this.dataSource.query<TextRecallRow[]>(
+      `
+        WITH search_input AS (
+          SELECT
+            to_tsquery('simple', $2) AS ts_query,
+            $3::text[] AS trigram_terms
+        )
+        SELECT
+          chunk.id AS "chunkId",
+          GREATEST(
+            ts_rank_cd(
+              to_tsvector('simple', COALESCE(chunk."searchText", '') || ' ' || COALESCE(chunk."text", '')),
+              search_input.ts_query
+            ),
+            COALESCE((
+              SELECT MAX(similarity(LOWER(chunk."searchText"), term))
+              FROM unnest(search_input.trigram_terms) AS terms(term)
+            ), 0)
+          ) AS "score"
+        FROM "ai_knowledge_document_chunks" chunk
+        INNER JOIN "ai_knowledge_documents" document
+          ON document.id = chunk."documentId"
+        CROSS JOIN search_input
+        WHERE chunk."knowledgeId" = $1
+          AND chunk.enabled = true
+          AND document.enabled = true
+          AND (
+            to_tsvector('simple', COALESCE(chunk."searchText", '') || ' ' || COALESCE(chunk."text", '')) @@ search_input.ts_query
+            OR EXISTS (
+              SELECT 1
+              FROM unnest(search_input.trigram_terms) AS terms(term)
+              WHERE LOWER(chunk."searchText") % term
+            )
+          )
+        ORDER BY "score" DESC, chunk.id DESC
+        LIMIT $4
+      `,
+      [knowledgeId, tsQuery, terms.map((term) => term.toLowerCase()), limit],
     );
-    let matchedWeight = 0;
-    let totalWeight = 0;
 
-    for (const term of terms) {
-      const weight = recallTermWeight(term);
-      totalWeight += weight;
+    return rows.map((row) => {
+      const score = Number(row.score) || 0;
 
-      if (text.includes(term)) {
-        matchedWeight += weight;
-        continue;
-      }
-      if (headingText.includes(term)) {
-        matchedWeight += weight * 0.65;
+      return {
+        chunkId: Number(row.chunkId),
+        score,
+        source: "text",
+      };
+    });
+  }
+
+  private mergeRecallResultSets(
+    resultSets: RecallMatch[][],
+    limit: number,
+  ): RecallMatch[] {
+    const matchMap = new Map<number, RecallAccumulator>();
+
+    for (const resultSet of resultSets) {
+      for (const [index, match] of resultSet.entries()) {
+        const existing = matchMap.get(match.chunkId);
+        const rrfScore = 1 / (RRF_K + index + 1);
+
+        if (!existing) {
+          matchMap.set(match.chunkId, {
+            chunkId: match.chunkId,
+            source: match.source,
+            rrfScore,
+          });
+          continue;
+        }
+
+        matchMap.set(match.chunkId, {
+          chunkId: match.chunkId,
+          source: existing.source === match.source ? match.source : "hybrid",
+          rrfScore: existing.rrfScore + rrfScore,
+        });
       }
     }
 
-    const effectiveTotalWeight = Math.min(totalWeight, 10);
-    return effectiveTotalWeight
-      ? Math.min(1, matchedWeight / effectiveTotalWeight)
-      : 0;
+    const sortedMatches = [...matchMap.values()].sort(
+      (left, right) => right.rrfScore - left.rrfScore,
+    );
+    const maxScore = sortedMatches[0]?.rrfScore ?? 1;
+
+    return sortedMatches.slice(0, limit).map((match) => ({
+      chunkId: match.chunkId,
+      score: clampScore(match.rrfScore / maxScore),
+      source: match.source,
+    }));
   }
 
-  private calculateRecallRankScore(
+  private async loadCandidates(
+    matches: RecallMatch[],
+    knowledgeId: number,
+  ): Promise<RecallCandidate[]> {
+    const chunks = matches.length
+      ? await this.chunkRepository.find({
+          where: {
+            id: In(matches.map((item) => item.chunkId)),
+            knowledgeId,
+          },
+          relations: { document: true },
+        })
+      : [];
+    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+
+    return matches.flatMap((match) => {
+      const chunk = chunkMap.get(match.chunkId);
+      if (!chunk?.enabled || !chunk.document?.enabled) return [];
+
+      return [{ ...match, chunk }];
+    });
+  }
+
+  private async rerankCandidates(
     query: string,
-    match: RecallMatch,
-    chunk: KnowledgeDocumentChunk,
-  ) {
-    const lexicalScore = this.calculateRecallLexicalScore(query, chunk);
-    const blockTypes = chunk.metadata.blockTypes ?? [];
-    const isCodeOnly =
-      blockTypes.length > 0 && blockTypes.every((type) => type === "code");
-    const metadataPenalty = looksLikeMetadataBlock(chunk.text) ? 0.22 : 0;
-    const shortTextPenalty = chunk.text.length < 60 ? 0.06 : 0;
-    const codePenalty = isCodeOnly && lexicalScore < 0.6 ? 0.12 : 0;
-    const vectorScore = match.vectorScore ?? 0;
-    const textScore = match.textScore ?? lexicalScore;
-    const baseScore = vectorScore ? vectorScore + textScore * 0.04 : textScore;
+    candidates: RecallCandidate[],
+  ): Promise<RecallCandidate[]> {
+    const candidatesForRerank = candidates.slice(0, MAX_RERANK_CANDIDATES);
+    if (candidatesForRerank.length <= 1) return candidates;
 
-    return baseScore - metadataPenalty - shortTextPenalty - codePenalty;
-  }
+    try {
+      const rerankResults = await this.documentRerankerService.rerank(
+        query,
+        candidatesForRerank.map((item) => item.chunk.text),
+      );
+      if (!rerankResults.length) return candidates;
 
-  private mergeRecallMatches(matches: RecallMatch[], limit: number) {
-    const matchMap = new Map<number, RecallMatch>();
+      const rerankScoreMap = normalizeRerankScores(rerankResults);
 
-    for (const match of matches) {
-      const existing = matchMap.get(match.chunkId);
-      if (!existing) {
-        matchMap.set(match.chunkId, match);
-        continue;
-      }
+      const rerankedCandidates = candidatesForRerank
+        .map((candidate, index) => ({
+          ...candidate,
+          score: rerankScoreMap.get(index) ?? candidate.score,
+        }))
+        .sort((left, right) => right.score - left.score);
 
-      matchMap.set(match.chunkId, {
-        chunkId: match.chunkId,
-        score: Math.max(existing.score, match.score),
-        source: existing.source === match.source ? match.source : "hybrid",
-        vectorScore: Math.max(
-          existing.vectorScore ?? 0,
-          match.vectorScore ?? 0,
-        ),
-        textScore: Math.max(existing.textScore ?? 0, match.textScore ?? 0),
-      });
+      return [
+        ...rerankedCandidates,
+        ...candidates.slice(MAX_RERANK_CANDIDATES),
+      ];
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`知识库 rerank 失败，回退到粗召回排序: ${message}`);
+      return candidates;
     }
-
-    return [...matchMap.values()]
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
   }
 
   private normalizeRecallSettings(settings: AppKnowledgeRecallSettings = {}) {
@@ -355,6 +428,20 @@ export class KnowledgeRecallService {
     const minScore = Math.min(1, Math.max(0, settings.minScore ?? 0.4));
 
     return { strategy, limit, minScore };
+  }
+
+  private async ensurePostgresTextSearch() {
+    await this.dataSource.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
+    await this.dataSource.query(`
+      CREATE INDEX IF NOT EXISTS "idx_ai_knowledge_document_chunks_search_text_fts"
+      ON "ai_knowledge_document_chunks"
+      USING GIN (to_tsvector('simple', COALESCE("searchText", '') || ' ' || COALESCE("text", '')))
+    `);
+    await this.dataSource.query(`
+      CREATE INDEX IF NOT EXISTS "idx_ai_knowledge_document_chunks_search_text_trgm"
+      ON "ai_knowledge_document_chunks"
+      USING GIN (LOWER("searchText") gin_trgm_ops)
+    `);
   }
 
   private async executeRecall(
@@ -368,69 +455,38 @@ export class KnowledgeRecallService {
     const recallLimit =
       strategy === "vector" ? limit : Math.min(200, Math.max(limit * 12, 60));
     const recallTasks: Array<Promise<RecallMatch[]>> = [];
+    const queryVector =
+      strategy === "hybrid" || strategy === "vector"
+        ? (options.queryVector ?? (await this.createQueryVector(query)))
+        : undefined;
 
     if (strategy === "hybrid" || strategy === "vector") {
       recallTasks.push(
-        this.searchVectorRecall(
-          knowledgeId,
-          query,
-          recallLimit,
-          minScore,
-          options.queryVector,
-        ),
+        this.searchVectorRecall(knowledgeId, recallLimit, queryVector),
       );
     }
 
     if (strategy === "hybrid" || strategy === "text") {
-      recallTasks.push(
-        this.searchTextRecall(knowledgeId, query, recallLimit, minScore),
-      );
+      recallTasks.push(this.searchTextRecall(knowledgeId, query, recallLimit));
     }
 
-    const matches = (await Promise.all(recallTasks)).flat();
-    const mergedMatches = this.mergeRecallMatches(matches, recallLimit);
-    const chunks = mergedMatches.length
-      ? await this.chunkRepository.find({
-          where: {
-            id: In(mergedMatches.map((item) => item.chunkId)),
-            knowledgeId,
-          },
-          relations: { document: true },
-        })
-      : [];
-    const chunkMap = new Map(chunks.map((chunk) => [chunk.id, chunk]));
-    const items = mergedMatches
-      .map((match) => {
-        const chunk = chunkMap.get(match.chunkId);
-        if (!chunk?.enabled || !chunk.document?.enabled) return undefined;
-        const rankScore = this.calculateRecallRankScore(query, match, chunk);
-
-        return {
-          rankScore,
-          chunkId: chunk.id,
-          documentId: chunk.documentId,
-          documentName: chunk.document.name,
-          chunkIndex: chunk.chunkIndex,
-          score: clampScore(rankScore),
-          source: match.source,
-          text: chunk.text,
-          searchText: chunk.searchText,
-          metadata: chunk.metadata as unknown as Record<string, unknown>,
-        };
-      })
-      .filter((item): item is NonNullable<typeof item> => Boolean(item))
-      .sort((left, right) => right.rankScore - left.rankScore)
+    const resultSets = await Promise.all(recallTasks);
+    const mergedMatches = this.mergeRecallResultSets(resultSets, recallLimit);
+    const candidates = await this.loadCandidates(mergedMatches, knowledgeId);
+    const rerankedCandidates = await this.rerankCandidates(query, candidates);
+    const items = rerankedCandidates
+      .filter((item) => item.score >= minScore)
       .slice(0, limit)
       .map((item) => ({
-        chunkId: item.chunkId,
-        documentId: item.documentId,
-        documentName: item.documentName,
-        chunkIndex: item.chunkIndex,
-        score: item.score,
+        chunkId: item.chunk.id,
+        documentId: item.chunk.documentId,
+        documentName: item.chunk.document.name,
+        chunkIndex: item.chunk.chunkIndex,
+        score: clampScore(item.score),
         source: item.source,
-        text: item.text,
-        searchText: item.searchText,
-        metadata: item.metadata,
+        text: item.chunk.text,
+        searchText: item.chunk.searchText,
+        metadata: item.chunk.metadata as unknown as Record<string, unknown>,
       }));
 
     return {

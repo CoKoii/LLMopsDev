@@ -215,7 +215,7 @@ export class KnowledgeService {
     chunk: KnowledgeDocumentChunk,
   ) {
     const embeddingResult = await this.documentEmbeddingService.embed([
-      chunk.text,
+      chunk.searchText || chunk.text,
     ]);
     const vector = embeddingResult.vectors[0] ?? [];
 
