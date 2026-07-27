@@ -97,7 +97,6 @@ const pluginCatalogLoading = ref(false)
 const knowledgeCatalog = ref<KnowledgeItem[]>([])
 const knowledgeCatalogCache = ref<KnowledgeItem[]>([])
 const knowledgeCatalogLoading = ref(false)
-const draftKnowledgeIds = ref<number[]>([])
 const knowledgeSettingsDraft = ref<Required<AppKnowledgeRecallSettings>>({
   strategy: 'hybrid',
   limit: 5,
@@ -201,7 +200,7 @@ const chatRoles = computed<ChatRoles>(() => ({
 }))
 const suggestedPrompts = computed(() => debugStore.getSuggestions(appId.value))
 const selectedPluginIds = computed(() => new Set(pluginIds.value))
-const selectedDraftKnowledgeIds = computed(() => new Set(draftKnowledgeIds.value))
+const selectedKnowledgeIds = computed(() => new Set(knowledgeConfig.ids))
 const openingPresetQuestions = computed(() =>
   openingQuestions.value
     .map((item) => item.trim())
@@ -536,13 +535,12 @@ function mergeKnowledgeCatalogCache(items: KnowledgeItem[]) {
 }
 
 function openKnowledgeModal() {
-  draftKnowledgeIds.value = [...knowledgeConfig.ids]
   knowledgeModalOpen.value = true
   void loadKnowledgeCatalog()
 }
 
-function toggleDraftKnowledgeSelection(id: number) {
-  const next = new Set(draftKnowledgeIds.value)
+function toggleKnowledgeSelection(id: number) {
+  const next = new Set(knowledgeConfig.ids)
   if (next.has(id)) {
     next.delete(id)
   } else {
@@ -552,13 +550,7 @@ function toggleDraftKnowledgeSelection(id: number) {
     }
     next.add(id)
   }
-  draftKnowledgeIds.value = [...next]
-}
-
-function confirmKnowledgeSelection() {
-  const ids = [...new Set(draftKnowledgeIds.value)].slice(0, knowledgeLimit)
-  knowledgeConfig.ids = ids
-  knowledgeModalOpen.value = false
+  knowledgeConfig.ids = [...next]
 }
 
 function openKnowledgeSettings() {
@@ -908,14 +900,12 @@ onMounted(() => {
       :plugin-empty-text="pluginEmptyText"
       :knowledge-catalog-loading="knowledgeCatalogLoading"
       :knowledge-catalog="knowledgeCatalog"
-      :selected-draft-knowledge-ids="selectedDraftKnowledgeIds"
-      :draft-knowledge-count="draftKnowledgeIds.length"
+      :selected-knowledge-ids="selectedKnowledgeIds"
       :knowledge-empty-text="knowledgeEmptyText"
       @select-plugin-source="selectPluginSource"
       @select-plugin-category="selectPluginCategory"
       @toggle-plugin="togglePluginSelection"
-      @toggle-knowledge="toggleDraftKnowledgeSelection"
-      @confirm-knowledge="confirmKnowledgeSelection"
+      @toggle-knowledge="toggleKnowledgeSelection"
     />
 
     <AppModal

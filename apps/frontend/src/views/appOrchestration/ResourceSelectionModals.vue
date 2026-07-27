@@ -2,7 +2,7 @@
 import type { KnowledgeItem, PluginItem } from '@/api'
 import { BookOpen, CircleCheck, Database, Plus, User, X } from '@lucide/vue'
 import { Button } from 'antdv-next'
-import type { Component } from 'vue'
+import { onBeforeUnmount, ref, watch, type Component } from 'vue'
 
 type PluginSourceKey = 'custom' | 'category'
 
@@ -18,7 +18,7 @@ type PluginGroup = {
   items: PluginItem[]
 }
 
-defineProps<{
+const props = defineProps<{
   pluginOpen: boolean
   knowledgeOpen: boolean
   activePluginSourceKey: PluginSourceKey
@@ -31,8 +31,7 @@ defineProps<{
   pluginEmptyText: string
   knowledgeCatalogLoading: boolean
   knowledgeCatalog: KnowledgeItem[]
-  selectedDraftKnowledgeIds: Set<number>
-  draftKnowledgeCount: number
+  selectedKnowledgeIds: Set<number>
   knowledgeEmptyText: string
 }>()
 
@@ -43,11 +42,36 @@ const emit = defineEmits<{
   selectPluginCategory: [value: string]
   togglePlugin: [value: number]
   toggleKnowledge: [value: number]
-  confirmKnowledge: []
 }>()
 
 const closePluginModal = () => emit('update:pluginOpen', false)
 const closeKnowledgeModal = () => emit('update:knowledgeOpen', false)
+const pluginCatalogLoadingVisible = ref(false)
+let pluginCatalogLoadingTimer: ReturnType<typeof window.setTimeout> | undefined
+
+watch(
+  () => props.pluginCatalogLoading,
+  (loading) => {
+    if (pluginCatalogLoadingTimer) {
+      window.clearTimeout(pluginCatalogLoadingTimer)
+      pluginCatalogLoadingTimer = undefined
+    }
+    if (!loading) {
+      pluginCatalogLoadingVisible.value = false
+      return
+    }
+    pluginCatalogLoadingTimer = window.setTimeout(() => {
+      pluginCatalogLoadingVisible.value = true
+    }, 120)
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(() => {
+  if (pluginCatalogLoadingTimer) {
+    window.clearTimeout(pluginCatalogLoadingTimer)
+  }
+})
 </script>
 
 <template>
@@ -112,36 +136,51 @@ const closeKnowledgeModal = () => emit('update:knowledgeOpen', false)
               </button>
             </div>
 
-            <div class="plugin-modal__list">
-              <div v-if="pluginCatalogLoading">正在加载插件...</div>
-              <div v-else-if="pluginGroups.length === 0">{{ pluginEmptyText }}</div>
-              <section v-for="group in pluginGroups" :key="group.key" class="plugin-modal__group">
-                <h4>{{ group.title }}</h4>
-                <article
-                  v-for="item in group.items"
-                  :key="item.id"
-                  class="plugin-modal__item"
-                  :class="{ 'is-selected': selectedPluginIds.has(item.id) }"
-                >
-                  <div class="plugin-modal__item-icon" :class="{ 'has-image': item.icon }">
-                    <img v-if="item.icon" :src="item.icon" alt="" />
-                    <Database v-else :size="18" />
-                  </div>
-                  <strong>{{ item.name }}</strong>
-                  <Button
-                    class="plugin-modal__add"
-                    size="small"
-                    :type="selectedPluginIds.has(item.id) ? 'default' : 'primary'"
-                    @click="emit('togglePlugin', item.id)"
+            <div class="plugin-modal__list" :aria-busy="pluginCatalogLoading">
+              <div
+                v-if="pluginCatalogLoading && pluginGroups.length === 0"
+                class="plugin-modal__empty"
+              >
+                {{ pluginCatalogLoadingVisible ? '正在加载插件...' : '' }}
+              </div>
+              <div v-else-if="pluginGroups.length === 0" class="plugin-modal__empty">
+                {{ pluginEmptyText }}
+              </div>
+              <template v-else>
+                <section v-for="group in pluginGroups" :key="group.key" class="plugin-modal__group">
+                  <h4>{{ group.title }}</h4>
+                  <article
+                    v-for="item in group.items"
+                    :key="item.id"
+                    class="plugin-modal__item"
+                    :class="{ 'is-selected': selectedPluginIds.has(item.id) }"
                   >
-                    <template #icon>
-                      <CircleCheck v-if="selectedPluginIds.has(item.id)" :size="14" />
-                      <Plus v-else :size="14" />
-                    </template>
-                    {{ selectedPluginIds.has(item.id) ? '移除' : '添加' }}
-                  </Button>
-                </article>
-              </section>
+                    <div class="plugin-modal__item-icon" :class="{ 'has-image': item.icon }">
+                      <img v-if="item.icon" :src="item.icon" alt="" />
+                      <Database v-else :size="18" />
+                    </div>
+                    <strong>{{ item.name }}</strong>
+                    <Button
+                      class="plugin-modal__add"
+                      size="small"
+                      :type="selectedPluginIds.has(item.id) ? 'default' : 'primary'"
+                      @click="emit('togglePlugin', item.id)"
+                    >
+                      <template #icon>
+                        <CircleCheck v-if="selectedPluginIds.has(item.id)" :size="14" />
+                        <Plus v-else :size="14" />
+                      </template>
+                      {{ selectedPluginIds.has(item.id) ? '移除' : '添加' }}
+                    </Button>
+                  </article>
+                </section>
+              </template>
+              <div
+                v-if="pluginCatalogLoadingVisible && pluginGroups.length > 0"
+                class="plugin-modal__loading"
+              >
+                更新中...
+              </div>
             </div>
           </section>
         </div>
@@ -183,7 +222,7 @@ const closeKnowledgeModal = () => emit('update:knowledgeOpen', false)
                 :key="item.id"
                 type="button"
                 class="knowledge-modal__item"
-                :class="{ 'is-selected': selectedDraftKnowledgeIds.has(item.id) }"
+                :class="{ 'is-selected': selectedKnowledgeIds.has(item.id) }"
                 @click="emit('toggleKnowledge', item.id)"
               >
                 <span class="knowledge-modal__item-icon" :class="{ 'has-image': item.icon }">
@@ -195,21 +234,13 @@ const closeKnowledgeModal = () => emit('update:knowledgeOpen', false)
                   <span>{{ item.description || '暂无描述' }}</span>
                 </span>
                 <CircleCheck
-                  v-if="selectedDraftKnowledgeIds.has(item.id)"
+                  v-if="selectedKnowledgeIds.has(item.id)"
                   class="knowledge-modal__selected-icon"
                   :size="16"
                 />
               </button>
             </template>
           </div>
-
-          <footer class="knowledge-modal__footer">
-            <span>{{ draftKnowledgeCount }} 个知识库被选中</span>
-            <div>
-              <Button @click="closeKnowledgeModal">取消</Button>
-              <Button type="primary" @click="emit('confirmKnowledge')">添加</Button>
-            </div>
-          </footer>
         </div>
       </div>
     </Transition>
@@ -385,8 +416,34 @@ const closeKnowledgeModal = () => emit('update:knowledgeOpen', false)
 }
 
 .plugin-modal__list {
+  position: relative;
+  flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+.plugin-modal__empty {
+  padding: var(--space-6) 0;
+  color: var(--color-text-muted);
+  font-size: 1.3rem;
+  text-align: center;
+}
+
+.plugin-modal__loading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  width: fit-content;
+  margin-left: auto;
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-text-muted);
+  font-size: 1.2rem;
+  line-height: 1.6rem;
+  background: var(--color-bg-panel);
+  border: 0.1rem solid var(--color-border-light);
+  border-radius: var(--radius-md);
+  box-shadow: 0 0.4rem 1.2rem rgba(17, 24, 39, 0.08);
+  pointer-events: none;
 }
 
 .plugin-modal__group {
@@ -480,8 +537,7 @@ const closeKnowledgeModal = () => emit('update:knowledgeOpen', false)
   box-shadow: var(--shadow-floating);
 }
 
-.knowledge-modal__header,
-.knowledge-modal__footer {
+.knowledge-modal__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -588,21 +644,5 @@ const closeKnowledgeModal = () => emit('update:knowledgeOpen', false)
 
 .knowledge-modal__selected-icon {
   color: var(--color-primary);
-}
-
-.knowledge-modal__footer {
-  border-top: 0.1rem solid var(--color-border-light);
-  border-bottom: 0;
-}
-
-.knowledge-modal__footer > span {
-  color: var(--color-text-muted);
-  font-size: 1.2rem;
-}
-
-.knowledge-modal__footer > div {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
 }
 </style>
