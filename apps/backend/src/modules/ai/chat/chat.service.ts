@@ -1,8 +1,16 @@
 import { AIMessage, type BaseMessageLike } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
-import { BadRequestException, Injectable, Logger } from "@nestjs/common";
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { InjectRepository } from "@nestjs/typeorm";
 import { Readable } from "node:stream";
+import { Repository } from "typeorm";
 import { z } from "zod";
 import { getAiEnvironment } from "../../../common/config/env";
 import {
@@ -14,7 +22,13 @@ import {
   type AiAppVersionConfig,
 } from "../app/entities/app-version.entity";
 import { AiRuntimeService } from "./ai-runtime.service";
-import { type DebugAppChatHistoryDto } from "./dto/debug-app-chat.dto";
+import { ChatAttachmentService } from "./chat-attachment.service";
+import {
+  CHAT_MESSAGE_ROLE,
+  CHAT_MESSAGE_STATUS,
+  ChatMessage,
+} from "./entities/chat-message.entity";
+import { ChatSession } from "./entities/chat-session.entity";
 
 const SSE_DONE = "data: [DONE]\n\n";
 const PROMPT_OPTIMIZE_SYSTEM_PROMPT = [
@@ -62,9 +76,11 @@ const PromptOptimizeSchema = z
 type SseEvent =
   | { content: string }
   | { message: string }
+  | { sessionId: number; userMessageId: number; assistantMessageId: number }
   | { elapsedMs: number; tokens?: number }
   | { items: string[] }
-  | KnowledgeCitationEvent;
+  | KnowledgeCitationEvent
+  | AttachmentCitationEvent;
 
 type KnowledgeCitation = {
   id: number;
@@ -82,6 +98,20 @@ type KnowledgeCitationEvent = {
   query: string;
   items: KnowledgeCitation[];
 };
+type AttachmentCitation = {
+  id: number;
+  attachmentId: number;
+  messageId: number;
+  fileId: number;
+  fileName: string;
+  chunkIndex: number;
+  score: number;
+  text: string;
+};
+type AttachmentCitationEvent = {
+  query: string;
+  items: AttachmentCitation[];
+};
 type KnowledgeRecallItemWithQuery = AppKnowledgeRecallItem & {
   query: string;
   queries?: string[];
@@ -96,8 +126,13 @@ export class ChatService {
   private readonly logger = new Logger(ChatService.name);
 
   constructor(
+    @InjectRepository(ChatSession)
+    private readonly sessionRepository: Repository<ChatSession>,
+    @InjectRepository(ChatMessage)
+    private readonly messageRepository: Repository<ChatMessage>,
     private readonly aiRuntimeService: AiRuntimeService,
     private readonly knowledgeService: KnowledgeService,
+    private readonly chatAttachmentService: ChatAttachmentService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -106,15 +141,15 @@ export class ChatService {
     return `${prefix}data: ${JSON.stringify(data)}\n\n`;
   }
 
-  private createMessages(
-    message: string,
-    history: DebugAppChatHistoryDto[] = [],
-  ) {
+  private createMessages(message: string, history: ChatMessage[] = []) {
     const messages: BaseMessageLike[] = [];
     for (const item of history) {
       const content = item.content.trim();
       if (!content) continue;
-      messages.push([item.role === "assistant" ? "ai" : "human", content]);
+      messages.push([
+        item.role === CHAT_MESSAGE_ROLE.ASSISTANT ? "ai" : "human",
+        content,
+      ]);
     }
     messages.push(["human", message]);
 
@@ -140,7 +175,7 @@ export class ChatService {
 
   private createKnowledgeQueryRewriteMessages(
     message: string,
-    history: DebugAppChatHistoryDto[] = [],
+    history: ChatMessage[] = [],
   ): BaseMessageLike[] {
     const messages: BaseMessageLike[] = [
       ["system", KNOWLEDGE_QUERY_REWRITE_SYSTEM_PROMPT],
@@ -149,7 +184,10 @@ export class ChatService {
     for (const item of history.slice(-8)) {
       const content = this.compactText(item.content, 500);
       if (!content) continue;
-      messages.push([item.role === "assistant" ? "ai" : "human", content]);
+      messages.push([
+        item.role === CHAT_MESSAGE_ROLE.ASSISTANT ? "ai" : "human",
+        content,
+      ]);
     }
     messages.push(["human", message]);
 
@@ -166,7 +204,7 @@ export class ChatService {
 
   private async rewriteKnowledgeQueries(
     message: string,
-    history: DebugAppChatHistoryDto[] = [],
+    history: ChatMessage[] = [],
   ) {
     const fallback = message.trim();
     if (!fallback) return [];
@@ -367,6 +405,107 @@ export class ChatService {
     return tokens || undefined;
   }
 
+  private createSessionTitle(message: string) {
+    return this.compactText(message, 60) || "新会话";
+  }
+
+  private async resolveDebugSession(params: {
+    appId: number;
+    userId: number;
+    sessionId?: number;
+    message: string;
+  }) {
+    if (params.sessionId) {
+      const session = await this.sessionRepository.findOne({
+        where: { id: params.sessionId },
+      });
+      if (!session) throw new NotFoundException("对话会话不存在");
+      if (session.userId !== params.userId || session.appId !== params.appId) {
+        throw new ForbiddenException("无权访问该对话会话");
+      }
+      return session;
+    }
+
+    return this.sessionRepository.save(
+      this.sessionRepository.create({
+        appId: params.appId,
+        userId: params.userId,
+        mode: "debug",
+        title: this.createSessionTitle(params.message),
+        lastMessageAt: new Date(),
+        createdBy: params.userId,
+        updatedBy: params.userId,
+      }),
+    );
+  }
+
+  private async saveUserMessage(params: {
+    session: ChatSession;
+    content: string;
+    userId: number;
+    attachmentFileIds: number[];
+  }) {
+    const message = await this.messageRepository.save(
+      this.messageRepository.create({
+        sessionId: params.session.id,
+        role: CHAT_MESSAGE_ROLE.USER,
+        content: params.content,
+        status: CHAT_MESSAGE_STATUS.COMPLETED,
+        metadata: params.attachmentFileIds.length
+          ? { attachmentFileIds: params.attachmentFileIds }
+          : null,
+        createdBy: params.userId,
+        updatedBy: params.userId,
+      }),
+    );
+    await this.sessionRepository.update(params.session.id, {
+      lastMessageAt: new Date(),
+      updatedBy: params.userId,
+    });
+
+    return message;
+  }
+
+  private async createAssistantMessage(session: ChatSession, userId: number) {
+    return this.messageRepository.save(
+      this.messageRepository.create({
+        sessionId: session.id,
+        role: CHAT_MESSAGE_ROLE.ASSISTANT,
+        content: "",
+        status: CHAT_MESSAGE_STATUS.STREAMING,
+        createdBy: userId,
+        updatedBy: userId,
+      }),
+    );
+  }
+
+  private resolveContextMessageLimit(config: AiAppVersionConfig) {
+    const rounds = config.modelSettings?.contextRounds ?? 10;
+    return Math.min(200, Math.max(2, Math.floor(rounds) * 2));
+  }
+
+  private async loadRecentHistory(params: {
+    sessionId: number;
+    beforeMessageId: number;
+    limit: number;
+  }) {
+    const rows = await this.messageRepository
+      .createQueryBuilder("message")
+      .where("message.sessionId = :sessionId", { sessionId: params.sessionId })
+      .andWhere("message.id < :beforeMessageId", {
+        beforeMessageId: params.beforeMessageId,
+      })
+      .andWhere("message.status = :status", {
+        status: CHAT_MESSAGE_STATUS.COMPLETED,
+      })
+      .andWhere("message.content <> ''")
+      .orderBy("message.id", "DESC")
+      .take(params.limit)
+      .getMany();
+
+    return rows.reverse();
+  }
+
   async optimizePrompt(appId: number, prompt: string, userId: number) {
     const sourcePrompt = prompt.trim();
     if (!sourcePrompt) {
@@ -426,27 +565,81 @@ export class ChatService {
     appId: number,
     message: string,
     userId: number,
-    history: DebugAppChatHistoryDto[] = [],
+    sessionId?: number,
+    attachmentFileIds: number[] = [],
   ): Readable {
-    return Readable.from(this.streamAppDebug(appId, message, userId, history));
+    return Readable.from(
+      this.streamAppDebug(appId, message, userId, sessionId, attachmentFileIds),
+    );
   }
 
   private async *streamAppDebug(
     appId: number,
     message: string,
     userId: number,
-    history: DebugAppChatHistoryDto[] = [],
+    sessionId?: number,
+    attachmentFileIds: number[] = [],
   ): AsyncGenerator<string> {
     const startedAt = Date.now();
     let output = "";
+    let assistantMessage: ChatMessage | undefined;
 
     try {
+      const content = message.trim();
+      if (!content) {
+        throw new BadRequestException("消息内容不能为空");
+      }
       const draft = await this.aiRuntimeService.getDraft(appId, userId);
       const model = await this.aiRuntimeService.createModel(draft.config);
+      const session = await this.resolveDebugSession({
+        appId,
+        userId,
+        sessionId,
+        message: content,
+      });
+      const userMessage = await this.saveUserMessage({
+        session,
+        content,
+        userId,
+        attachmentFileIds,
+      });
+      assistantMessage = await this.createAssistantMessage(session, userId);
+      yield this.sse(
+        {
+          sessionId: session.id,
+          userMessageId: userMessage.id,
+          assistantMessageId: assistantMessage.id,
+        },
+        "session",
+      );
+
+      const currentAttachmentContext =
+        await this.chatAttachmentService.processMessageAttachments({
+          session,
+          message: userMessage,
+          fileIds: attachmentFileIds,
+          userId,
+          config: draft.config,
+        });
+      const history = await this.loadRecentHistory({
+        sessionId: session.id,
+        beforeMessageId: userMessage.id,
+        limit: this.resolveContextMessageLimit(draft.config),
+      });
       const knowledgeConfig = this.resolveKnowledgeConfig(draft.config);
       const knowledgeQueries = knowledgeConfig.ids.length
-        ? await this.rewriteKnowledgeQueries(message, history)
-        : [message.trim()];
+        ? await this.rewriteKnowledgeQueries(content, history)
+        : [content];
+      const historicalAttachmentRecall =
+        await this.chatAttachmentService.createRecallContext(
+          session.id,
+          content,
+          { excludeMessageId: userMessage.id },
+        );
+      const attachmentItems = [
+        ...currentAttachmentContext.items,
+        ...historicalAttachmentRecall.items,
+      ].map((item, index) => ({ ...item, id: index + 1 }));
       const recalledItems: KnowledgeRecallItemWithQuery[] = knowledgeConfig.ids
         .length
         ? (
@@ -478,14 +671,27 @@ export class ChatService {
           "knowledge",
         );
       }
+      if (attachmentItems.length) {
+        yield this.sse(
+          {
+            query: content,
+            items: attachmentItems,
+          },
+          "attachments",
+        );
+      }
 
       const { agent } = await this.aiRuntimeService.createAgentFromDraft(
         draft,
         model,
         userId,
-        { knowledgeContext },
+        {
+          knowledgeContext,
+          currentAttachmentContext: currentAttachmentContext.context,
+          recalledAttachmentContext: historicalAttachmentRecall.context,
+        },
       );
-      const messages = this.createMessages(message, history);
+      const messages = this.createMessages(content, history);
 
       const run = await agent.streamEvents({ messages }, { version: "v3" });
 
@@ -497,6 +703,17 @@ export class ChatService {
       }
       const result = await run.output;
       const tokens = this.getTotalTokens(result.messages);
+      await this.messageRepository.update(assistantMessage.id, {
+        content: output,
+        status: CHAT_MESSAGE_STATUS.COMPLETED,
+        elapsedMs: Date.now() - startedAt,
+        tokens,
+        updatedBy: userId,
+      });
+      await this.sessionRepository.update(session.id, {
+        lastMessageAt: new Date(),
+        updatedBy: userId,
+      });
 
       yield this.sse(
         {
@@ -509,7 +726,7 @@ export class ChatService {
       if (draft.config.toggles?.questionSuggestions) {
         let suggestions: string[] = [];
         try {
-          suggestions = await this.createQuestionSuggestions(message, output);
+          suggestions = await this.createQuestionSuggestions(content, output);
         } catch (error) {
           const message =
             error instanceof Error ? error.message : String(error);
@@ -526,6 +743,13 @@ export class ChatService {
       const stack = error instanceof Error ? error.stack : undefined;
 
       this.logger.error(`AI应用调试失败: ${message}`, stack);
+      if (assistantMessage) {
+        await this.messageRepository.update(assistantMessage.id, {
+          content: output || message,
+          status: CHAT_MESSAGE_STATUS.FAILED,
+          updatedBy: userId,
+        });
+      }
       yield this.sse({ message }, "error");
     }
   }

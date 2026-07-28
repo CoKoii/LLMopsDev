@@ -74,6 +74,17 @@ export interface AppKnowledgeCitation {
   text: string
 }
 
+export interface AppAttachmentCitation {
+  id: number
+  attachmentId: number
+  messageId: number
+  fileId: number
+  fileName: string
+  chunkIndex: number
+  score: number
+  text: string
+}
+
 export interface AiAppVersionConfig {
   prompt?: string
   llmId?: number | null
@@ -535,14 +546,18 @@ export const streamAiAppPromptOptimizeApi = async ({
 
 type StreamAiAppDebugParams = {
   appId: number
+  sessionId?: number
   message: string
-  history?: Array<{
-    role: 'user' | 'assistant'
-    content: string
-  }>
+  attachmentFileIds?: number[]
   onContent: (content: string) => void
+  onSession?: (payload: {
+    sessionId: number
+    userMessageId: number
+    assistantMessageId: number
+  }) => void
   onMeta?: (meta: { elapsedMs: number; tokens?: number }) => void
   onKnowledge?: (payload: { query: string; items: AppKnowledgeCitation[] }) => void
+  onAttachments?: (payload: { query: string; items: AppAttachmentCitation[] }) => void
   onSuggestions?: (items: string[]) => void
   onError?: (message: string) => void
   signal?: AbortSignal
@@ -550,11 +565,14 @@ type StreamAiAppDebugParams = {
 
 export const streamAiAppDebugApi = async ({
   appId,
+  sessionId,
   message,
-  history,
+  attachmentFileIds,
   onContent,
+  onSession,
   onMeta,
   onKnowledge,
+  onAttachments,
   onSuggestions,
   onError,
   signal,
@@ -567,7 +585,7 @@ export const streamAiAppDebugApi = async ({
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ message, history }),
+    body: JSON.stringify({ sessionId, message, attachmentFileIds }),
     signal,
   })
 
@@ -598,7 +616,10 @@ export const streamAiAppDebugApi = async ({
       elapsedMs?: number
       tokens?: number
       query?: string
-      items?: string[] | AppKnowledgeCitation[]
+      sessionId?: number
+      userMessageId?: number
+      assistantMessageId?: number
+      items?: string[] | AppKnowledgeCitation[] | AppAttachmentCitation[]
     }
     if (eventName === 'error') {
       onError?.((payload as { message?: string }).message || '调试接口请求失败')
@@ -612,10 +633,30 @@ export const streamAiAppDebugApi = async ({
       )
       return
     }
+    if (
+      eventName === 'session' &&
+      typeof payload.sessionId === 'number' &&
+      typeof payload.userMessageId === 'number' &&
+      typeof payload.assistantMessageId === 'number'
+    ) {
+      onSession?.({
+        sessionId: payload.sessionId,
+        userMessageId: payload.userMessageId,
+        assistantMessageId: payload.assistantMessageId,
+      })
+      return
+    }
     if (eventName === 'knowledge') {
       onKnowledge?.({
         query: typeof payload.query === 'string' ? payload.query : '',
         items: Array.isArray(payload.items) ? (payload.items as AppKnowledgeCitation[]) : [],
+      })
+      return
+    }
+    if (eventName === 'attachments') {
+      onAttachments?.({
+        query: typeof payload.query === 'string' ? payload.query : '',
+        items: Array.isArray(payload.items) ? (payload.items as AppAttachmentCitation[]) : [],
       })
       return
     }

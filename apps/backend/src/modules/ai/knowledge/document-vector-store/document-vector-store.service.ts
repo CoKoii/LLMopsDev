@@ -1,5 +1,7 @@
 import { BadGatewayException, Injectable } from "@nestjs/common";
 import type {
+  ChatAttachmentVectorPointPayload,
+  KnowledgeVectorPointPayload,
   SearchVectorPoint,
   UpsertVectorPoint,
   VectorPointPayload,
@@ -123,9 +125,48 @@ export class DocumentVectorStoreService {
     knowledgeId: number;
     limit: number;
     scoreThreshold?: number;
-  }): Promise<SearchVectorPoint[]> {
+  }): Promise<SearchVectorPoint<KnowledgeVectorPointPayload>[]> {
     if (!params.vector.length || params.limit <= 0) return [];
 
+    return this.searchByFilter<KnowledgeVectorPointPayload>({
+      vector: params.vector,
+      limit: params.limit,
+      scoreThreshold: params.scoreThreshold,
+      must: [{ key: "knowledgeId", match: { value: params.knowledgeId } }],
+    });
+  }
+
+  async searchSessionAttachments(params: {
+    vector: number[];
+    sessionId: number;
+    limit: number;
+    scoreThreshold?: number;
+    excludeMessageId?: number;
+  }): Promise<SearchVectorPoint<ChatAttachmentVectorPointPayload>[]> {
+    if (!params.vector.length || params.limit <= 0) return [];
+
+    return this.searchByFilter<ChatAttachmentVectorPointPayload>({
+      vector: params.vector,
+      limit: params.limit,
+      scoreThreshold: params.scoreThreshold,
+      must: [
+        { key: "source", match: { value: "chat_attachment" } },
+        { key: "sessionId", match: { value: params.sessionId } },
+        { key: "enabled", match: { value: true } },
+      ],
+      mustNot: params.excludeMessageId
+        ? [{ key: "messageId", match: { value: params.excludeMessageId } }]
+        : undefined,
+    });
+  }
+
+  private async searchByFilter<TPayload extends VectorPointPayload>(params: {
+    vector: number[];
+    limit: number;
+    scoreThreshold?: number;
+    must: unknown[];
+    mustNot?: unknown[];
+  }): Promise<SearchVectorPoint<TPayload>[]> {
     const response = await fetch(
       `${this.baseUrl}/collections/${this.collection}/points/search`,
       {
@@ -137,9 +178,8 @@ export class DocumentVectorStoreService {
           with_payload: true,
           score_threshold: params.scoreThreshold,
           filter: {
-            must: [
-              { key: "knowledgeId", match: { value: params.knowledgeId } },
-            ],
+            must: params.must,
+            must_not: params.mustNot,
           },
         }),
       },
@@ -160,7 +200,7 @@ export class DocumentVectorStoreService {
       )
       .map((item) => ({
         score: item.score,
-        payload: item.payload,
+        payload: item.payload as TPayload,
       }));
   }
 

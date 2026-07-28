@@ -167,6 +167,14 @@ export class FilesService {
     return savedFile;
   }
 
+  async getOwnedObjectBuffer(id: number, userId: number) {
+    const file = await this.markUsed(id, userId);
+    return {
+      file,
+      buffer: await this.ossService.getObjectBuffer(file.objectKey),
+    };
+  }
+
   createAccessibleUrl(value?: string | null) {
     return this.ossService.createAccessibleUrl(value);
   }

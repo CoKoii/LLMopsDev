@@ -1,10 +1,30 @@
-import { streamAiAppDebugApi } from '@/api'
-import { useAppDebugStore } from '@/stores/appDebug'
+import { streamAiAppDebugApi, uploadFileApi, type UploadedFile } from '@/api'
+import { useAppDebugStore, type AppDebugAttachment } from '@/stores/appDebug'
+import { message as notify } from 'antdv-next'
 import { nextTick, onBeforeUnmount, ref, type Ref } from 'vue'
 
 type ContextSettings = {
   contextRounds: number
 }
+
+export type DebugComposerAttachment = AppDebugAttachment & {
+  status: 'uploading' | 'done' | 'error'
+  error?: string
+}
+
+type UploadFileWithUid = File & {
+  uid?: string
+}
+
+const toDebugAttachment = (file: UploadedFile, uid: string): DebugComposerAttachment => ({
+  uid,
+  fileId: file.id,
+  name: file.originalName,
+  contentType: file.contentType,
+  size: file.size,
+  url: file.url,
+  status: 'done',
+})
 
 export function useAppDebugSession(
   appId: Ref<number>,
@@ -13,33 +33,66 @@ export function useAppDebugSession(
 ) {
   const debugStore = useAppDebugStore()
   const senderValue = ref('')
+  const attachments = ref<DebugComposerAttachment[]>([])
   const responding = ref(false)
   let debugAbortController: AbortController | undefined
 
-  const buildHistory = () => {
-    const contextRounds = Math.min(100, Math.max(1, Math.floor(settings.contextRounds || 10)))
+  const hasUploadingAttachments = () =>
+    attachments.value.some((item) => item.status === 'uploading')
 
-    return debugStore
-      .getMessages(appId.value)
-      .filter((item) => !item.pending && item.content.trim())
-      .map((item) => ({
-        role: item.role,
-        content: item.content.trim(),
-      }))
-      .slice(-(contextRounds * 2))
+  const uploadFiles = (files: UploadFileWithUid[] | FileList) => {
+    Array.from(files).forEach((file) => {
+      const uploadFile = file as UploadFileWithUid
+      const uid =
+        uploadFile.uid || `${Date.now()}-${uploadFile.name}-${Math.random().toString(16).slice(2)}`
+      attachments.value = [
+        ...attachments.value,
+        {
+          uid,
+          fileId: 0,
+          name: uploadFile.name,
+          contentType: uploadFile.type || 'application/octet-stream',
+          size: uploadFile.size,
+          status: 'uploading',
+        },
+      ]
+      void uploadFileApi(uploadFile, { suppressErrorNotify: true })
+        .then((uploadedFile) => {
+          attachments.value = attachments.value.map((item) =>
+            item.uid === uid ? toDebugAttachment(uploadedFile, uid) : item,
+          )
+        })
+        .catch((error) => {
+          const errorMessage = error instanceof Error ? error.message : '文件上传失败'
+          attachments.value = attachments.value.map((item) =>
+            item.uid === uid ? { ...item, status: 'error', error: errorMessage } : item,
+          )
+          notify.error(errorMessage)
+        })
+    })
+  }
+
+  const removeAttachment = (uid: string) => {
+    attachments.value = attachments.value.filter((item) => item.uid !== uid)
   }
 
   const submitMessage = async (value: string, scrollToBottom: () => Promise<void>) => {
     const content = value.trim()
     if (!content || responding.value) return
+    if (hasUploadingAttachments()) {
+      notify.warning('文件仍在上传中，请稍后发送')
+      return
+    }
 
     const key = Date.now()
-    const history = buildHistory()
+    const readyAttachments = attachments.value.filter((item) => item.status === 'done')
+    const attachmentFileIds = readyAttachments.map((item) => item.fileId)
     debugStore.setSuggestions(appId.value, [])
     debugStore.pushMessage(appId.value, {
       key: `u-${key}`,
       role: 'user',
       content,
+      attachments: readyAttachments,
     })
     debugStore.pushMessage(appId.value, {
       key: `a-${key}`,
@@ -48,6 +101,7 @@ export function useAppDebugSession(
       pending: true,
     })
     senderValue.value = ''
+    attachments.value = []
     responding.value = true
     await scrollToBottom()
 
@@ -56,9 +110,15 @@ export function useAppDebugSession(
       debugAbortController = new AbortController()
       await streamAiAppDebugApi({
         appId: appId.value,
+        sessionId: debugStore.getSessionId(appId.value),
         message: content,
-        history,
+        attachmentFileIds,
         signal: debugAbortController.signal,
+        onSession: ({ sessionId, userMessageId, assistantMessageId }) => {
+          debugStore.setSessionId(appId.value, sessionId)
+          debugStore.updateMessage(appId.value, `u-${key}`, { id: userMessageId })
+          debugStore.updateMessage(appId.value, `a-${key}`, { id: assistantMessageId })
+        },
         onContent: async (chunk) => {
           const target = debugStore.getMessages(appId.value).find((item) => item.key === `a-${key}`)
           debugStore.updateMessage(appId.value, `a-${key}`, {
@@ -77,6 +137,12 @@ export function useAppDebugSession(
           debugStore.updateMessage(appId.value, `a-${key}`, {
             knowledgeQuery: query,
             knowledgeCitations: items,
+          })
+        },
+        onAttachments: ({ query, items }) => {
+          debugStore.updateMessage(appId.value, `a-${key}`, {
+            attachmentQuery: query,
+            attachmentCitations: items,
           })
         },
         onSuggestions: (items) => {
@@ -118,6 +184,7 @@ export function useAppDebugSession(
 
   const clearChat = async () => {
     debugStore.clearMessages(appId.value)
+    attachments.value = []
     await nextTick()
   }
 
@@ -128,7 +195,10 @@ export function useAppDebugSession(
   return {
     debugStore,
     senderValue,
+    attachments,
     responding,
+    uploadFiles,
+    removeAttachment,
     submitMessage,
     stopResponse,
     clearChat,

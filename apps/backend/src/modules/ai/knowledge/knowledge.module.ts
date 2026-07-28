@@ -38,6 +38,13 @@ import { KnowledgeService } from "./knowledge.service";
     DocumentProcessProcessor,
     KnowledgeRecallService,
   ],
-  exports: [KnowledgeService],
+  exports: [
+    KnowledgeService,
+    DocumentParserService,
+    DocumentCleanerService,
+    DocumentChunkerService,
+    DocumentEmbeddingService,
+    DocumentVectorStoreService,
+  ],
 })
 export class KnowledgeModule {}

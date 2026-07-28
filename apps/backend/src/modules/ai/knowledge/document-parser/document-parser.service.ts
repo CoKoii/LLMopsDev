@@ -5,6 +5,7 @@ import type {
   ParsedDocument,
 } from "./document-parser.types";
 import { CsvDocumentParser } from "./parsers/csv.parser";
+import { DocDocumentParser } from "./parsers/doc.parser";
 import { DocxDocumentParser } from "./parsers/docx.parser";
 import { ExcelDocumentParser } from "./parsers/excel.parser";
 import { HtmlDocumentParser } from "./parsers/html.parser";
@@ -23,6 +24,7 @@ export class DocumentParserService {
     new CsvDocumentParser(),
     new HtmlDocumentParser(),
     new PdfDocumentParser(),
+    new DocDocumentParser(),
     new DocxDocumentParser(),
     new ExcelDocumentParser(),
   ];

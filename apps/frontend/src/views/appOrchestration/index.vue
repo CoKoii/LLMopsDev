@@ -171,7 +171,10 @@ const {
 const {
   debugStore,
   senderValue,
+  attachments,
   responding,
+  uploadFiles,
+  removeAttachment,
   submitMessage: submitDebugMessage,
   stopResponse,
   clearChat,
@@ -934,10 +937,13 @@ onMounted(() => {
           :opening-questions="openingPresetQuestions"
           :messages="displayMessages"
           :chat-roles="chatRoles"
+          :attachments="attachments"
           :responding="responding"
           @clear-chat="clearChat"
           @open-memory="openPublishHistory"
           @submit-suggested="submitSuggestedPrompt"
+          @upload-files="uploadFiles"
+          @remove-attachment="removeAttachment"
           @submit-message="(value) => submitDebugMessage(value, scrollChatToBottom)"
           @stop-response="stopResponse"
         />

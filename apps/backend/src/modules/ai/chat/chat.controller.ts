@@ -37,7 +37,8 @@ export class ChatController {
         id,
         dto.message,
         user.userId,
-        dto.history,
+        dto.sessionId,
+        dto.attachmentFileIds,
       ),
       {
         type: "text/event-stream; charset=utf-8",

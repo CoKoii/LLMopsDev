@@ -1,20 +1,35 @@
 <script setup lang="ts">
-import type { AppKnowledgeCitation } from '@/api'
+import type { AppAttachmentCitation, AppKnowledgeCitation } from '@/api'
+import type { AppDebugAttachment } from '@/stores/appDebug'
+import type { DebugComposerAttachment } from './useAppDebugSession'
 import { renderMarkdown } from '@/utils/markdown'
-import { BookOpen, Bot, ChevronDown, CircleStop, Paperclip, Save, Send, Trash2 } from '@lucide/vue'
-import { Bubble, Sender } from 'ant-design-x-vue'
-import type { BubbleListProps } from 'ant-design-x-vue'
+import {
+  BookOpen,
+  Bot,
+  ChevronDown,
+  CircleStop,
+  CloudUpload,
+  Paperclip,
+  Save,
+  Send,
+  Trash2,
+} from '@lucide/vue'
+import { Attachments, Bubble, Sender } from 'ant-design-x-vue'
+import type { Attachment, AttachmentsProps, BubbleListProps } from 'ant-design-x-vue'
 import { Button } from 'antdv-next'
-import { computed, ref, type VNode } from 'vue'
+import { computed, h, ref, watch, type VNode } from 'vue'
 
 export type DebugChatMessage = {
   key: string
   role: 'user' | 'assistant'
   content: string
+  attachments?: AppDebugAttachment[]
   footer?: VNode
   pending?: boolean
   knowledgeQuery?: string
   knowledgeCitations?: AppKnowledgeCitation[]
+  attachmentQuery?: string
+  attachmentCitations?: AppAttachmentCitation[]
 }
 
 type ChatRoles = NonNullable<BubbleListProps['roles']>
@@ -29,6 +44,22 @@ type DebugChatDisplayMessage = DebugChatMessage & {
   knowledgeCitationView: KnowledgeCitationView
 }
 
+const acceptedAttachmentTypes =
+  'image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.md,.markdown,.json,.html,.htm'
+const attachmentPlaceholder: AttachmentsProps['placeholder'] = (type) =>
+  type === 'drop'
+    ? { title: '拖拽文件到这里' }
+    : {
+        icon: h(CloudUpload, { size: 20 }),
+        title: '上传文件',
+        description: '点击或拖拽文件到这里上传',
+      }
+const senderHeaderStyles = {
+  content: {
+    padding: 0,
+  },
+}
+
 const props = defineProps<{
   appName: string
   appAvatar: string
@@ -38,6 +69,7 @@ const props = defineProps<{
   messages: DebugChatMessage[]
   chatRoles: ChatRoles
   senderValue: string
+  attachments: DebugComposerAttachment[]
   responding: boolean
 }>()
 
@@ -45,16 +77,25 @@ const emit = defineEmits<{
   'update:senderValue': [value: string]
   clearChat: []
   openMemory: []
+  uploadFiles: [files: File[]]
+  removeAttachment: [uid: string]
   submitSuggested: [value: string]
   submitMessage: [value: string]
   stopResponse: []
 }>()
 
 const chatListRef = ref<HTMLElement>()
+const attachmentsRef = ref<InstanceType<typeof Attachments> | null>(null)
+const senderRef = ref<InstanceType<typeof Sender> | null>(null)
+const attachmentsOpen = ref(false)
+const attachmentItems = ref<Attachment[]>([])
 const senderModel = computed({
   get: () => props.senderValue,
   set: (value: string) => emit('update:senderValue', value),
 })
+const hasUploadingAttachments = computed(() =>
+  props.attachments.some((item) => item.status === 'uploading'),
+)
 
 const normalizeTextList = (items: Array<string | undefined>) => [
   ...new Set(items.map((item) => item?.trim()).filter((item): item is string => Boolean(item))),
@@ -85,6 +126,94 @@ const displayMessages = computed<DebugChatDisplayMessage[]>(() =>
     knowledgeCitationView: createKnowledgeCitationView(message),
   })),
 )
+
+const formatFileSize = (size: number) => {
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`
+  if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${size} B`
+}
+
+const toFileCardItem = (attachment: AppDebugAttachment | DebugComposerAttachment): Attachment => ({
+  uid: attachment.uid,
+  name: attachment.name,
+  size: attachment.size,
+  type: attachment.contentType,
+  url: attachment.url,
+  status: 'status' in attachment ? attachment.status : 'done',
+  description:
+    'status' in attachment && attachment.status === 'error'
+      ? attachment.error || '上传失败'
+      : formatFileSize(attachment.size),
+})
+
+const composerAttachmentItems = computed(() =>
+  attachmentItems.value.map((item: Attachment): Attachment => {
+    const uploaded = props.attachments.find((attachment) => attachment.uid === item.uid)
+    if (!uploaded) return item
+
+    return {
+      ...item,
+      type: item.type || uploaded.contentType,
+      size: item.size ?? uploaded.size,
+      url: item.url || uploaded.url,
+      status: uploaded.status === 'error' ? 'error' : item.status,
+      response: uploaded.error,
+      description:
+        uploaded.status === 'error'
+          ? uploaded.error || '上传失败'
+          : item.description || formatFileSize(uploaded.size),
+    }
+  }),
+)
+
+watch(
+  () => props.attachments.length,
+  (length) => {
+    if (!length) {
+      attachmentItems.value = []
+    }
+  },
+)
+
+function toggleAttachmentsOpen() {
+  attachmentsOpen.value = !attachmentsOpen.value
+}
+
+function handleAttachmentsOpenChange(open: boolean) {
+  attachmentsOpen.value = open
+}
+
+const handleBeforeUpload: NonNullable<AttachmentsProps['beforeUpload']> = (file) => {
+  attachmentsOpen.value = true
+  emit('uploadFiles', [file as File])
+  return false
+}
+
+const handleAttachmentChange: NonNullable<AttachmentsProps['onChange']> = ({ fileList }) => {
+  attachmentItems.value = fileList
+}
+
+function handleRemoveAttachment(attachment: Attachment) {
+  emit('removeAttachment', attachment.uid)
+  return true
+}
+
+function getDropContainer() {
+  return senderRef.value?.nativeElement
+}
+
+function handlePasteFile(_: File, files: FileList) {
+  attachmentsOpen.value = true
+  if (attachmentsRef.value) {
+    attachmentsRef.value.upload(files)
+    return
+  }
+  emit('uploadFiles', Array.from(files))
+}
+
+function handleSubmit(value: string) {
+  emit('submitMessage', value)
+}
 
 function scrollToBottom() {
   if (chatListRef.value) {
@@ -179,13 +308,43 @@ defineExpose({ scrollToBottom })
                 </ol>
               </div>
             </details>
+            <details
+              v-if="item.role === 'assistant' && item.attachmentCitations?.length"
+              class="knowledge-citations"
+            >
+              <summary>
+                <Paperclip :size="14" />
+                <span>已检索附件 · {{ item.attachmentCitations.length }} 个片段</span>
+                <ChevronDown :size="14" />
+              </summary>
+              <div class="knowledge-citations__panel">
+                <ol>
+                  <li v-for="citation in item.attachmentCitations" :key="citation.id">
+                    <div class="knowledge-citations__item-head">
+                      <strong>{{ citation.fileName }} · 片段 #{{ citation.chunkIndex + 1 }}</strong>
+                      <em>匹配度 {{ citation.score.toFixed(2) }}</em>
+                    </div>
+                    <p>{{ citation.text }}</p>
+                  </li>
+                </ol>
+              </div>
+            </details>
           </div>
         </template>
         <template #message="{ item }">
-          <div
-            class="chat-markdown"
-            v-html="renderMarkdown(item.content || (item.pending ? '...' : ''))"
-          ></div>
+          <div class="chat-message-content">
+            <div v-if="item.attachments?.length" class="chat-message-attachments">
+              <Attachments.FileCard
+                v-for="attachment in item.attachments"
+                :key="attachment.uid"
+                :item="toFileCardItem(attachment)"
+              />
+            </div>
+            <div
+              class="chat-markdown"
+              v-html="renderMarkdown(item.content || (item.pending ? '...' : ''))"
+            ></div>
+          </div>
         </template>
       </Bubble.List>
     </div>
@@ -198,19 +357,50 @@ defineExpose({ scrollToBottom })
     <footer class="chat-composer">
       <div class="composer-row">
         <Sender
+          ref="senderRef"
           v-model:value="senderModel"
           :placeholder="responding ? '正在生成回复...' : '输入调试消息...'"
           :auto-size="{ minRows: 1, maxRows: 4 }"
+          :send-disabled="responding || hasUploadingAttachments"
           class="app-chat-composer"
-          @submit="(value) => emit('submitMessage', value)"
+          :on-paste-file="handlePasteFile"
+          :on-submit="handleSubmit"
         >
+          <template #header>
+            <Sender.Header
+              title="附件"
+              :open="attachmentsOpen"
+              :force-render="true"
+              :styles="senderHeaderStyles"
+              :on-open-change="handleAttachmentsOpenChange"
+            >
+              <Attachments
+                ref="attachmentsRef"
+                :items="composerAttachmentItems"
+                :placeholder="attachmentPlaceholder"
+                :before-upload="handleBeforeUpload"
+                :on-change="handleAttachmentChange"
+                :on-remove="handleRemoveAttachment"
+                :get-drop-container="getDropContainer"
+                :disabled="responding"
+                :accept="acceptedAttachmentTypes"
+                multiple
+                overflow="wrap"
+              />
+            </Sender.Header>
+          </template>
           <template #prefix>
-            <Button type="text" shape="circle">
+            <Button type="text" shape="circle" :disabled="responding" @click="toggleAttachmentsOpen">
               <template #icon><Paperclip :size="16" /></template>
             </Button>
           </template>
           <template #actions>
-            <Button type="text" shape="circle" @click="emit('submitMessage', senderValue)">
+            <Button
+              type="text"
+              shape="circle"
+              :disabled="responding || hasUploadingAttachments"
+              @click="emit('submitMessage', senderValue)"
+            >
               <template #icon><Send :size="16" /></template>
             </Button>
           </template>
@@ -384,6 +574,17 @@ defineExpose({ scrollToBottom })
 .app-chat-composer {
   flex: 1;
   background: var(--color-bg-panel);
+}
+
+:global(.chat-message-attachments) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+
+:global(.chat-message-content) {
+  display: grid;
+  gap: 1rem;
 }
 
 .chat-composer p {

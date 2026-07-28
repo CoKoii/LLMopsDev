@@ -22,8 +22,12 @@ const DEBUG_SYSTEM_PROMPT = [
   "通用知识可以直接回答；工具结果优先于自身知识。",
   "工具不可用或信息不足时，不要捏造信息。",
 ].join("\n");
+const MULTIMODAL_EXTRACTION_MODEL = "gemini-2.5-flash-lite";
+const TEXT_ONLY_MULTIMODAL_HOSTS = new Set(["api.deepseek.com"]);
 type CreateAgentOptions = {
   knowledgeContext?: string;
+  currentAttachmentContext?: string;
+  recalledAttachmentContext?: string;
 };
 
 @Injectable()
@@ -56,7 +60,7 @@ export class AiRuntimeService {
     return draft;
   }
 
-  async createModel(config: AiAppVersionConfig): Promise<ChatOpenAI> {
+  private async resolveLlm(config: AiAppVersionConfig) {
     if (!config.llmId) {
       throw new BadRequestException("请先选择模型");
     }
@@ -66,6 +70,41 @@ export class AiRuntimeService {
     });
     if (!llm) throw new BadRequestException("模型不存在");
 
+    return llm;
+  }
+
+  private isKnownTextOnlyMultimodalEndpoint(llm: Llm) {
+    try {
+      const host = new URL(llm.url).host.toLowerCase();
+      if (TEXT_ONLY_MULTIMODAL_HOSTS.has(host)) return true;
+    } catch {
+      return false;
+    }
+
+    return llm.provider.toLowerCase().includes("deepseek");
+  }
+
+  private async resolveMultimodalLlm(config: AiAppVersionConfig) {
+    const primary = await this.resolveLlm(config);
+    if (!this.isKnownTextOnlyMultimodalEndpoint(primary)) return primary;
+
+    const alternatives = await this.llmRepository.find({
+      where: { modelName: primary.modelName },
+      order: { id: "DESC" },
+    });
+    const compatible = alternatives.find(
+      (llm) =>
+        llm.id !== primary.id && !this.isKnownTextOnlyMultimodalEndpoint(llm),
+    );
+    if (compatible) return compatible;
+
+    throw new BadRequestException(
+      `当前模型通道 ${primary.provider}/${primary.modelName} 不支持图片解析，请配置支持多模态的模型通道`,
+    );
+  }
+
+  async createModel(config: AiAppVersionConfig): Promise<ChatOpenAI> {
+    const llm = await this.resolveLlm(config);
     const settings = config.modelSettings ?? {};
 
     return new ChatOpenAI({
@@ -77,6 +116,18 @@ export class AiRuntimeService {
       topP: settings.topP,
       frequencyPenalty: settings.frequencyPenalty,
       presencePenalty: settings.presencePenalty,
+      configuration: { baseURL: llm.url },
+    });
+  }
+
+  async createMultimodalExtractionModel(config: AiAppVersionConfig) {
+    const llm = await this.resolveMultimodalLlm(config);
+
+    return new ChatOpenAI({
+      apiKey: llm.apiKey,
+      model: MULTIMODAL_EXTRACTION_MODEL,
+      maxRetries: 1,
+      temperature: 0,
       configuration: { baseURL: llm.url },
     });
   }
@@ -93,8 +144,29 @@ export class AiRuntimeService {
           options.knowledgeContext,
         ].join("\n")
       : "";
+    const currentAttachmentInstruction = options.currentAttachmentContext
+      ? [
+          "以下是用户本轮消息上传的附件解析内容，它们是当前用户问题的一部分。",
+          "回答“这张图、第一张、第二张、这两个图片、附件里的内容”等问题时，必须优先对应这些本轮附件编号。",
+          "不要声称没有看到附件；如果解析内容不足，只能说明附件解析内容不足。",
+          options.currentAttachmentContext,
+        ].join("\n")
+      : "";
+    const recalledAttachmentInstruction = options.recalledAttachmentContext
+      ? [
+          "以下是当前会话历史附件的召回内容，用于回答用户对之前附件的追问。",
+          "如果历史附件内容与当前问题无关，可以忽略；如果内容不足，请明确说明不足，不要编造。",
+          options.recalledAttachmentContext,
+        ].join("\n")
+      : "";
 
-    return [DEBUG_SYSTEM_PROMPT, config.prompt?.trim(), knowledgeInstruction]
+    return [
+      DEBUG_SYSTEM_PROMPT,
+      config.prompt?.trim(),
+      knowledgeInstruction,
+      currentAttachmentInstruction,
+      recalledAttachmentInstruction,
+    ]
       .filter(Boolean)
       .join("\n\n");
   }
