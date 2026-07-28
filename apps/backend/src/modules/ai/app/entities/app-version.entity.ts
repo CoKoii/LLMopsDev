@@ -40,6 +40,7 @@ export type AiAppVersionConfig = {
     tone?: string;
   }>;
   pluginIds?: number[];
+  pluginSettings?: Record<string, Record<string, Record<string, unknown>>>;
   workflowIds?: number[];
   knowledge?: {
     ids?: number[];

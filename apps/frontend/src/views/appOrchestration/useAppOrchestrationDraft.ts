@@ -8,6 +8,7 @@ import {
   streamAiAppPromptOptimizeApi,
   updateAiAppDraftApi,
   type AppKnowledgeRecallSettings,
+  type AppPluginSettings,
   type AiAppItem,
   type AiAppVersionConfig,
   type AiAppVersionItem,
@@ -79,6 +80,59 @@ const formatTime = (value: string) =>
     second: '2-digit',
   })
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const isEmptySettingValue = (value: unknown) => {
+  if (value === undefined || value === null || value === '') return true
+  if (Array.isArray(value)) return value.length === 0
+  if (isRecord(value)) return Object.keys(value).length === 0
+  return false
+}
+
+const normalizePluginSettings = (
+  settings: AppPluginSettings,
+  selectedPluginIds: number[],
+): AppPluginSettings => {
+  const output: AppPluginSettings = {}
+
+  for (const pluginId of selectedPluginIds) {
+    const pluginSettings = settings[String(pluginId)]
+    if (!pluginSettings) continue
+
+    const normalizedOperations: Record<string, Record<string, unknown>> = {}
+    for (const [operationId, operationSettings] of Object.entries(pluginSettings)) {
+      const normalizedSettings: Record<string, unknown> = {}
+
+      for (const [key, value] of Object.entries(operationSettings)) {
+        if (key === 'body' && isRecord(value)) {
+          const bodySettings = Object.fromEntries(
+            Object.entries(value).filter(([, bodyValue]) => !isEmptySettingValue(bodyValue)),
+          )
+          if (Object.keys(bodySettings).length) {
+            normalizedSettings.body = bodySettings
+          }
+          continue
+        }
+
+        if (!isEmptySettingValue(value)) {
+          normalizedSettings[key] = value
+        }
+      }
+
+      if (Object.keys(normalizedSettings).length) {
+        normalizedOperations[operationId] = normalizedSettings
+      }
+    }
+
+    if (Object.keys(normalizedOperations).length) {
+      output[String(pluginId)] = normalizedOperations
+    }
+  }
+
+  return output
+}
+
 export function useAppOrchestrationDraft(appId: Ref<number>) {
   const appDetail = ref<AiAppItem>()
   const appDraft = ref<AiAppVersionItem>()
@@ -89,6 +143,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
   const selectedLlmId = ref<number | null>(null)
   const capabilities = ref<CapabilityItem[]>(createInitialCapabilities())
   const pluginIds = ref<number[]>([])
+  const pluginSettings = ref<AppPluginSettings>({})
   const knowledgeConfig = reactive<AppKnowledgeConfig>({
     ids: [],
     settings: {},
@@ -133,6 +188,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
   })
   const buildDraftConfig = (): AiAppVersionConfig => {
     const selectedKnowledgeIds = [...new Set(knowledgeConfig.ids)].slice(0, knowledgeLimit)
+    const selectedPluginIds = [...new Set(pluginIds.value)]
 
     return {
       prompt: promptContent.value,
@@ -144,7 +200,8 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
         ids: selectedKnowledgeIds,
         settings: { ...knowledgeConfig.settings },
       },
-      pluginIds: [...new Set(pluginIds.value)],
+      pluginIds: selectedPluginIds,
+      pluginSettings: normalizePluginSettings(pluginSettings.value, selectedPluginIds),
       toggles: { ...toggleSettings },
       openingStatement: {
         content: openingStatementContent.value,
@@ -178,6 +235,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
         }))
       : []
     pluginIds.value = config.pluginIds?.length ? [...new Set(config.pluginIds)] : []
+    pluginSettings.value = normalizePluginSettings(config.pluginSettings ?? {}, pluginIds.value)
     const nextKnowledgeIds = configKnowledge.ids ?? []
     knowledgeConfig.ids = nextKnowledgeIds.length
       ? [...new Set(nextKnowledgeIds)].slice(0, knowledgeLimit)
@@ -321,6 +379,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
     selectedLlmId,
     capabilities,
     pluginIds,
+    pluginSettings,
     knowledgeConfig,
     openingStatementContent,
     openingQuestions,

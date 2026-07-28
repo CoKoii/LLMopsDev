@@ -59,6 +59,9 @@ export interface AppKnowledgeRecallSettings {
   minScore?: number
 }
 
+export type AppPluginOperationSettings = Record<string, unknown>
+export type AppPluginSettings = Record<string, Record<string, AppPluginOperationSettings>>
+
 export interface AppKnowledgeCitation {
   id: number
   queries: string[]
@@ -89,6 +92,7 @@ export interface AiAppVersionConfig {
     tone?: string
   }>
   pluginIds?: number[]
+  pluginSettings?: AppPluginSettings
   workflowIds?: number[]
   knowledge?: {
     ids?: number[]

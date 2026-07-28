@@ -10,6 +10,9 @@ import { createUniqueToolName } from "./openapi-tool.naming";
 import { createToolDescription, createToolSchema } from "./openapi-tool.schema";
 import type { OpenApiToolDefinition } from "./openapi-tool.types";
 
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 @Injectable()
 export class PluginToolService {
   private readonly logger = new Logger(PluginToolService.name);
@@ -42,11 +45,45 @@ export class PluginToolService {
     });
   }
 
-  private createTool(definition: OpenApiToolDefinition, name: string) {
+  private getOperationSettings(
+    config: AiAppVersionConfig,
+    definition: OpenApiToolDefinition,
+  ): Record<string, unknown> {
+    const pluginSettings =
+      config.pluginSettings?.[String(definition.plugin.id)];
+    const operationSettings = pluginSettings?.[definition.operationId];
+    return isPlainRecord(operationSettings) ? operationSettings : {};
+  }
+
+  private mergeToolArgs(
+    settings: Record<string, unknown>,
+    args: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const merged = { ...settings, ...args };
+    const defaultBody = settings.body;
+    const inputBody = args.body;
+
+    if (isPlainRecord(defaultBody) && isPlainRecord(inputBody)) {
+      merged.body = { ...defaultBody, ...inputBody };
+    }
+
+    return merged;
+  }
+
+  private createTool(
+    definition: OpenApiToolDefinition,
+    name: string,
+    config: AiAppVersionConfig,
+  ) {
+    const settings = this.getOperationSettings(config, definition);
+
     return tool(
       async (args: Record<string, unknown>) => {
         try {
-          return await executeOpenApiToolRequest(definition, args);
+          return await executeOpenApiToolRequest(
+            definition,
+            this.mergeToolArgs(settings, args),
+          );
         } catch (error) {
           return this.serializeToolError(error, definition);
         }
@@ -78,7 +115,7 @@ export class PluginToolService {
       .map((definition) => {
         const name = createUniqueToolName(definition, usedToolNames);
         usedToolNames.add(name);
-        return this.createTool(definition, name);
+        return this.createTool(definition, name, config);
       });
   }
 }

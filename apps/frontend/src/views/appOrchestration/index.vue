@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { useAuthStore } from '@/stores/auth'
 import {
+  getPluginApi,
   listKnowledgeApi,
   listPluginCategoriesApi,
   listPluginsApi,
   type AppKnowledgeCitation,
   type AppKnowledgeRecallSettings,
+  type AppPluginOperationSettings,
   type AppVersionKnowledgeItem,
   type AppVersionPluginItem,
   type KnowledgeItem,
@@ -62,6 +64,7 @@ import AppOrchestrationTopbar from './AppOrchestrationTopbar.vue'
 import DebugPreviewPanel from './DebugPreviewPanel.vue'
 import PromptOptimizeModal from './PromptOptimizeModal.vue'
 import PromptEditorPanel from './PromptEditorPanel.vue'
+import PluginSettingsDrawer from './PluginSettingsDrawer.vue'
 import PublishConfigView from './PublishConfigView.vue'
 import PublishHistoryDrawer from './PublishHistoryDrawer.vue'
 import ResourceSelectionModals from './ResourceSelectionModals.vue'
@@ -82,6 +85,9 @@ const authStore = useAuthStore()
 const allPluginCategoryKey = '__all__'
 const modelSettingsOpen = ref(false)
 const pluginModalOpen = ref(false)
+const pluginSettingsOpen = ref(false)
+const pluginSettingsLoading = ref(false)
+const pluginSettingsRecord = ref<PluginItem>()
 const knowledgeModalOpen = ref(false)
 const knowledgeSettingsOpen = ref(false)
 const publishHistoryOpen = ref(false)
@@ -141,6 +147,7 @@ const {
   selectedLlmId,
   capabilities,
   pluginIds,
+  pluginSettings,
   knowledgeConfig,
   openingStatementContent,
   openingQuestions,
@@ -497,10 +504,61 @@ function mergePluginCatalogCache(items: PluginItem[]) {
   pluginCatalogCache.value = [...next.values()]
 }
 
+const isPluginItem = (value: AppVersionPluginItem | PluginItem): value is PluginItem => {
+  return 'openapiSchema' in value && typeof value.openapiSchema === 'string'
+}
+
+async function openPluginSettings(item: AppVersionPluginItem | PluginItem) {
+  pluginSettingsOpen.value = true
+  pluginSettingsLoading.value = true
+  pluginSettingsRecord.value = undefined
+  const cached = pluginCatalogCache.value.find((plugin) => plugin.id === item.id)
+  if (cached) {
+    pluginSettingsRecord.value = cached
+    pluginSettingsLoading.value = false
+    return
+  }
+  if (isPluginItem(item)) {
+    pluginSettingsRecord.value = item
+    mergePluginCatalogCache([item])
+    pluginSettingsLoading.value = false
+    return
+  }
+
+  try {
+    const detail = await getPluginApi(item.id)
+    pluginSettingsRecord.value = detail
+    mergePluginCatalogCache([detail])
+  } catch {
+    message.error('插件详情获取失败')
+    pluginSettingsOpen.value = false
+  } finally {
+    pluginSettingsLoading.value = false
+  }
+}
+
+const currentPluginOperationSettings = computed<Record<string, AppPluginOperationSettings>>(() => {
+  if (!pluginSettingsRecord.value) return {}
+  return pluginSettings.value[String(pluginSettingsRecord.value.id)] ?? {}
+})
+
+function updatePluginOperationSettings(
+  pluginId: number,
+  settings: Record<string, AppPluginOperationSettings>,
+) {
+  pluginSettings.value = {
+    ...pluginSettings.value,
+    [String(pluginId)]: settings,
+  }
+}
+
 function togglePluginSelection(id: number) {
   const next = new Set(pluginIds.value)
   if (next.has(id)) {
     next.delete(id)
+    const nextSettings = { ...pluginSettings.value }
+    delete nextSettings[String(id)]
+    pluginSettings.value = nextSettings
   } else {
     next.add(id)
   }
@@ -509,6 +567,9 @@ function togglePluginSelection(id: number) {
 
 function removeSelectedPlugin(id: number) {
   pluginIds.value = pluginIds.value.filter((item) => item !== id)
+  const nextSettings = { ...pluginSettings.value }
+  delete nextSettings[String(id)]
+  pluginSettings.value = nextSettings
 }
 
 async function loadKnowledgeCatalog() {
@@ -722,7 +783,7 @@ onMounted(() => {
                     <p>{{ item.description || '暂无描述' }}</p>
                   </div>
                   <div class="capability-item__actions">
-                    <Button type="text" size="small">
+                    <Button type="text" size="small" @click="openPluginSettings(item)">
                       <template #icon><Settings :size="14" /></template>
                     </Button>
                     <Button type="text" size="small" @click="removeSelectedPlugin(item.id)">
@@ -906,6 +967,14 @@ onMounted(() => {
       @select-plugin-category="selectPluginCategory"
       @toggle-plugin="togglePluginSelection"
       @toggle-knowledge="toggleKnowledgeSelection"
+    />
+
+    <PluginSettingsDrawer
+      v-model:open="pluginSettingsOpen"
+      :plugin="pluginSettingsRecord"
+      :settings="currentPluginOperationSettings"
+      :loading="pluginSettingsLoading"
+      @save="updatePluginOperationSettings"
     />
 
     <AppModal
