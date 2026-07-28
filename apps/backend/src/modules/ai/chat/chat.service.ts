@@ -327,7 +327,7 @@ export class ChatService {
     );
     const maxItems = Math.max(6, queryCount * itemLimitPerQuery);
     const maxItemChars = 900;
-    const maxTotalChars = Math.max(5000, queryCount * 3500);
+    const maxTotalChars = Math.max(5000, maxItems * maxItemChars);
     const citations: KnowledgeCitation[] = [];
     const contextParts: string[] = [];
     let totalChars = 0;
