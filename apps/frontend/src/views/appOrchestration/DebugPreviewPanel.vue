@@ -40,8 +40,14 @@ type KnowledgeCitationView = {
   showItemKnowledgeName: boolean
 }
 
+type AttachmentCitationView = {
+  queries: string[]
+  fileNames: string[]
+}
+
 type DebugChatDisplayMessage = DebugChatMessage & {
   knowledgeCitationView: KnowledgeCitationView
+  attachmentCitationView: AttachmentCitationView
 }
 
 const acceptedAttachmentTypes =
@@ -71,6 +77,7 @@ const props = defineProps<{
   senderValue: string
   attachments: DebugComposerAttachment[]
   responding: boolean
+  showMemoryButton: boolean
 }>()
 
 const emit = defineEmits<{
@@ -120,10 +127,26 @@ const createKnowledgeCitationView = (message: DebugChatMessage): KnowledgeCitati
   }
 }
 
+const createAttachmentCitationView = (message: DebugChatMessage): AttachmentCitationView => {
+  const citations = message.attachmentCitations ?? []
+  if (!citations.length) return { queries: [], fileNames: [] }
+
+  return {
+    queries: normalizeTextList([
+      message.attachmentQuery,
+      ...citations.flatMap((citation) => citation.queries ?? []),
+    ]),
+    fileNames: normalizeTextList(
+      citations.map((citation) => citation.displayLabel || citation.fileName),
+    ),
+  }
+}
+
 const displayMessages = computed<DebugChatDisplayMessage[]>(() =>
   props.messages.map((message) => ({
     ...message,
     knowledgeCitationView: createKnowledgeCitationView(message),
+    attachmentCitationView: createAttachmentCitationView(message),
   })),
 )
 
@@ -212,8 +235,16 @@ function handlePasteFile(_: File, files: FileList) {
 }
 
 function handleSubmit(value: string) {
+  attachmentsOpen.value = false
   emit('submitMessage', value)
 }
+
+watch(
+  () => props.responding,
+  (responding) => {
+    if (responding) attachmentsOpen.value = false
+  },
+)
 
 function scrollToBottom() {
   if (chatListRef.value) {
@@ -233,7 +264,7 @@ defineExpose({ scrollToBottom })
           <template #icon><Trash2 :size="15" /></template>
           清空对话
         </Button>
-        <Button type="link" size="small" @click="emit('openMemory')">
+        <Button v-if="showMemoryButton" type="link" size="small" @click="emit('openMemory')">
           <template #icon><Save :size="15" /></template>
           长期记忆
         </Button>
@@ -264,8 +295,21 @@ defineExpose({ scrollToBottom })
 
       <Bubble.List v-else :items="displayMessages" :roles="chatRoles">
         <template #header="{ item }">
-          <div class="chat-message-header">
+          <div
+            class="chat-message-header"
+            :class="{
+              'chat-message-header--user': item.role === 'user',
+              'chat-message-header--assistant': item.role === 'assistant',
+            }"
+          >
             <span>{{ item.role === 'assistant' ? appName : userName }}</span>
+            <div v-if="item.role === 'user' && item.attachments?.length" class="chat-message-attachments">
+              <Attachments.FileCard
+                v-for="attachment in item.attachments"
+                :key="attachment.uid"
+                :item="toFileCardItem(attachment)"
+              />
+            </div>
             <details
               v-if="item.role === 'assistant' && item.knowledgeCitations?.length"
               class="knowledge-citations"
@@ -318,12 +362,38 @@ defineExpose({ scrollToBottom })
                 <ChevronDown :size="14" />
               </summary>
               <div class="knowledge-citations__panel">
+                <div
+                  v-if="
+                    item.attachmentCitationView.queries.length ||
+                    item.attachmentCitationView.fileNames.length
+                  "
+                  class="knowledge-citations__summary"
+                >
+                  <p v-if="item.attachmentCitationView.queries.length">
+                    <span>检索问题</span>
+                    <strong>{{ item.attachmentCitationView.queries.join('；') }}</strong>
+                  </p>
+                  <p v-if="item.attachmentCitationView.fileNames.length">
+                    <span>命中附件</span>
+                    <strong>{{ item.attachmentCitationView.fileNames.join('、') }}</strong>
+                  </p>
+                </div>
                 <ol>
                   <li v-for="citation in item.attachmentCitations" :key="citation.id">
                     <div class="knowledge-citations__item-head">
-                      <strong>{{ citation.fileName }} · 片段 #{{ citation.chunkIndex + 1 }}</strong>
+                      <strong>
+                        {{ citation.displayLabel || citation.fileName }} · 片段 #{{
+                          citation.chunkIndex + 1
+                        }}
+                      </strong>
                       <em>匹配度 {{ citation.score.toFixed(2) }}</em>
                     </div>
+                    <span v-if="citation.displayLabel && citation.displayLabel !== citation.fileName">
+                      {{ citation.fileName }}
+                    </span>
+                    <span v-if="citation.duplicateOfLabel">
+                      与{{ citation.duplicateOfLabel }}内容相同
+                    </span>
                     <p>{{ citation.text }}</p>
                   </li>
                 </ol>
@@ -333,13 +403,6 @@ defineExpose({ scrollToBottom })
         </template>
         <template #message="{ item }">
           <div class="chat-message-content">
-            <div v-if="item.attachments?.length" class="chat-message-attachments">
-              <Attachments.FileCard
-                v-for="attachment in item.attachments"
-                :key="attachment.uid"
-                :item="toFileCardItem(attachment)"
-              />
-            </div>
             <div
               class="chat-markdown"
               v-html="renderMarkdown(item.content || (item.pending ? '...' : ''))"
@@ -399,7 +462,7 @@ defineExpose({ scrollToBottom })
               type="text"
               shape="circle"
               :disabled="responding || hasUploadingAttachments"
-              @click="emit('submitMessage', senderValue)"
+              @click="handleSubmit(senderValue)"
             >
               <template #icon><Send :size="16" /></template>
             </Button>
@@ -814,6 +877,10 @@ defineExpose({ scrollToBottom })
   min-width: 0;
 }
 
+:global(.chat-message-header--user) {
+  justify-items: end;
+}
+
 :global(.chat-message-header > span) {
   max-width: 100%;
   overflow: hidden;
@@ -823,6 +890,10 @@ defineExpose({ scrollToBottom })
   line-height: 2rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+:global(.chat-message-header--user .chat-message-attachments) {
+  justify-items: end;
 }
 
 :global(.chat-message-footer) {

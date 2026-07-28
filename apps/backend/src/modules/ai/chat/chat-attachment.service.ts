@@ -1,8 +1,7 @@
-import { AIMessage } from "@langchain/core/messages";
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { createHash, randomUUID } from "node:crypto";
-import { Repository } from "typeorm";
+import { Not, Repository } from "typeorm";
 import { FilesService } from "../../files/files.service";
 import { DocumentChunkerService } from "../knowledge/document-chunker/document-chunker.service";
 import { DocumentCleanerService } from "../knowledge/document-cleaner/document-cleaner.service";
@@ -10,8 +9,6 @@ import { DocumentEmbeddingService } from "../knowledge/document-embedding/docume
 import { DocumentParserService } from "../knowledge/document-parser/document-parser.service";
 import type { ParsedDocument } from "../knowledge/document-parser/document-parser.types";
 import { DocumentVectorStoreService } from "../knowledge/document-vector-store/document-vector-store.service";
-import type { AiAppVersionConfig } from "../app/entities/app-version.entity";
-import { AiRuntimeService } from "./ai-runtime.service";
 import {
   CHAT_ATTACHMENT_KIND,
   CHAT_ATTACHMENT_STATUS,
@@ -22,12 +19,8 @@ import { ChatAttachmentChunk } from "./entities/chat-attachment-chunk.entity";
 import { ChatMessage } from "./entities/chat-message.entity";
 import { ChatSession } from "./entities/chat-session.entity";
 
-const MULTIMODAL_EXTRACTION_PROMPT = [
-  "将附件内容转换为后续对话和检索可使用的中文文本。",
-  "保留可见事实、文字、结构、关键数值和空间关系。",
-  "只描述附件中能确认的信息；不要推断意图，不要编造。",
-].join("\n");
 const ATTACHMENT_RECALL_LIMIT = 8;
+const ATTACHMENT_RECALL_MIN_SCORE = 0.35;
 const ATTACHMENT_CONTEXT_MAX_CHARS = 9000;
 const ATTACHMENT_CHUNK_MAX_CHARS = 900;
 const CURRENT_ATTACHMENT_CONTEXT_MAX_CHARS = 12000;
@@ -41,6 +34,7 @@ type AttachmentRecallItem = {
   fileName: string;
   displayLabel?: string;
   duplicateOfLabel?: string | null;
+  queries?: string[];
   chunkIndex: number;
   score: number;
   text: string;
@@ -48,6 +42,7 @@ type AttachmentRecallItem = {
 type AttachmentContext = {
   context: string;
   items: AttachmentRecallItem[];
+  tokens: number;
 };
 type AttachmentDisplayInfo = {
   attachmentIndex: number;
@@ -88,28 +83,6 @@ const getMetadataString = (
 const isImageContentType = (contentType: string) =>
   contentType.toLowerCase().startsWith("image/");
 
-const getMessageContentText = (message: AIMessage) => {
-  const content = message.content;
-  if (typeof content === "string") return content.trim();
-  if (!Array.isArray(content)) return "";
-
-  return content
-    .map((item) => {
-      if (typeof item === "string") return item;
-      if (
-        typeof item === "object" &&
-        item !== null &&
-        "text" in item &&
-        typeof item.text === "string"
-      ) {
-        return item.text;
-      }
-      return "";
-    })
-    .join("\n")
-    .trim();
-};
-
 @Injectable()
 export class ChatAttachmentService {
   private readonly logger = new Logger(ChatAttachmentService.name);
@@ -125,7 +98,6 @@ export class ChatAttachmentService {
     private readonly documentChunkerService: DocumentChunkerService,
     private readonly documentEmbeddingService: DocumentEmbeddingService,
     private readonly documentVectorStoreService: DocumentVectorStoreService,
-    private readonly aiRuntimeService: AiRuntimeService,
   ) {}
 
   async processMessageAttachments(params: {
@@ -133,11 +105,11 @@ export class ChatAttachmentService {
     message: ChatMessage;
     fileIds: number[];
     userId: number;
-    config: AiAppVersionConfig;
   }): Promise<AttachmentContext> {
     const uniqueFileIds = [...new Set(params.fileIds)].filter(Number.isFinite);
     const contexts: string[] = [];
     const items: AttachmentRecallItem[] = [];
+    let tokens = 0;
     const displayInfo: AttachmentDisplayInfo = {
       attachmentIndex: 0,
       imageIndex: 0,
@@ -153,6 +125,7 @@ export class ChatAttachmentService {
       });
       contexts.push(context.context);
       items.push(...context.items);
+      tokens += context.tokens;
     }
 
     return {
@@ -162,6 +135,7 @@ export class ChatAttachmentService {
         contexts.filter(Boolean),
       ),
       items: items.map((item, index) => ({ ...item, id: index + 1 })),
+      tokens,
     };
   }
 
@@ -171,7 +145,9 @@ export class ChatAttachmentService {
     options: { excludeMessageId?: number } = {},
   ): Promise<AttachmentContext> {
     const queryText = query.trim();
-    if (!queryText) return { context: "", items: [] as AttachmentRecallItem[] };
+    if (!queryText) {
+      return { context: "", items: [] as AttachmentRecallItem[], tokens: 0 };
+    }
 
     const embeddingResult = await this.documentEmbeddingService.embed([
       queryText,
@@ -182,6 +158,7 @@ export class ChatAttachmentService {
         vector,
         sessionId,
         limit: ATTACHMENT_RECALL_LIMIT,
+        scoreThreshold: ATTACHMENT_RECALL_MIN_SCORE,
         excludeMessageId: options.excludeMessageId,
       });
 
@@ -193,6 +170,7 @@ export class ChatAttachmentService {
       fileName: point.payload.fileName,
       displayLabel: point.payload.displayLabel,
       duplicateOfLabel: point.payload.duplicateOfLabel,
+      queries: [queryText],
       chunkIndex: point.payload.chunkIndex,
       score: point.score,
       text: compactText(point.payload.text, 180),
@@ -220,6 +198,7 @@ export class ChatAttachmentService {
       contextParts.push(
         [
           `历史附件资料 ${index + 1}：${point.payload.displayLabel ?? point.payload.fileName}`,
+          `检索问题：${queryText}`,
           `文件名：${point.payload.fileName}`,
           point.payload.duplicateOfLabel
             ? `重复关系：该附件与${point.payload.duplicateOfLabel}的文件内容完全相同。`
@@ -234,7 +213,27 @@ export class ChatAttachmentService {
       totalChars += text.length;
     }
 
-    return { context: contextParts.join("\n\n"), items };
+    return {
+      context: contextParts.join("\n\n"),
+      items,
+      tokens: 0,
+    };
+  }
+
+  async hasRecallableChunks(
+    sessionId: number,
+    options: { excludeMessageId?: number } = {},
+  ) {
+    const count = await this.chunkRepository.count({
+      where: {
+        sessionId,
+        enabled: true,
+        ...(options.excludeMessageId
+          ? { messageId: Not(options.excludeMessageId) }
+          : {}),
+      },
+    });
+    return count > 0;
   }
 
   private async processOneAttachment(params: {
@@ -242,7 +241,6 @@ export class ChatAttachmentService {
     message: ChatMessage;
     fileId: number;
     userId: number;
-    config: AiAppVersionConfig;
     displayInfo: AttachmentDisplayInfo;
   }): Promise<AttachmentContext> {
     const { file, buffer } = await this.filesService.getOwnedObjectBuffer(
@@ -297,18 +295,11 @@ export class ChatAttachmentService {
       const document =
         duplicatedContent?.document ??
         reusableDocument?.document ??
-        (kind === CHAT_ATTACHMENT_KIND.IMAGE
-          ? await this.extractMultimodalDocument({
-              filename: file.originalName,
-              contentType: file.contentType,
-              buffer,
-              config: params.config,
-            })
-          : await this.documentParserService.parse({
-              filename: file.originalName,
-              contentType: file.contentType,
-              buffer,
-            }));
+        (await this.documentParserService.parse({
+          filename: file.originalName,
+          contentType: file.contentType,
+          buffer,
+        }));
       if (!document.text.trim()) {
         throw new BadRequestException("附件未解析出有效内容");
       }
@@ -319,7 +310,7 @@ export class ChatAttachmentService {
           attachmentId: attachment.id,
         });
       }
-      await this.indexAttachmentDocument({
+      const indexTokens = await this.indexAttachmentDocument({
         attachment,
         session: params.session,
         message: params.message,
@@ -333,6 +324,7 @@ export class ChatAttachmentService {
         session: params.session,
         message: params.message,
         duplicateOfLabel: duplicatedContent?.label,
+        tokens: (document.metadata.tokens ?? 0) + indexTokens,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -399,49 +391,6 @@ export class ChatAttachmentService {
     };
   }
 
-  private async extractMultimodalDocument(params: {
-    filename: string;
-    contentType: string;
-    buffer: Buffer;
-    config: AiAppVersionConfig;
-  }): Promise<ParsedDocument> {
-    const model = await this.aiRuntimeService.createMultimodalExtractionModel(
-      params.config,
-    );
-    const imageUrl = `data:${params.contentType};base64,${params.buffer.toString("base64")}`;
-    const response = await model.invoke([
-      ["system", MULTIMODAL_EXTRACTION_PROMPT],
-      [
-        "human",
-        [
-          { type: "text", text: "请提取这个附件中的有效信息。" },
-          { type: "image_url", image_url: { url: imageUrl } },
-        ],
-      ],
-    ]);
-    const text = getMessageContentText(response);
-
-    return {
-      title: params.filename,
-      format: "image",
-      contentType: params.contentType,
-      text,
-      characterCount: text.length,
-      blocks: [
-        {
-          id: randomUUID(),
-          type: "paragraph",
-          text,
-          metadata: { parser: "gemini-2.5-flash-lite" },
-        },
-      ],
-      metadata: {
-        parser: "gemini-2.5-flash-lite",
-        blockCount: 1,
-      },
-    };
-  }
-
   private async indexAttachmentDocument(params: {
     attachment: ChatAttachment;
     session: ChatSession;
@@ -450,7 +399,7 @@ export class ChatAttachmentService {
     userId: number;
     duplicateOfLabel?: string;
     reusedFromAttachmentId?: number;
-  }) {
+  }): Promise<number> {
     const cleaned = this.documentCleanerService.clean(params.document).document;
     const chunks = this.documentChunkerService.createChunks({
       knowledgeId: 0,
@@ -543,6 +492,7 @@ export class ChatAttachmentService {
       duplicateOfAttachmentId,
       duplicateOfLabel: params.duplicateOfLabel,
       reusedFromAttachmentId: params.reusedFromAttachmentId,
+      tokens: params.document.metadata.tokens,
     });
 
     await this.attachmentRepository.save({
@@ -553,6 +503,8 @@ export class ChatAttachmentService {
       metadata: attachmentMetadata,
       updatedBy: params.userId,
     });
+
+    return 0;
   }
 
   private async createCurrentAttachmentContext(params: {
@@ -560,6 +512,7 @@ export class ChatAttachmentService {
     session: ChatSession;
     message: ChatMessage;
     duplicateOfLabel?: string;
+    tokens: number;
   }): Promise<AttachmentContext> {
     const chunks = await this.chunkRepository.find({
       where: {
@@ -615,6 +568,7 @@ export class ChatAttachmentService {
     return {
       context: contextParts.join("\n\n"),
       items,
+      tokens: params.tokens,
     };
   }
 

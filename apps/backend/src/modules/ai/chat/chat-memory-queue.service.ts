@@ -7,42 +7,38 @@ import { ConfigService } from "@nestjs/config";
 import { Queue } from "bullmq";
 import Redis from "ioredis";
 import {
-  createDocumentProcessRedisOptions,
-  KNOWLEDGE_DOCUMENT_PROCESS_JOB,
-  KNOWLEDGE_DOCUMENT_PROCESS_QUEUE,
-  type KnowledgeDocumentProcessJobData,
-} from "./document-process.queue";
+  CHAT_MEMORY_QUEUE,
+  CHAT_MEMORY_REFRESH_JOB,
+  createChatMemoryRedisOptions,
+  type ChatMemoryRefreshJobData,
+} from "./chat-memory.queue";
 
+const REFRESH_DELAY_MS = 30_000;
 const JOB_RETENTION = {
   age: 3600,
   count: 1000,
 };
 
 @Injectable()
-export class DocumentProcessQueueService
+export class ChatMemoryQueueService
   implements OnModuleInit, OnApplicationShutdown
 {
-  private queue?: Queue<KnowledgeDocumentProcessJobData>;
+  private queue?: Queue<ChatMemoryRefreshJobData>;
   private connection?: Redis;
 
   constructor(private readonly configService: ConfigService) {}
 
   onModuleInit() {
-    this.connection = new Redis(
-      createDocumentProcessRedisOptions(this.configService),
-    );
-    this.queue = new Queue<KnowledgeDocumentProcessJobData>(
-      KNOWLEDGE_DOCUMENT_PROCESS_QUEUE,
-      {
-        connection: this.connection,
-        prefix: "bull",
-      },
-    );
+    this.connection = new Redis(createChatMemoryRedisOptions(this.configService));
+    this.queue = new Queue<ChatMemoryRefreshJobData>(CHAT_MEMORY_QUEUE, {
+      connection: this.connection,
+      prefix: "bull",
+    });
   }
 
-  async enqueue(data: KnowledgeDocumentProcessJobData) {
+  async enqueueRefresh(data: ChatMemoryRefreshJobData) {
     const queue = this.getQueue();
-    const jobId = this.createJobId(data.documentId);
+    const jobId = this.createRefreshJobId(data);
     const existingJob = await queue.getJob(jobId);
 
     if (existingJob) {
@@ -50,12 +46,13 @@ export class DocumentProcessQueueService
       if (["active", "waiting", "delayed", "prioritized"].includes(state)) {
         return;
       }
-
       await existingJob.remove();
     }
 
-    await queue.add(KNOWLEDGE_DOCUMENT_PROCESS_JOB, data, {
+    await queue.add(CHAT_MEMORY_REFRESH_JOB, data, {
       jobId,
+      delay: REFRESH_DELAY_MS,
+      attempts: 2,
       removeOnComplete: JOB_RETENTION,
       removeOnFail: JOB_RETENTION,
     });
@@ -68,12 +65,12 @@ export class DocumentProcessQueueService
 
   private getQueue() {
     if (!this.queue) {
-      throw new Error("文档处理队列尚未初始化");
+      throw new Error("对话记忆队列尚未初始化");
     }
     return this.queue;
   }
 
-  private createJobId(documentId: number) {
-    return `knowledge-document-${documentId}-process`;
+  private createRefreshJobId(data: ChatMemoryRefreshJobData) {
+    return `chat-memory-${data.appId}-${data.userId}-${data.sessionId}`;
   }
 }

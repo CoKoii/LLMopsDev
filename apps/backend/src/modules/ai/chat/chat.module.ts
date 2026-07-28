@@ -9,11 +9,16 @@ import { PluginModule } from "../plugin/plugin.module";
 import { AiRuntimeService } from "./ai-runtime.service";
 import { ChatAttachmentService } from "./chat-attachment.service";
 import { ChatController } from "./chat.controller";
+import { ChatMemoryProcessor } from "./chat-memory.processor";
+import { ChatMemoryQueueService } from "./chat-memory-queue.service";
+import { ChatMemoryService } from "./chat-memory.service";
 import { ChatService } from "./chat.service";
 import { ChatAttachmentChunk } from "./entities/chat-attachment-chunk.entity";
 import { ChatAttachment } from "./entities/chat-attachment.entity";
 import { ChatMessage } from "./entities/chat-message.entity";
+import { ChatSessionSummary } from "./entities/chat-session-summary.entity";
 import { ChatSession } from "./entities/chat-session.entity";
+import { ChatUserMemory } from "./entities/chat-user-memory.entity";
 
 @Module({
   imports: [
@@ -25,12 +30,21 @@ import { ChatSession } from "./entities/chat-session.entity";
       ChatMessage,
       ChatAttachment,
       ChatAttachmentChunk,
+      ChatSessionSummary,
+      ChatUserMemory,
     ]),
     FilesModule,
     PluginModule,
     KnowledgeModule,
   ],
   controllers: [ChatController],
-  providers: [AiRuntimeService, ChatService, ChatAttachmentService],
+  providers: [
+    AiRuntimeService,
+    ChatService,
+    ChatAttachmentService,
+    ChatMemoryService,
+    ChatMemoryQueueService,
+    ChatMemoryProcessor,
+  ],
 })
 export class ChatModule {}

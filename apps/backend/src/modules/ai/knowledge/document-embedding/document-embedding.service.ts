@@ -65,7 +65,11 @@ export class DocumentEmbeddingService {
     }
 
     const dimension = vectors[0]?.length ?? 0;
-    return { model: this.model, dimension, vectors };
+    return {
+      model: this.model,
+      dimension,
+      vectors,
+    };
   }
 
   private async embedTextsWithRetry(input: string[]): Promise<number[][]> {

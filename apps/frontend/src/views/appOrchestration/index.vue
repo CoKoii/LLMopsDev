@@ -2,9 +2,12 @@
 import { useAuthStore } from '@/stores/auth'
 import {
   getPluginApi,
+  getAiAppMemoryApi,
   listKnowledgeApi,
   listPluginCategoriesApi,
   listPluginsApi,
+  updateAiAppMemoryApi,
+  type AppChatMemory,
   type AppKnowledgeCitation,
   type AppKnowledgeRecallSettings,
   type AppPluginOperationSettings,
@@ -92,6 +95,11 @@ const knowledgeModalOpen = ref(false)
 const knowledgeSettingsOpen = ref(false)
 const publishHistoryOpen = ref(false)
 const promptOptimizeOpen = ref(false)
+const memoryModalOpen = ref(false)
+const memoryLoading = ref(false)
+const memorySaving = ref(false)
+const memoryRecord = ref<AppChatMemory>()
+const memoryDraft = ref('')
 const promptOptimizeSource = ref('')
 const promptOptimizeResult = ref('')
 const chatPreviewRef = ref<InstanceType<typeof DebugPreviewPanel>>()
@@ -398,6 +406,8 @@ function formatDuration(value: number) {
 }
 
 function formatTokens(value: number) {
+  if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(2))}M`
+  if (value >= 10_000) return `${Number((value / 1_000).toFixed(1))}K`
   return value.toLocaleString('en-US')
 }
 
@@ -407,6 +417,32 @@ function formatMessageMeta(elapsedMs: number, tokens?: number) {
     parts.push(`${formatTokens(tokens)} Tokens`)
   }
   return parts.join(' · ')
+}
+
+async function openMemoryModal() {
+  if (!toggleSettings.longTermMemory) return
+  memoryModalOpen.value = true
+  memoryLoading.value = true
+  try {
+    memoryRecord.value = await getAiAppMemoryApi(appId.value)
+    memoryDraft.value = memoryRecord.value.content
+  } finally {
+    memoryLoading.value = false
+  }
+}
+
+async function saveMemory() {
+  memorySaving.value = true
+  try {
+    memoryRecord.value = await updateAiAppMemoryApi(appId.value, {
+      content: memoryDraft.value,
+    })
+    memoryDraft.value = memoryRecord.value.content
+    memoryModalOpen.value = false
+    message.success('长期记忆已保存')
+  } finally {
+    memorySaving.value = false
+  }
 }
 
 function createAssistantAvatar() {
@@ -939,8 +975,9 @@ onMounted(() => {
           :chat-roles="chatRoles"
           :attachments="attachments"
           :responding="responding"
+          :show-memory-button="toggleSettings.longTermMemory"
           @clear-chat="clearChat"
-          @open-memory="openPublishHistory"
+          @open-memory="openMemoryModal"
           @submit-suggested="submitSuggestedPrompt"
           @upload-files="uploadFiles"
           @remove-attachment="removeAttachment"
@@ -1041,6 +1078,25 @@ onMounted(() => {
       :format-date-time="formatDateTime"
       @restore="restoreVersion"
     />
+
+    <AppModal
+      v-model:open="memoryModalOpen"
+      width="62rem"
+      title="长期记忆"
+      ok-text="更新记忆"
+      cancel-text="取消"
+      :confirm-loading="memorySaving"
+      @ok="saveMemory"
+    >
+      <div class="memory-modal">
+        <TextArea
+          v-model:value="memoryDraft"
+          :rows="8"
+          :disabled="memoryLoading"
+          placeholder="输入或编辑长期记忆"
+        />
+      </div>
+    </AppModal>
 
     <PromptOptimizeModal
       ref="promptOptimizeModalRef"

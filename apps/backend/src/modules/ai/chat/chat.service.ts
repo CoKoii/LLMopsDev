@@ -1,4 +1,4 @@
-import { AIMessage, type BaseMessageLike } from "@langchain/core/messages";
+import { type BaseMessageLike } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import {
   BadRequestException,
@@ -17,12 +17,15 @@ import {
   type AppKnowledgeRecallItem,
   KnowledgeService,
 } from "../knowledge/knowledge.service";
+import { getAiMessageTokens } from "../knowledge/document-parser/document-multimodal-extraction.service";
 import {
   type AiAppKnowledgeRecallSettings,
   type AiAppVersionConfig,
 } from "../app/entities/app-version.entity";
 import { AiRuntimeService } from "./ai-runtime.service";
 import { ChatAttachmentService } from "./chat-attachment.service";
+import { ChatMemoryQueueService } from "./chat-memory-queue.service";
+import { ChatMemoryService } from "./chat-memory.service";
 import {
   CHAT_MESSAGE_ROLE,
   CHAT_MESSAGE_STATUS,
@@ -104,6 +107,9 @@ type AttachmentCitation = {
   messageId: number;
   fileId: number;
   fileName: string;
+  displayLabel?: string;
+  duplicateOfLabel?: string | null;
+  queries?: string[];
   chunkIndex: number;
   score: number;
   text: string;
@@ -120,6 +126,14 @@ type KnowledgeConfig = {
   ids: number[];
   settings: AiAppKnowledgeRecallSettings;
 };
+type TokenUsageTracker = {
+  add: (value: number | undefined) => void;
+  total: () => number | undefined;
+};
+type StructuredOutputWithRaw<T> = {
+  parsed: T;
+  raw: unknown;
+};
 
 @Injectable()
 export class ChatService {
@@ -133,6 +147,8 @@ export class ChatService {
     private readonly aiRuntimeService: AiRuntimeService,
     private readonly knowledgeService: KnowledgeService,
     private readonly chatAttachmentService: ChatAttachmentService,
+    private readonly chatMemoryService: ChatMemoryService,
+    private readonly chatMemoryQueueService: ChatMemoryQueueService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -205,6 +221,7 @@ export class ChatService {
   private async rewriteKnowledgeQueries(
     message: string,
     history: ChatMessage[] = [],
+    tokenUsage?: TokenUsageTracker,
   ) {
     const fallback = message.trim();
     if (!fallback) return [];
@@ -215,13 +232,15 @@ export class ChatService {
         KnowledgeQueryRewriteSchema,
         {
           name: "KnowledgeQueryRewrite",
+          includeRaw: true,
         },
       );
-      const response = await structuredModel.invoke(
+      const response = (await structuredModel.invoke(
         this.createKnowledgeQueryRewriteMessages(fallback, history),
-      );
+      )) as StructuredOutputWithRaw<z.infer<typeof KnowledgeQueryRewriteSchema>>;
+      tokenUsage?.add(getAiMessageTokens(response.raw));
       const queries = this.normalizeKnowledgeQueries(
-        response.queries,
+        response.parsed.queries,
         fallback,
       );
 
@@ -358,20 +377,23 @@ export class ChatService {
   private async createQuestionSuggestions(
     userMessage: string,
     assistantMessage: string,
+    tokenUsage?: TokenUsageTracker,
   ): Promise<string[]> {
     const model = this.createStructuredOutputModel(1.5);
     const structuredModel = model.withStructuredOutput(
       QuestionSuggestionsSchema,
       {
         name: "QuestionSuggestions",
+        includeRaw: true,
       },
     );
-    const response = await structuredModel.invoke([
+    const response = (await structuredModel.invoke([
       ["system", QUESTION_SUGGESTION_SYSTEM_PROMPT],
       ["human", `用户刚才说：${userMessage}\nAI刚才回复：${assistantMessage}`],
-    ]);
+    ])) as StructuredOutputWithRaw<z.infer<typeof QuestionSuggestionsSchema>>;
+    tokenUsage?.add(getAiMessageTokens(response.raw));
 
-    return response.suggestions;
+    return response.parsed.suggestions;
   }
 
   private createPromptOptimizeMessages(
@@ -395,14 +417,18 @@ export class ChatService {
   }
 
   private getTotalTokens(messages: BaseMessageLike[]) {
-    const tokens = messages
-      .filter((message) => AIMessage.isInstance(message))
-      .reduce(
-        (total, message) => total + (message.usage_metadata?.total_tokens ?? 0),
-        0,
-      );
+    return getAiMessageTokens(messages) || undefined;
+  }
 
-    return tokens || undefined;
+  private createTokenUsageTracker(): TokenUsageTracker {
+    let total = 0;
+
+    return {
+      add: (value) => {
+        if (value && Number.isFinite(value)) total += value;
+      },
+      total: () => total || undefined,
+    };
   }
 
   private createSessionTitle(message: string) {
@@ -583,6 +609,7 @@ export class ChatService {
     const startedAt = Date.now();
     let output = "";
     let assistantMessage: ChatMessage | undefined;
+    const tokenUsage = this.createTokenUsageTracker();
 
     try {
       const content = message.trim();
@@ -619,44 +646,76 @@ export class ChatService {
           message: userMessage,
           fileIds: attachmentFileIds,
           userId,
-          config: draft.config,
         });
+      tokenUsage.add(currentAttachmentContext.tokens);
       const history = await this.loadRecentHistory({
         sessionId: session.id,
         beforeMessageId: userMessage.id,
         limit: this.resolveContextMessageLimit(draft.config),
       });
       const knowledgeConfig = this.resolveKnowledgeConfig(draft.config);
-      const knowledgeQueries = knowledgeConfig.ids.length
-        ? await this.rewriteKnowledgeQueries(content, history)
+      const longTermMemoryEnabled =
+        draft.config.toggles?.longTermMemory ?? false;
+      const [longTermMemoryContext, sessionSummaryContext] =
+        longTermMemoryEnabled
+          ? await Promise.all([
+              this.chatMemoryService.createLongTermMemoryContext(appId, userId),
+              this.chatMemoryService.createSessionSummaryContext(session.id),
+            ])
+          : ["", ""];
+      const hasHistoricalAttachments =
+        await this.chatAttachmentService.hasRecallableChunks(session.id, {
+          excludeMessageId: userMessage.id,
+        });
+      const recallQueries = knowledgeConfig.ids.length || hasHistoricalAttachments
+        ? await this.rewriteKnowledgeQueries(content, history, tokenUsage)
         : [content];
-      const historicalAttachmentRecall =
-        await this.chatAttachmentService.createRecallContext(
-          session.id,
-          content,
-          { excludeMessageId: userMessage.id },
-        );
-      const attachmentItems = [
-        ...currentAttachmentContext.items,
-        ...historicalAttachmentRecall.items,
-      ].map((item, index) => ({ ...item, id: index + 1 }));
-      const recalledItems: KnowledgeRecallItemWithQuery[] = knowledgeConfig.ids
-        .length
-        ? (
-            await Promise.all(
-              knowledgeQueries.map(async (query) => {
-                const items = await this.knowledgeService.recallForApp({
+      const [historicalAttachmentRecall, recalledItems] = await Promise.all([
+        hasHistoricalAttachments
+          ? Promise.all(
+              recallQueries.map((query) =>
+                this.chatAttachmentService.createRecallContext(
+                  session.id,
+                  query,
+                  {
+                    excludeMessageId: userMessage.id,
+                  },
+                ),
+              ),
+            ).then((results) => ({
+              context: results
+                .map((result) => result.context)
+                .filter(Boolean)
+                .join("\n\n"),
+              items: results.flatMap((result) => result.items),
+              tokens: results.reduce((total, result) => total + (result.tokens ?? 0), 0),
+            }))
+          : Promise.resolve({
+              context: "",
+              items: [],
+              tokens: 0,
+            }),
+        knowledgeConfig.ids.length
+          ? Promise.all(
+              recallQueries.map(async (query) => {
+                const result = await this.knowledgeService.recallForAppWithUsage({
                   knowledgeIds: knowledgeConfig.ids,
                   settings: knowledgeConfig.settings,
                   query,
                   userId,
                 });
+                tokenUsage.add(result.tokens);
 
-                return items.map((item) => ({ ...item, query }));
+                return result.items.map((item) => ({ ...item, query }));
               }),
-            )
-          ).flat()
-        : [];
+            ).then((items) => items.flat())
+          : Promise.resolve([] as KnowledgeRecallItemWithQuery[]),
+      ]);
+      tokenUsage.add(historicalAttachmentRecall.tokens);
+      const attachmentItems = [
+        ...currentAttachmentContext.items,
+        ...historicalAttachmentRecall.items,
+      ].map((item, index) => ({ ...item, id: index + 1 }));
       const contextItemLimit =
         this.resolveKnowledgeContextItemLimit(knowledgeConfig);
       const { context: knowledgeContext, citations } =
@@ -665,7 +724,7 @@ export class ChatService {
       if (citations.length) {
         yield this.sse(
           {
-            query: knowledgeQueries.join("；"),
+            query: recallQueries.join("；"),
             items: citations,
           },
           "knowledge",
@@ -674,7 +733,7 @@ export class ChatService {
       if (attachmentItems.length) {
         yield this.sse(
           {
-            query: content,
+            query: recallQueries.join("；"),
             items: attachmentItems,
           },
           "attachments",
@@ -686,6 +745,8 @@ export class ChatService {
         model,
         userId,
         {
+          longTermMemoryContext,
+          sessionSummaryContext,
           knowledgeContext,
           currentAttachmentContext: currentAttachmentContext.context,
           recalledAttachmentContext: historicalAttachmentRecall.context,
@@ -702,12 +763,31 @@ export class ChatService {
         }
       }
       const result = await run.output;
-      const tokens = this.getTotalTokens(result.messages);
+      tokenUsage.add(this.getTotalTokens(result.messages));
+
+      if (draft.config.toggles?.questionSuggestions) {
+        let suggestions: string[] = [];
+        try {
+          suggestions = await this.createQuestionSuggestions(
+            content,
+            output,
+            tokenUsage,
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          const stack = error instanceof Error ? error.stack : undefined;
+
+          this.logger.warn(`用户问题建议生成失败: ${message}`, stack);
+        }
+        yield this.sse({ items: suggestions }, "suggestions");
+      }
+
       await this.messageRepository.update(assistantMessage.id, {
         content: output,
         status: CHAT_MESSAGE_STATUS.COMPLETED,
         elapsedMs: Date.now() - startedAt,
-        tokens,
+        tokens: tokenUsage.total(),
         updatedBy: userId,
       });
       await this.sessionRepository.update(session.id, {
@@ -718,23 +798,17 @@ export class ChatService {
       yield this.sse(
         {
           elapsedMs: Date.now() - startedAt,
-          tokens,
+          tokens: tokenUsage.total(),
         },
         "meta",
       );
 
-      if (draft.config.toggles?.questionSuggestions) {
-        let suggestions: string[] = [];
-        try {
-          suggestions = await this.createQuestionSuggestions(content, output);
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          const stack = error instanceof Error ? error.stack : undefined;
-
-          this.logger.warn(`用户问题建议生成失败: ${message}`, stack);
-        }
-        yield this.sse({ items: suggestions }, "suggestions");
+      if (longTermMemoryEnabled) {
+        await this.chatMemoryQueueService.enqueueRefresh({
+          appId,
+          userId,
+          sessionId: session.id,
+        });
       }
 
       yield SSE_DONE;

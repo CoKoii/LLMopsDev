@@ -49,6 +49,7 @@ import {
   type AppKnowledgeRecallItem,
   type AppKnowledgeRecallSettings,
 } from "./knowledge-recall.service";
+import { estimateTokens } from "./token-estimator";
 
 export type {
   AppKnowledgeRecallItem,
@@ -57,13 +58,6 @@ export type {
 
 const escapeLikeValue = (value: string) =>
   value.replace(/[\\%_]/g, (match) => `\\${match}`);
-
-const estimateChunkTokens = (text: string) => {
-  const cjkCount = text.match(/[\u3400-\u9fff]/g)?.length ?? 0;
-  const words = text.match(/[A-Za-z0-9_./:-]+/g)?.length ?? 0;
-  const other = Math.max(0, text.length - cjkCount);
-  return Math.max(1, Math.ceil(cjkCount + words * 1.25 + other * 0.08));
-};
 
 const compactChunkText = (value: string) => value.replace(/\s+/g, " ").trim();
 
@@ -268,7 +262,7 @@ export class KnowledgeService {
       sourceBlockIds: [],
       blockTypes: ["paragraph"],
       pages: [],
-      tokenCount: estimateChunkTokens(text),
+      tokenCount: estimateTokens(text),
       characterCount: text.length,
       overlapFromPrevious: false,
       keywords,
@@ -423,6 +417,15 @@ export class KnowledgeService {
   }): Promise<AppKnowledgeRecallItem[]> {
     return this.knowledgeRecallService.recallForApp(params);
   }
+
+  async recallForAppWithUsage(params: {
+    knowledgeIds: number[];
+    settings?: AppKnowledgeRecallSettings;
+    query: string;
+    userId: number;
+  }) {
+    return this.knowledgeRecallService.recallForAppWithUsage(params);
+  }
   // --------------------------------------------------------------------------------------------------
 
   // --------------------------------------------------------------------------------------------------
@@ -549,7 +552,7 @@ export class KnowledgeService {
     if (nextText !== undefined) {
       if (!nextText) throw new BadRequestException("片段内容不能为空");
       chunk.text = nextText;
-      chunk.tokenCount = estimateChunkTokens(nextText);
+      chunk.tokenCount = estimateTokens(nextText);
       chunk.characterCount = nextText.length;
       chunk.metadata = {
         ...chunk.metadata,

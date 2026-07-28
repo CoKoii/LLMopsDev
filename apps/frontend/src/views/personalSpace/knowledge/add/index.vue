@@ -37,7 +37,25 @@ const customConfig = reactive({
   removeUrls: false,
 })
 
-const acceptedExtensions = ['pdf', 'txt', 'docx', 'md', 'json', 'csv', 'html', 'htm', 'xlsx', 'xls']
+const acceptedExtensions = [
+  'pdf',
+  'txt',
+  'doc',
+  'docx',
+  'md',
+  'json',
+  'csv',
+  'html',
+  'htm',
+  'xlsx',
+  'xls',
+  'png',
+  'jpg',
+  'jpeg',
+  'webp',
+  'gif',
+  'bmp',
+]
 const maxFileCount = 10
 const maxFileSize = 10 * 1024 * 1024
 let disposed = false
@@ -344,7 +362,7 @@ onUnmounted(() => {
             <Plus class="drop-zone__icon" />
             <span>点击或拖拽文件到此处上传</span>
             <small
-              >支持PDF、TXT、DOCX、MD、JSON、CSV、HTML、XLSX，最多10个文件，每个不超过10MB</small
+              >支持PDF、TXT、DOC、DOCX、MD、JSON、CSV、HTML、XLSX和图片，最多10个文件，每个不超过10MB</small
             >
           </button>
           <input
@@ -352,7 +370,7 @@ onUnmounted(() => {
             class="hidden-file-input"
             type="file"
             multiple
-            accept=".pdf,.txt,.docx,.md,.json,.csv,.html,.htm,.xlsx,.xls"
+            accept=".pdf,.txt,.doc,.docx,.md,.json,.csv,.html,.htm,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,.bmp,image/*"
             @change="handleFileInputChange"
           />
 

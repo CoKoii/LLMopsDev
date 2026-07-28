@@ -37,6 +37,7 @@ export interface DocumentParserResult {
   parser: string;
   blocks: ParsedDocumentBlock[];
   warnings?: string[];
+  tokens?: number;
 }
 
 export interface DocumentFormatParser {
@@ -57,5 +58,6 @@ export interface ParsedDocument {
     parser: string;
     blockCount: number;
     warnings?: string[];
+    tokens?: number;
   };
 }

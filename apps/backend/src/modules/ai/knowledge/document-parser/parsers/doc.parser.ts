@@ -17,6 +17,7 @@ export class DocDocumentParser implements DocumentFormatParser {
       format: "doc",
       parser: "word-extractor",
       blocks: createParagraphBlocks(document.getBody()),
+      warnings: ["老版 .doc 格式仅解析正文文本；如需解析内嵌图片，请转换为 .docx 后上传"],
     };
   }
 }

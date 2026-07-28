@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   Header,
   HttpCode,
   HttpStatus,
@@ -8,17 +9,23 @@ import {
   ParseIntPipe,
   Post,
   StreamableFile,
+  Put,
 } from "@nestjs/common";
 import { SkipResponseWrap } from "../../../common/http/skip-response-wrap.decorator";
 import type { AuthUser } from "../../../common/auth/auth-user";
 import { CurrentUser } from "../../../common/auth/current-user.decorator";
 import { ChatService } from "./chat.service";
+import { ChatMemoryService } from "./chat-memory.service";
 import { DebugAppChatDto } from "./dto/debug-app-chat.dto";
 import { OptimizeAppPromptDto } from "./dto/optimize-app-prompt.dto";
+import { UpdateChatMemoryDto } from "./dto/update-chat-memory.dto";
 
 @Controller("ai/apps")
 export class ChatController {
-  constructor(private readonly chatService: ChatService) {}
+  constructor(
+    private readonly chatService: ChatService,
+    private readonly chatMemoryService: ChatMemoryService,
+  ) {}
 
   // -------------------------
   // 流式调试AI应用草稿
@@ -81,6 +88,33 @@ export class ChatController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.chatService.optimizePrompt(id, dto.prompt, user.userId);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 获取AI应用长期记忆
+  @Get(":id/memory")
+  getMemory(
+    @Param("id", ParseIntPipe) id: number,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.chatMemoryService.getMemory(id, user.userId);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 更新AI应用长期记忆
+  @Put(":id/memory")
+  updateMemory(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: UpdateChatMemoryDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.chatMemoryService.updateManualMemory(
+      id,
+      user.userId,
+      dto.content,
+    );
   }
   // -------------------------
 }

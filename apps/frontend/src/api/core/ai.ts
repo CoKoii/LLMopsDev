@@ -80,6 +80,9 @@ export interface AppAttachmentCitation {
   messageId: number
   fileId: number
   fileName: string
+  displayLabel?: string
+  duplicateOfLabel?: string | null
+  queries?: string[]
   chunkIndex: number
   score: number
   text: string
@@ -143,6 +146,13 @@ export interface AiAppVersionItem {
   knowledges?: AppVersionKnowledgeItem[]
   publishedAt?: string | null
   createdAt?: string
+  updatedAt?: string
+}
+
+export interface AppChatMemory {
+  id: number
+  content: string
+  generatedAt?: string | null
   updatedAt?: string
 }
 
@@ -468,6 +478,17 @@ export const optimizeAiAppPromptApi = async (
   payload: { prompt: string },
 ): Promise<{ prompt: string }> => {
   return request.post(`/ai/apps/${appId}/prompt/optimize`, payload, { timeout: 60000 })
+}
+
+export const getAiAppMemoryApi = async (appId: number): Promise<AppChatMemory> => {
+  return request.get(`/ai/apps/${appId}/memory`)
+}
+
+export const updateAiAppMemoryApi = async (
+  appId: number,
+  payload: { content: string },
+): Promise<AppChatMemory> => {
+  return request.put(`/ai/apps/${appId}/memory`, payload)
 }
 
 type StreamAiAppPromptOptimizeParams = {

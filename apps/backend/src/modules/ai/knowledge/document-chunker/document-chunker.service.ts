@@ -5,6 +5,7 @@ import type {
 } from "../document-parser/document-parser.types";
 import { extractChunkKeywords } from "../document-keyword-extractor";
 import type { KnowledgeDocumentChunkConfig } from "../knowledge-document-process.types";
+import { estimateTokens } from "../token-estimator";
 import type {
   DocumentChunkDraft,
   DocumentChunkerInput,
@@ -35,13 +36,6 @@ const compact = (value: string) => value.replace(/\s+/g, " ").trim();
 
 const escapeRegExp = (value: string) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-const estimateTokens = (text: string) => {
-  const cjkCount = text.match(/[\u3400-\u9fff]/g)?.length ?? 0;
-  const words = text.match(/[A-Za-z0-9_./:-]+/g)?.length ?? 0;
-  const other = Math.max(0, text.length - cjkCount);
-  return Math.max(1, Math.ceil(cjkCount + words * 1.25 + other * 0.08));
-};
 
 const collectHeadingPath = (
   currentHeadingPath: string[],

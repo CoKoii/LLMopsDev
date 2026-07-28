@@ -162,8 +162,19 @@ export class KnowledgeRecallService implements OnModuleInit {
     query: string;
     userId: number;
   }): Promise<AppKnowledgeRecallItem[]> {
+    return (await this.recallForAppWithUsage(params)).items;
+  }
+
+  async recallForAppWithUsage(params: {
+    knowledgeIds: number[];
+    settings?: AppKnowledgeRecallSettings;
+    query: string;
+    userId: number;
+  }): Promise<{ items: AppKnowledgeRecallItem[]; tokens: number }> {
     const query = params.query.trim();
-    if (!query || !params.knowledgeIds.length) return [];
+    if (!query || !params.knowledgeIds.length) {
+      return { items: [], tokens: 0 };
+    }
 
     const knowledgeIds = [...new Set(params.knowledgeIds)].slice(0, 5);
     const knowledges = await this.knowledgeRepository.find({
@@ -181,8 +192,8 @@ export class KnowledgeRecallService implements OnModuleInit {
     const needsQueryVector =
       accessibleKnowledgeIds.length > 0 &&
       (strategy === "hybrid" || strategy === "vector");
-    const queryVector = needsQueryVector
-      ? await this.createQueryVector(query)
+    const queryEmbedding = needsQueryVector
+      ? await this.createQueryEmbedding(query)
       : undefined;
     const results = (
       await Promise.all(
@@ -194,7 +205,7 @@ export class KnowledgeRecallService implements OnModuleInit {
             knowledgeId,
             query,
             params.settings,
-            { queryVector },
+            { queryVector: queryEmbedding?.vector },
           );
           this.scheduleRecallCountIncrement(knowledgeId, recallResult.items);
 
@@ -207,14 +218,23 @@ export class KnowledgeRecallService implements OnModuleInit {
       )
     ).flat();
 
-    return results
-      .sort((left, right) => right.score - left.score)
-      .slice(0, limit);
+    return {
+      items: results
+        .sort((left, right) => right.score - left.score)
+        .slice(0, limit),
+      tokens: 0,
+    };
   }
 
   private async createQueryVector(query: string) {
+    return (await this.createQueryEmbedding(query)).vector;
+  }
+
+  private async createQueryEmbedding(query: string) {
     const embeddingResult = await this.documentEmbeddingService.embed([query]);
-    return embeddingResult.vectors[0] ?? [];
+    return {
+      vector: embeddingResult.vectors[0] ?? [],
+    };
   }
 
   private async searchVectorRecall(

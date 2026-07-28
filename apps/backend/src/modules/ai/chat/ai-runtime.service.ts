@@ -22,9 +22,9 @@ const DEBUG_SYSTEM_PROMPT = [
   "通用知识可以直接回答；工具结果优先于自身知识。",
   "工具不可用或信息不足时，不要捏造信息。",
 ].join("\n");
-const MULTIMODAL_EXTRACTION_MODEL = "gemini-2.5-flash-lite";
-const TEXT_ONLY_MULTIMODAL_HOSTS = new Set(["api.deepseek.com"]);
 type CreateAgentOptions = {
+  longTermMemoryContext?: string;
+  sessionSummaryContext?: string;
   knowledgeContext?: string;
   currentAttachmentContext?: string;
   recalledAttachmentContext?: string;
@@ -73,36 +73,6 @@ export class AiRuntimeService {
     return llm;
   }
 
-  private isKnownTextOnlyMultimodalEndpoint(llm: Llm) {
-    try {
-      const host = new URL(llm.url).host.toLowerCase();
-      if (TEXT_ONLY_MULTIMODAL_HOSTS.has(host)) return true;
-    } catch {
-      return false;
-    }
-
-    return llm.provider.toLowerCase().includes("deepseek");
-  }
-
-  private async resolveMultimodalLlm(config: AiAppVersionConfig) {
-    const primary = await this.resolveLlm(config);
-    if (!this.isKnownTextOnlyMultimodalEndpoint(primary)) return primary;
-
-    const alternatives = await this.llmRepository.find({
-      where: { modelName: primary.modelName },
-      order: { id: "DESC" },
-    });
-    const compatible = alternatives.find(
-      (llm) =>
-        llm.id !== primary.id && !this.isKnownTextOnlyMultimodalEndpoint(llm),
-    );
-    if (compatible) return compatible;
-
-    throw new BadRequestException(
-      `当前模型通道 ${primary.provider}/${primary.modelName} 不支持图片解析，请配置支持多模态的模型通道`,
-    );
-  }
-
   async createModel(config: AiAppVersionConfig): Promise<ChatOpenAI> {
     const llm = await this.resolveLlm(config);
     const settings = config.modelSettings ?? {};
@@ -120,22 +90,24 @@ export class AiRuntimeService {
     });
   }
 
-  async createMultimodalExtractionModel(config: AiAppVersionConfig) {
-    const llm = await this.resolveMultimodalLlm(config);
-
-    return new ChatOpenAI({
-      apiKey: llm.apiKey,
-      model: MULTIMODAL_EXTRACTION_MODEL,
-      maxRetries: 1,
-      temperature: 0,
-      configuration: { baseURL: llm.url },
-    });
-  }
-
   private createSystemPrompt(
     config: AiAppVersionConfig,
     options: CreateAgentOptions = {},
   ) {
+    const longTermMemoryInstruction = options.longTermMemoryContext
+      ? [
+          "以下是当前用户在此AI应用中的长期记忆。",
+          "这些内容用于理解用户稳定偏好和长期背景；如果与当前问题冲突，以用户当前明确要求为准。",
+          options.longTermMemoryContext,
+        ].join("\n")
+      : "";
+    const sessionSummaryInstruction = options.sessionSummaryContext
+      ? [
+          "以下是当前会话较早内容的摘要，用于补充最近对话上下文。",
+          "摘要可能不完整；涉及精确细节时，优先参考最近对话、附件和知识库内容。",
+          options.sessionSummaryContext,
+        ].join("\n")
+      : "";
     const knowledgeInstruction = options.knowledgeContext
       ? [
           "以下是知识库召回内容，请优先基于这些内容回答。",
@@ -163,6 +135,8 @@ export class AiRuntimeService {
     return [
       DEBUG_SYSTEM_PROMPT,
       config.prompt?.trim(),
+      longTermMemoryInstruction,
+      sessionSummaryInstruction,
       knowledgeInstruction,
       currentAttachmentInstruction,
       recalledAttachmentInstruction,
