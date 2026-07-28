@@ -242,7 +242,7 @@ export class ChatMemoryService {
   }
 
   private resolveSummaryThresholdMessages(contextRounds?: number) {
-    const rounds = Math.max(8, Math.floor((contextRounds ?? 10) / 2));
+    const rounds = Math.max(1, Math.floor(contextRounds ?? 10));
     return rounds * 2;
   }
 
