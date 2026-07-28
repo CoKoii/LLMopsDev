@@ -62,11 +62,6 @@ export const validationSchema = Joi.object({
     then: Joi.string().trim().required(),
     otherwise: Joi.string().allow("").required(),
   }),
-  [ENV.AI_RERANK_MODEL]: Joi.when(ENV.AI_ENABLED, {
-    is: true,
-    then: Joi.string().trim().required(),
-    otherwise: Joi.string().allow("").required(),
-  }),
   [ENV.AI_TEMPERATURE]: Joi.number().min(0).max(2).required(),
   [ENV.MAIL_ENABLED]: Joi.boolean().truthy("true").falsy("false").required(),
   [ENV.MAIL_HOST]: Joi.when(ENV.MAIL_ENABLED, {

@@ -8,7 +8,6 @@ import { DocumentChunkerService } from "./document-chunker/document-chunker.serv
 import { DocumentEmbeddingService } from "./document-embedding/document-embedding.service";
 import { DocumentEnhancerService } from "./document-enhancer/document-enhancer.service";
 import { DocumentParserService } from "./document-parser/document-parser.service";
-import { DocumentRerankerService } from "./document-reranker/document-reranker.service";
 import { DocumentVectorStoreService } from "./document-vector-store/document-vector-store.service";
 import { KnowledgeDocumentChunk } from "./entities/knowledge-document-chunk.entity";
 import { KnowledgeDocument } from "./entities/knowledge-document.entity";
@@ -34,7 +33,6 @@ import { KnowledgeService } from "./knowledge.service";
     DocumentEnhancerService,
     DocumentChunkerService,
     DocumentEmbeddingService,
-    DocumentRerankerService,
     DocumentVectorStoreService,
     DocumentProcessQueueService,
     DocumentProcessProcessor,

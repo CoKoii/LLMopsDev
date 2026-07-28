@@ -7,7 +7,6 @@ import {
 import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
 import { DataSource, In, Repository } from "typeorm";
 import { DocumentEmbeddingService } from "./document-embedding/document-embedding.service";
-import { DocumentRerankerService } from "./document-reranker/document-reranker.service";
 import { DocumentVectorStoreService } from "./document-vector-store/document-vector-store.service";
 import { RecallTestDto } from "./dto/recall-test.dto";
 import { KnowledgeDocumentChunk } from "./entities/knowledge-document-chunk.entity";
@@ -67,7 +66,6 @@ type KnowledgeRecallExecutionOptions = {
 };
 
 const RRF_K = 60;
-const MAX_RERANK_CANDIDATES = 50;
 const DEFAULT_TEXT_SEARCH_TERMS_LIMIT = 24;
 
 const clampScore = (score: number) =>
@@ -114,30 +112,6 @@ const createTsQuery = (terms: string[]) =>
     .map((term) => `${term}:*`)
     .join(" | ");
 
-const normalizeRerankScores = (
-  results: Array<{ index: number; score: number }>,
-) => {
-  const validResults = results.filter((item) => Number.isFinite(item.score));
-  if (!validResults.length) return new Map<number, number>();
-
-  const scores = validResults.map((item) => item.score);
-  const minScore = Math.min(...scores);
-  const maxScore = Math.max(...scores);
-  const isUnitRange = minScore >= 0 && maxScore <= 1;
-  const range = maxScore - minScore;
-
-  return new Map(
-    validResults.map((item) => [
-      item.index,
-      isUnitRange
-        ? clampScore(item.score)
-        : range
-          ? clampScore((item.score - minScore) / range)
-          : clampScore(item.score),
-    ]),
-  );
-};
-
 @Injectable()
 export class KnowledgeRecallService implements OnModuleInit {
   private readonly logger = new Logger(KnowledgeRecallService.name);
@@ -152,7 +126,6 @@ export class KnowledgeRecallService implements OnModuleInit {
     @InjectRepository(KnowledgeDocumentChunk)
     private readonly chunkRepository: Repository<KnowledgeDocumentChunk>,
     private readonly documentEmbeddingService: DocumentEmbeddingService,
-    private readonly documentRerankerService: DocumentRerankerService,
     private readonly documentVectorStoreService: DocumentVectorStoreService,
   ) {}
 
@@ -388,40 +361,6 @@ export class KnowledgeRecallService implements OnModuleInit {
     });
   }
 
-  private async rerankCandidates(
-    query: string,
-    candidates: RecallCandidate[],
-  ): Promise<RecallCandidate[]> {
-    const candidatesForRerank = candidates.slice(0, MAX_RERANK_CANDIDATES);
-    if (candidatesForRerank.length <= 1) return candidates;
-
-    try {
-      const rerankResults = await this.documentRerankerService.rerank(
-        query,
-        candidatesForRerank.map((item) => item.chunk.text),
-      );
-      if (!rerankResults.length) return candidates;
-
-      const rerankScoreMap = normalizeRerankScores(rerankResults);
-
-      const rerankedCandidates = candidatesForRerank
-        .map((candidate, index) => ({
-          ...candidate,
-          score: rerankScoreMap.get(index) ?? candidate.score,
-        }))
-        .sort((left, right) => right.score - left.score);
-
-      return [
-        ...rerankedCandidates,
-        ...candidates.slice(MAX_RERANK_CANDIDATES),
-      ];
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`知识库 rerank 失败，回退到粗召回排序: ${message}`);
-      return candidates;
-    }
-  }
-
   private normalizeRecallSettings(settings: AppKnowledgeRecallSettings = {}) {
     const strategy = settings.strategy ?? "hybrid";
     const limit = Math.min(20, Math.max(1, Math.floor(settings.limit ?? 5)));
@@ -473,8 +412,7 @@ export class KnowledgeRecallService implements OnModuleInit {
     const resultSets = await Promise.all(recallTasks);
     const mergedMatches = this.mergeRecallResultSets(resultSets, recallLimit);
     const candidates = await this.loadCandidates(mergedMatches, knowledgeId);
-    const rerankedCandidates = await this.rerankCandidates(query, candidates);
-    const items = rerankedCandidates
+    const items = candidates
       .filter((item) => item.score >= minScore)
       .slice(0, limit)
       .map((item) => ({
