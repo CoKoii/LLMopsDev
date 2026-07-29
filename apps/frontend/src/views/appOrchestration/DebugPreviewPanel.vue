@@ -333,19 +333,21 @@ function getVoiceBubbleStyle(item: DebugChatDisplayMessage) {
   }
 }
 
-function getVoiceBars(item: DebugChatDisplayMessage) {
+function getVoiceBarCount(item: DebugChatDisplayMessage) {
   const width = getVoiceWidth(item)
   const ratio = (width - voiceBubbleMinWidthRem) / (voiceBubbleMaxWidthRem - voiceBubbleMinWidthRem)
-  const count = Math.round(9 + ratio * 13)
+  return Math.round(9 + ratio * 13)
+}
+
+function getVoiceBars(item: DebugChatDisplayMessage) {
   return Array.from(
-    { length: count },
-    (_, index) => voiceBarPattern[index % voiceBarPattern.length],
+    { length: getVoiceBarCount(item) },
+    (_, index) => voiceBarPattern[index % voiceBarPattern.length] ?? voiceBarPattern[0] ?? 12,
   )
 }
 
-function getVoiceBarClass(item: DebugChatDisplayMessage, index: number) {
+function getVoiceBarClass(item: DebugChatDisplayMessage) {
   return {
-    'is-played': isVoiceBarPlayed(item, index),
     'is-loading': item.audioGenerating || item.audioTranscribing,
   }
 }
@@ -357,9 +359,19 @@ function getAudioProgressRatio(item: DebugChatDisplayMessage) {
   return Math.min(1, Math.max(0, progress / duration))
 }
 
-function isVoiceBarPlayed(item: DebugChatDisplayMessage, index: number) {
-  const playedBars = Math.ceil(getAudioProgressRatio(item) * getVoiceBars(item).length)
-  return index < playedBars
+function getVoiceBarStyle(item: DebugChatDisplayMessage, height: number, index: number) {
+  return {
+    '--voice-bar-progress': `${getVoiceBarProgress(item, index) * 100}%`,
+    height: `${height}px`,
+    animationDelay: `${index * 0.04}s`,
+  }
+}
+
+function getVoiceBarProgress(item: DebugChatDisplayMessage, index: number) {
+  const bars = getVoiceBarCount(item)
+  if (!bars) return 0
+
+  return Math.min(1, Math.max(0, getAudioProgressRatio(item) * bars - index))
 }
 
 function handleAudioLoaded(item: DebugChatDisplayMessage, event: Event) {
@@ -726,8 +738,8 @@ defineExpose({ scrollToBottom })
                   <span
                     v-for="(height, index) in getVoiceBars(item)"
                     :key="index"
-                    :class="getVoiceBarClass(item, index)"
-                    :style="{ height: `${height}px`, animationDelay: `${index * 0.04}s` }"
+                    :class="getVoiceBarClass(item)"
+                    :style="getVoiceBarStyle(item, height, index)"
                   ></span>
                 </span>
                 <span v-if="item.ui.showVoiceStatus" class="voice-bubble__status">
@@ -1082,6 +1094,10 @@ defineExpose({ scrollToBottom })
   box-shadow: none !important;
 }
 
+:global(.app-orchestration__preview .ant-bubble-footer) {
+  margin-top: 0.8rem;
+}
+
 :global(.voice-message-row) {
   display: flex;
   align-items: center;
@@ -1099,8 +1115,8 @@ defineExpose({ scrollToBottom })
   min-width: 12rem;
   max-width: 22rem;
   height: 4rem;
-  gap: 1rem;
-  padding: 0 1.2rem;
+  gap: 0.65rem;
+  padding: 0 0.9rem 0 1.1rem;
   color: #111827;
   background: #f1f2f4;
   border: 0;
@@ -1122,23 +1138,24 @@ defineExpose({ scrollToBottom })
   align-items: center;
   justify-content: center;
   flex: 1 1 auto;
-  gap: 0.34rem;
+  gap: 0.32rem;
   min-width: 0;
 }
 
 :global(.voice-bubble__wave span) {
+  --voice-bar-progress: 0%;
+
   display: block;
   width: 0.34rem;
   flex: 0 0 0.34rem;
-  background: #d1d5db;
+  background-color: #d1d5db;
+  background-image: linear-gradient(#4b5563, #4b5563);
+  background-repeat: no-repeat;
+  background-size: var(--voice-bar-progress) 100%;
   border-radius: 999px;
   transition:
     height 0.16s ease,
-    background-color 0.16s ease;
-}
-
-:global(.voice-bubble__wave span.is-played) {
-  background: #4b5563;
+    background-size 0.22s linear;
 }
 
 :global(.voice-bubble__wave span.is-loading) {
@@ -1146,7 +1163,7 @@ defineExpose({ scrollToBottom })
 }
 
 :global(.voice-bubble__time) {
-  flex: 0 0 4.2rem;
+  flex: 0 0 3.4rem;
   margin-left: auto;
   color: #111827;
   font-size: 1.3rem;
