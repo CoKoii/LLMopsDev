@@ -48,6 +48,15 @@ const routes: RouteRecordRaw[] = [
           title: '多模态',
         },
       },
+      {
+        name: 'AiRerankModels',
+        path: 'rerank-models',
+        component: () => import('#/views/ai/model-management/rerank.vue'),
+        meta: {
+          icon: 'lucide:arrow-down-up',
+          title: 'Rerank',
+        },
+      },
     ],
   },
 ];

@@ -6,6 +6,7 @@ export enum LlmUsageType {
   STRUCTURED = "structured",
   EMBEDDING = "embedding",
   MULTIMODAL = "multimodal",
+  RERANK = "rerank",
 }
 
 export enum LlmTestStatus {

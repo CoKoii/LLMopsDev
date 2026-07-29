@@ -289,7 +289,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
       const [app, draft, llmResult] = await Promise.all([
         getAiAppApi(appId.value),
         getAiAppDraftApi(appId.value),
-        listLlmsApi({ page: 1, pageSize: 100 }),
+        listLlmsApi({ page: 1, pageSize: 100, usageType: 'chat' }),
       ])
       appDetail.value = app
       llms.value = llmResult.items

@@ -7,6 +7,7 @@ import {
 import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
 import { DataSource, In, Repository } from "typeorm";
 import { DocumentEmbeddingService } from "./document-embedding/document-embedding.service";
+import { DocumentRerankService } from "./document-rerank/document-rerank.service";
 import { DocumentVectorStoreService } from "./document-vector-store/document-vector-store.service";
 import type { DocumentChunkMetadata } from "./document-chunker/document-chunker.types";
 import { RecallTestDto } from "./dto/recall-test.dto";
@@ -24,6 +25,7 @@ interface RecallMatch {
 
 interface RecallCandidate extends RecallMatch {
   chunk: KnowledgeDocumentChunk;
+  rerankScore?: number;
 }
 
 interface RecallAccumulator {
@@ -51,6 +53,7 @@ export interface AppKnowledgeRecallItem {
   documentName: string;
   chunkIndex: number;
   score: number;
+  rerankScore?: number;
   source: KnowledgeRecallStrategy;
   text: string;
   searchText: string;
@@ -127,6 +130,7 @@ export class KnowledgeRecallService implements OnModuleInit {
     @InjectRepository(KnowledgeDocumentChunk)
     private readonly chunkRepository: Repository<KnowledgeDocumentChunk>,
     private readonly documentEmbeddingService: DocumentEmbeddingService,
+    private readonly documentRerankService: DocumentRerankService,
     private readonly documentVectorStoreService: DocumentVectorStoreService,
   ) {}
 
@@ -395,15 +399,52 @@ export class KnowledgeRecallService implements OnModuleInit {
       ].join(":");
       const existing = sectionMap.get(sectionKey);
 
-      if (!existing || candidate.score > existing.score) {
+      if (!existing || this.compareCandidates(candidate, existing) < 0) {
         sectionMap.set(sectionKey, candidate);
       }
     }
 
-    return [...sectionMap.values()].sort((left, right) => {
-      if (right.score !== left.score) return right.score - left.score;
-      return left.chunk.chunkIndex - right.chunk.chunkIndex;
+    return [...sectionMap.values()].sort((left, right) =>
+      this.compareCandidates(left, right),
+    );
+  }
+
+  private compareCandidates(left: RecallCandidate, right: RecallCandidate) {
+    if (left.rerankScore !== undefined || right.rerankScore !== undefined) {
+      const scoreDiff = (right.rerankScore ?? -1) - (left.rerankScore ?? -1);
+      if (scoreDiff !== 0) return scoreDiff;
+    } else if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+
+    return left.chunk.chunkIndex - right.chunk.chunkIndex;
+  }
+
+  private async rerankCandidates(
+    query: string,
+    candidates: RecallCandidate[],
+    limit: number,
+  ) {
+    const rerankResults = await this.documentRerankService.rerank({
+      query,
+      topN: Math.min(candidates.length, Math.max(limit * 4, limit)),
+      documents: candidates.map((candidate) => ({
+        id: candidate.chunk.id,
+        text: candidate.chunk.searchText || candidate.chunk.text,
+      })),
     });
+    if (!rerankResults.length) return candidates;
+
+    const scoreMap = new Map(
+      rerankResults.map((item) => [item.id, item.score]),
+    );
+
+    return candidates
+      .map((candidate) => ({
+        ...candidate,
+        rerankScore: scoreMap.get(candidate.chunk.id),
+      }))
+      .sort((left, right) => this.compareCandidates(left, right));
   }
 
   private normalizeRecallSettings(settings: AppKnowledgeRecallSettings = {}) {
@@ -457,9 +498,12 @@ export class KnowledgeRecallService implements OnModuleInit {
     const resultSets = await Promise.all(recallTasks);
     const mergedMatches = this.mergeRecallResultSets(resultSets, recallLimit);
     const candidates = await this.loadCandidates(mergedMatches, knowledgeId);
-    const items = this.dedupeCandidatesBySection(
+    const rerankedCandidates = await this.rerankCandidates(
+      query,
       candidates.filter((item) => item.score >= minScore),
-    )
+      limit,
+    );
+    const items = this.dedupeCandidatesBySection(rerankedCandidates)
       .slice(0, limit)
       .map((item) => ({
         chunkId: item.chunk.id,
@@ -467,6 +511,10 @@ export class KnowledgeRecallService implements OnModuleInit {
         documentName: item.chunk.document.name,
         chunkIndex: item.chunk.chunkIndex,
         score: clampScore(item.score),
+        rerankScore:
+          item.rerankScore === undefined
+            ? undefined
+            : clampScore(item.rerankScore),
         source: item.source,
         text: item.chunk.text,
         searchText: item.chunk.searchText,

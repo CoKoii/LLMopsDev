@@ -1,7 +1,12 @@
 import { requestClient } from '#/api/request';
 
 export namespace AiModelApi {
-  export type UsageType = 'chat' | 'embedding' | 'multimodal' | 'structured';
+  export type UsageType =
+    | 'chat'
+    | 'embedding'
+    | 'multimodal'
+    | 'rerank'
+    | 'structured';
   export type TestStatus = 'failed' | 'success' | 'untested';
 
   export interface ModelConfig {

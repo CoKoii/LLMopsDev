@@ -6,6 +6,7 @@ export const usageTypeOptions = [
   { label: '格式处理', value: 'structured' },
   { label: 'Embedding 模型', value: 'embedding' },
   { label: '多模态模型', value: 'multimodal' },
+  { label: 'Rerank 模型', value: 'rerank' },
 ];
 
 export const testStatusMeta = {

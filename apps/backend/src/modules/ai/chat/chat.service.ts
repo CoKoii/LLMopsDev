@@ -53,7 +53,9 @@ const KNOWLEDGE_QUERY_REWRITE_SYSTEM_PROMPT = [
   "- 不回答问题。",
   "- 不增加历史中不存在的信息。",
   "- 不猜测用户意图。",
-  "- 如果存在代词（它、这个、那里、前面的接口等），必须根据聊天记录替换成明确对象。",
+  "- 如果用户本轮上传了附件，附件解析内容属于当前问题上下文。",
+  "- 如果存在代词（它、这个、那里、前面的接口等），必须根据聊天记录或本轮附件解析内容替换成明确对象。",
+  "- 用户问题指向本轮附件、图片或图片中的 ID/编号/名称时，必须优先使用本轮附件解析内容，不要用历史对话中的对象替换。",
   "- 如果用户同时提出多个独立问题，拆分成多个检索问题。",
   "- 如果问题已经完整，不做修改。",
   "- 每个检索问题都必须完整、独立。",
@@ -198,6 +200,7 @@ export class ChatService {
   private createKnowledgeQueryRewriteMessages(
     message: string,
     history: ChatMessage[] = [],
+    currentAttachmentContext = "",
   ): BaseMessageLike[] {
     const messages: BaseMessageLike[] = [
       ["system", KNOWLEDGE_QUERY_REWRITE_SYSTEM_PROMPT],
@@ -209,6 +212,17 @@ export class ChatService {
       messages.push([
         item.role === CHAT_MESSAGE_ROLE.ASSISTANT ? "ai" : "human",
         content,
+      ]);
+    }
+    const attachmentContext = this.compactText(currentAttachmentContext, 1200);
+    if (attachmentContext) {
+      messages.push([
+        "system",
+        [
+          "以下是用户本轮消息上传附件的解析内容，仅用于消解当前问题中的指代并生成检索问题。",
+          "如果用户问题提到“这个/这张图/图片中/附件中/这个ID/会话ID”等，优先从这里提取明确对象。",
+          attachmentContext,
+        ].join("\n"),
       ]);
     }
     messages.push(["human", message]);
@@ -228,6 +242,7 @@ export class ChatService {
     message: string,
     history: ChatMessage[] = [],
     tokenUsage?: TokenUsageTracker,
+    currentAttachmentContext = "",
   ) {
     const fallback = message.trim();
     if (!fallback) return [];
@@ -242,7 +257,11 @@ export class ChatService {
         },
       );
       const response = (await structuredModel.invoke(
-        this.createKnowledgeQueryRewriteMessages(fallback, history),
+        this.createKnowledgeQueryRewriteMessages(
+          fallback,
+          history,
+          currentAttachmentContext,
+        ),
       )) as StructuredOutputWithRaw<
         z.infer<typeof KnowledgeQueryRewriteSchema>
       >;
@@ -253,7 +272,7 @@ export class ChatService {
       );
 
       this.logger.log(
-        `知识库检索问题改写完成: message="${this.compactText(fallback, 120)}", history=${history.length}, queries=${JSON.stringify(queries)}`,
+        `知识库检索问题改写完成: message="${this.compactText(fallback, 120)}", history=${history.length}, attachmentContext=${Boolean(currentAttachmentContext)}, queries=${JSON.stringify(queries)}`,
       );
 
       return queries;
@@ -848,7 +867,12 @@ export class ChatService {
         });
       const recallQueries =
         knowledgeConfig.ids.length || hasHistoricalAttachments
-          ? await this.rewriteKnowledgeQueries(content, history, tokenUsage)
+          ? await this.rewriteKnowledgeQueries(
+              content,
+              history,
+              tokenUsage,
+              currentAttachmentContext.context,
+            )
           : [content];
       const [historicalAttachmentRecall, recalledItems] = await Promise.all([
         hasHistoricalAttachments

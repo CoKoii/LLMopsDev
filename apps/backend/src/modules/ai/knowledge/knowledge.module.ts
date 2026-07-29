@@ -10,6 +10,7 @@ import { DocumentEmbeddingService } from "./document-embedding/document-embeddin
 import { DocumentEnhancerService } from "./document-enhancer/document-enhancer.service";
 import { DocumentParserService } from "./document-parser/document-parser.service";
 import { DocumentMultimodalExtractionService } from "./document-parser/document-multimodal-extraction.service";
+import { DocumentRerankService } from "./document-rerank/document-rerank.service";
 import { DocumentVectorStoreService } from "./document-vector-store/document-vector-store.service";
 import { KnowledgeDocumentChunk } from "./entities/knowledge-document-chunk.entity";
 import { KnowledgeDocument } from "./entities/knowledge-document.entity";
@@ -37,6 +38,7 @@ import { KnowledgeService } from "./knowledge.service";
     DocumentEnhancerService,
     DocumentChunkerService,
     DocumentEmbeddingService,
+    DocumentRerankService,
     DocumentVectorStoreService,
     DocumentProcessQueueService,
     DocumentProcessProcessor,

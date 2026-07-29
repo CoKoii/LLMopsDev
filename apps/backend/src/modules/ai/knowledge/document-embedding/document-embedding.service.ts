@@ -9,7 +9,7 @@ interface EmbedOptions {
 
 const MAX_EMBEDDING_REQUEST_ATTEMPTS = 2;
 const EMBEDDING_RETRY_DELAY_MS = 500;
-const EMBEDDING_BATCH_SIZE = 32;
+const EMBEDDING_BATCH_SIZE = 20;
 
 const wait = (milliseconds: number) =>
   new Promise<void>((resolve) => {

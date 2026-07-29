@@ -18,7 +18,7 @@ export interface PageParams {
   categoryKey?: string
 }
 
-export type LlmUsageType = 'chat' | 'structured' | 'embedding' | 'multimodal'
+export type LlmUsageType = 'chat' | 'structured' | 'embedding' | 'multimodal' | 'rerank'
 export type LlmTestStatus = 'untested' | 'success' | 'failed'
 
 export interface LlmItem {
@@ -404,6 +404,7 @@ export interface RecallTestResultItem {
   documentName: string
   chunkIndex: number
   score: number
+  rerankScore?: number
   source: KnowledgeRecallStrategy
   text: string
   searchText: string

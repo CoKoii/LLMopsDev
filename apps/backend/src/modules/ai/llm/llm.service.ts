@@ -19,6 +19,10 @@ import { QueryLlmsDto } from "./dto/query-llms.dto";
 import { TestLlmDto } from "./dto/test-llm.dto";
 import { UpdateLlmDto } from "./dto/update-llm.dto";
 import { Llm, LlmTestStatus, LlmUsageType } from "./entities/llm.entity";
+import {
+  DEFAULT_RERANK_INSTRUCT,
+  resolveRerankEndpoint,
+} from "./rerank-endpoint";
 
 type LlmSafeResponse = Omit<Llm, "apiKey"> & {
   apiKeyConfigured: boolean;
@@ -63,6 +67,7 @@ const SINGLE_ENABLED_USAGE_TYPES = new Set<LlmUsageType>([
   LlmUsageType.STRUCTURED,
   LlmUsageType.EMBEDDING,
   LlmUsageType.MULTIMODAL,
+  LlmUsageType.RERANK,
 ]);
 const API_KEY_CONFIGURED_ALIAS = "apiKeyConfigured";
 
@@ -201,8 +206,8 @@ export class LlmService {
     return llm;
   }
 
-  async resolveEnabledSystemModel(usageType: LlmUsageType) {
-    const llm = await this.llmRepository
+  async findEnabledSystemModel(usageType: LlmUsageType) {
+    return this.llmRepository
       .createQueryBuilder("llm")
       .addSelect("llm.apiKey")
       .where("llm.usageType = :usageType", { usageType })
@@ -211,7 +216,10 @@ export class LlmService {
       .addOrderBy("llm.updatedAt", "DESC")
       .addOrderBy("llm.id", "DESC")
       .getOne();
+  }
 
+  async resolveEnabledSystemModel(usageType: LlmUsageType) {
+    const llm = await this.findEnabledSystemModel(usageType);
     if (!llm) {
       throw new BadRequestException(`请先启用${usageType}模型`);
     }
@@ -261,7 +269,7 @@ export class LlmService {
       embeddings: new OpenAIEmbeddings({
         apiKey: llm.apiKey,
         model: llm.modelName,
-        batchSize: 32,
+        batchSize: 20,
         configuration: { baseURL: llm.baseUrl },
       }),
     };
@@ -355,7 +363,9 @@ export class LlmService {
       const result =
         llm.usageType === LlmUsageType.EMBEDDING
           ? await this.testEmbedding(llm)
-          : await this.testChat(llm, dto.prompt?.trim() || "请回复 ok");
+          : llm.usageType === LlmUsageType.RERANK
+            ? await this.testRerank(llm)
+            : await this.testChat(llm, dto.prompt?.trim() || "请回复 ok");
 
       await this.llmRepository.update(id, {
         lastTestStatus: LlmTestStatus.SUCCESS,
@@ -399,5 +409,34 @@ export class LlmService {
     }).invoke([["human", prompt]]);
     const text = extractMessageText(response);
     return text ? `调用成功：${text.slice(0, 200)}` : "调用成功";
+  }
+
+  private async testRerank(llm: Llm) {
+    const response = await fetch(resolveRerankEndpoint(llm.baseUrl), {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${llm.apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: llm.modelName,
+        query: "什么是登录接口",
+        documents: [
+          "登录接口用于用户认证并返回访问令牌。",
+          "字体子集化可以减少 PDF 文件体积。",
+        ],
+        top_n: 2,
+        instruct: DEFAULT_RERANK_INSTRUCT,
+        return_documents: false,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new BadGatewayException(
+        `Rerank 调用失败：${response.status} ${await response.text()}`,
+      );
+    }
+
+    return `Rerank 测试成功，模型 ${llm.modelName}`;
   }
 }
