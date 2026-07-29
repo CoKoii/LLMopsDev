@@ -54,7 +54,7 @@ export const validationSchema = Joi.object({
   }),
   [ENV.AI_STRUCTURED_OUTPUT_MODEL]: Joi.when(ENV.AI_ENABLED, {
     is: true,
-    then: Joi.string().trim().required(),
+    then: Joi.string().trim().allow("").required(),
     otherwise: Joi.string().allow("").required(),
   }),
   [ENV.AI_EMBEDDING_MODEL]: Joi.when(ENV.AI_ENABLED, {

@@ -14,6 +14,7 @@ import { CurrentUser } from "../../../common/auth/current-user.decorator";
 import { CreateKnowledgeDocumentChunkDto } from "./dto/create-knowledge-document-chunk.dto";
 import { CreateKnowledgeDocumentDto } from "./dto/create-knowledge-document.dto";
 import { CreateKnowledgeDto } from "./dto/create-knowledge.dto";
+import { CleanWebClipDto } from "./dto/clean-web-clip.dto";
 import { QueryKnowledgeDocumentChunksDto } from "./dto/query-knowledge-document-chunks.dto";
 import { QueryKnowledgeDocumentsDto } from "./dto/query-knowledge-documents.dto";
 import { QueryKnowledgeDto } from "./dto/query-knowledge.dto";
@@ -43,6 +44,14 @@ export class KnowledgeController {
   @Get()
   list(@Query() query: QueryKnowledgeDto, @CurrentUser() user: AuthUser) {
     return this.knowledgeService.list(query, user.userId);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 清洗网页剪藏内容
+  @Post("web-clips/clean")
+  cleanWebClip(@Body() dto: CleanWebClipDto, @CurrentUser() user: AuthUser) {
+    return this.knowledgeService.cleanWebClip(dto, user.userId);
   }
   // -------------------------
 

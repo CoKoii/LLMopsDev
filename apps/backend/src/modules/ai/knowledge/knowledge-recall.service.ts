@@ -8,6 +8,7 @@ import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
 import { DataSource, In, Repository } from "typeorm";
 import { DocumentEmbeddingService } from "./document-embedding/document-embedding.service";
 import { DocumentVectorStoreService } from "./document-vector-store/document-vector-store.service";
+import type { DocumentChunkMetadata } from "./document-chunker/document-chunker.types";
 import { RecallTestDto } from "./dto/recall-test.dto";
 import { KnowledgeDocumentChunk } from "./entities/knowledge-document-chunk.entity";
 import { KnowledgeDocument } from "./entities/knowledge-document.entity";
@@ -381,6 +382,30 @@ export class KnowledgeRecallService implements OnModuleInit {
     });
   }
 
+  private dedupeCandidatesBySection(
+    candidates: RecallCandidate[],
+  ): RecallCandidate[] {
+    const sectionMap = new Map<string, RecallCandidate>();
+
+    for (const candidate of candidates) {
+      const metadata = candidate.chunk.metadata as DocumentChunkMetadata;
+      const sectionKey = [
+        candidate.chunk.documentId,
+        metadata.sectionId ?? `chunk-${candidate.chunk.id}`,
+      ].join(":");
+      const existing = sectionMap.get(sectionKey);
+
+      if (!existing || candidate.score > existing.score) {
+        sectionMap.set(sectionKey, candidate);
+      }
+    }
+
+    return [...sectionMap.values()].sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score;
+      return left.chunk.chunkIndex - right.chunk.chunkIndex;
+    });
+  }
+
   private normalizeRecallSettings(settings: AppKnowledgeRecallSettings = {}) {
     const strategy = settings.strategy ?? "hybrid";
     const limit = Math.min(20, Math.max(1, Math.floor(settings.limit ?? 5)));
@@ -432,8 +457,9 @@ export class KnowledgeRecallService implements OnModuleInit {
     const resultSets = await Promise.all(recallTasks);
     const mergedMatches = this.mergeRecallResultSets(resultSets, recallLimit);
     const candidates = await this.loadCandidates(mergedMatches, knowledgeId);
-    const items = candidates
-      .filter((item) => item.score >= minScore)
+    const items = this.dedupeCandidatesBySection(
+      candidates.filter((item) => item.score >= minScore),
+    )
       .slice(0, limit)
       .map((item) => ({
         chunkId: item.chunk.id,

@@ -4,9 +4,13 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import { ChatOpenAI } from "@langchain/openai";
+import { ConfigService } from "@nestjs/config";
 import { InjectRepository } from "@nestjs/typeorm";
 import { randomUUID } from "crypto";
 import { Repository } from "typeorm";
+import { z } from "zod";
+import { getAiEnvironment } from "../../../common/config/env";
 import { OssService } from "../../../common/oss/oss.service";
 import { FilesService } from "../../files/files.service";
 import {
@@ -25,6 +29,7 @@ import { DocumentVectorStoreService } from "./document-vector-store/document-vec
 import { CreateKnowledgeDocumentChunkDto } from "./dto/create-knowledge-document-chunk.dto";
 import { CreateKnowledgeDocumentDto } from "./dto/create-knowledge-document.dto";
 import { CreateKnowledgeDto } from "./dto/create-knowledge.dto";
+import { CleanWebClipDto } from "./dto/clean-web-clip.dto";
 import { QueryKnowledgeDocumentChunksDto } from "./dto/query-knowledge-document-chunks.dto";
 import { QueryKnowledgeDocumentsDto } from "./dto/query-knowledge-documents.dto";
 import { QueryKnowledgeDto } from "./dto/query-knowledge.dto";
@@ -67,6 +72,56 @@ const normalizeChunkKeywords = (keywords: string[] | undefined) =>
     10,
   );
 
+const WEB_CLIP_SYSTEM_PROMPT = [
+  "你是网页文章清洗器。请把用户提供的网页片段整理为适合知识库检索的 Markdown。",
+  "只保留文章主体、必要标题、正文层级、列表、表格、引用、代码块和关键链接。",
+  "删除导航、广告、推荐阅读、评论区、登录提示、版权模板、分享按钮、无关侧栏和重复内容。",
+  "不得编造原文没有的信息；不输出解释；只输出 Markdown 正文。",
+].join("\n");
+
+const WebClipCleanSchema = z
+  .object({
+    markdown: z.string().min(1),
+  })
+  .strict();
+
+const MAX_WEB_CLIP_PROMPT_LENGTH = 60000;
+
+const stripMarkdownFence = (value: string) =>
+  value
+    .replace(/^```(?:markdown|md)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+const normalizeMarkdownLines = (value: string) =>
+  value
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+const buildFallbackWebClipMarkdown = (dto: CleanWebClipDto) => {
+  const title = dto.title?.trim();
+  const url = dto.url?.trim();
+  const body = normalizeMarkdownLines(dto.markdown?.trim() || dto.text);
+
+  return normalizeMarkdownLines(
+    [
+      title ? `# ${title}` : "",
+      url ? `> 来源：${url}` : "",
+      body,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+  );
+};
+
+const compactForPrompt = (value: string) =>
+  value.replace(/\s+\n/g, "\n").slice(0, MAX_WEB_CLIP_PROMPT_LENGTH);
+
 @Injectable()
 export class KnowledgeService {
   constructor(
@@ -76,6 +131,7 @@ export class KnowledgeService {
     private readonly documentRepository: Repository<KnowledgeDocument>,
     @InjectRepository(KnowledgeDocumentChunk)
     private readonly chunkRepository: Repository<KnowledgeDocumentChunk>,
+    private readonly configService: ConfigService,
     private readonly filesService: FilesService,
     private readonly ossService: OssService,
     private readonly documentParserService: DocumentParserService,
@@ -87,6 +143,71 @@ export class KnowledgeService {
     private readonly documentProcessQueueService: DocumentProcessQueueService,
     private readonly knowledgeRecallService: KnowledgeRecallService,
   ) {}
+
+  private createWebClipModel() {
+    const config = getAiEnvironment(this.configService).structuredOutput;
+
+    return new ChatOpenAI({
+      apiKey: config.apiKey,
+      model: config.model,
+      maxRetries: 1,
+      temperature: 0,
+      configuration: { baseURL: config.baseUrl },
+    });
+  }
+
+  async cleanWebClip(dto: CleanWebClipDto, userId: number) {
+    void userId;
+
+    if (!dto.text.trim() && !dto.markdown?.trim() && !dto.html?.trim()) {
+      throw new BadRequestException("网页剪藏内容不能为空");
+    }
+
+    const fallbackMarkdown = buildFallbackWebClipMarkdown(dto);
+
+    try {
+      const model = this.createWebClipModel().withStructuredOutput(
+        WebClipCleanSchema,
+        { name: "WebClipClean" },
+      );
+      const response = await model.invoke([
+        ["system", WEB_CLIP_SYSTEM_PROMPT],
+        [
+          "human",
+          [
+            dto.title?.trim() ? `标题：${dto.title.trim()}` : "",
+            dto.url?.trim() ? `来源：${dto.url.trim()}` : "",
+            dto.markdown?.trim()
+              ? `Markdown草稿：\n${compactForPrompt(dto.markdown.trim())}`
+              : "",
+            dto.text.trim()
+              ? `可见文本：\n${compactForPrompt(dto.text.trim())}`
+              : "",
+            dto.html?.trim()
+              ? `简化HTML：\n${compactForPrompt(dto.html.trim())}`
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+        ],
+      ]);
+      const markdown = normalizeMarkdownLines(
+        stripMarkdownFence(response.markdown),
+      );
+
+      return {
+        markdown: markdown || fallbackMarkdown,
+        cleanedBy: markdown ? "ai" : "rule",
+        warning: markdown ? undefined : "已使用基础整理结果",
+      };
+    } catch {
+      return {
+        markdown: fallbackMarkdown,
+        cleanedBy: "rule",
+        warning: "已使用基础整理结果",
+      };
+    }
+  }
 
   private withAccessibleIcon(knowledge: Knowledge): Knowledge {
     return {

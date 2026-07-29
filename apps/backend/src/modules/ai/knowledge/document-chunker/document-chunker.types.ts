@@ -19,7 +19,15 @@ export interface DocumentChunkMetadata {
   contentType: string;
   format: string;
   chunkIndex: number;
+  sectionId?: string;
+  sectionIndex?: number;
   sectionTitle?: string;
+  sectionHeadingPath?: string[];
+  sectionSourceBlockIds?: string[];
+  sectionTokenCount?: number;
+  sectionChunkIndex?: number;
+  sectionChunkCount?: number;
+  contextualized?: boolean;
   headingPath: string[];
   sourceBlockIds: string[];
   blockTypes: ParsedDocumentBlockType[];

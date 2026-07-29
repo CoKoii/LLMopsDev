@@ -38,6 +38,15 @@ const renderInlineText = (tokens?: Token[]) =>
 const tableCellText = (cell: Tokens.TableCell) =>
   renderInlineText(cell.tokens) || cell.text;
 
+const inferHtmlCodeLanguage = (value: string) => {
+  const text = value.trim();
+  if (/^<(script|template|style)\b[\s\S]*<\/\1>\s*$/iu.test(text)) {
+    return "vue";
+  }
+
+  return undefined;
+};
+
 export class MarkdownDocumentParser implements DocumentFormatParser {
   supports(input: DocumentParserInput) {
     const extension = getExtension(input.filename);
@@ -114,6 +123,18 @@ export class MarkdownDocumentParser implements DocumentFormatParser {
       }
 
       if (isToken(token, "html")) {
+        const language = inferHtmlCodeLanguage(token.text);
+        if (language) {
+          builder.add("code", token.text, {
+            language,
+            metadata: {
+              inferredLanguage: true,
+              rawFence: `\`\`\`${language}`,
+            },
+          });
+          continue;
+        }
+
         builder.add("paragraph", token.text);
         continue;
       }

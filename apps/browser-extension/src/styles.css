@@ -1,0 +1,110 @@
+:root {
+  color: #172033;
+  background: #f8fafc;
+  font-size: 10px;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 30rem;
+  margin: 0;
+}
+
+button {
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+svg {
+  width: 1.6rem;
+  height: 1.6rem;
+}
+
+.popup-shell {
+  display: grid;
+  gap: 1.2rem;
+  padding: 1.4rem;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.logo-dot {
+  width: 3.2rem;
+  height: 3.2rem;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #42d392, #647eff);
+  box-shadow: 0 0 0 0.6rem rgba(66, 211, 146, 0.12);
+}
+
+h1,
+p {
+  margin: 0;
+}
+
+h1 {
+  color: #0f172a;
+  font-size: 1.5rem;
+  line-height: 2rem;
+}
+
+header p,
+.hint {
+  color: #64748b;
+  font-size: 1.2rem;
+}
+
+.primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  height: 3.8rem;
+  border-radius: 0.8rem;
+  color: #fff;
+  background: #2563eb;
+}
+
+.primary-button:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  line-height: 1.6rem;
+}
+
+footer {
+  border-radius: 0.6rem;
+  padding: 0.8rem 1rem;
+  color: #334155;
+  background: #eef2ff;
+  font-size: 1.2rem;
+}
+
+footer.success {
+  color: #166534;
+  background: #ecfdf3;
+}
+
+footer.error {
+  color: #b91c1c;
+  background: #fef2f2;
+}

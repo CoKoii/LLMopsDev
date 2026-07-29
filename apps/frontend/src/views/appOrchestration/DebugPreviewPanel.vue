@@ -787,19 +787,34 @@ defineExpose({ scrollToBottom })
 
 :global(.chat-markdown pre) {
   max-width: 100%;
-  padding: 1.2rem 1.4rem;
+  padding: 1.3rem 1.5rem;
   overflow-x: auto;
-  background: #111827;
-  border-radius: var(--radius-sm);
+  color: #d4d4d4;
+  background: #1e1e1e;
+  border: 0.1rem solid #3c3c3c;
+  border-radius: 0.8rem;
+  box-shadow: inset 0 0.1rem 0 rgba(255, 255, 255, 0.04);
+  scrollbar-color: #5f5f5f transparent;
+}
+
+:global(.chat-markdown pre.shiki) {
+  background-color: #1e1e1e !important;
 }
 
 :global(.chat-markdown pre code) {
   display: block;
   padding: 0;
-  color: #f9fafb;
+  color: inherit;
+  font-size: 1.24rem;
+  line-height: 2rem;
   background: transparent;
   border-radius: 0;
   white-space: pre;
+}
+
+:global(.chat-markdown pre code .line) {
+  display: inline-block;
+  min-height: 2rem;
 }
 
 :global(.chat-markdown blockquote) {

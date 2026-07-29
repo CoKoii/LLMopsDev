@@ -1,5 +1,6 @@
 import { ENV } from "./keys";
 import {
+  getExplicitOptionalString,
   getRequiredBoolean,
   getRequiredNumber,
   getRequiredString,
@@ -23,10 +24,11 @@ export const createAiEnvironment = (get: EnvironmentGetter) => {
     structuredOutput: {
       apiKey,
       baseUrl,
-      model: getRequiredString(
-        get(ENV.AI_STRUCTURED_OUTPUT_MODEL),
-        ENV.AI_STRUCTURED_OUTPUT_MODEL,
-      ),
+      model:
+        getExplicitOptionalString(
+          get(ENV.AI_STRUCTURED_OUTPUT_MODEL),
+          ENV.AI_STRUCTURED_OUTPUT_MODEL,
+        ) ?? getRequiredString(get(ENV.AI_CHAT_MODEL), ENV.AI_CHAT_MODEL),
     },
     embedding: {
       apiKey,
