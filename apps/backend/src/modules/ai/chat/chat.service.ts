@@ -21,6 +21,7 @@ import {
   type AiAppKnowledgeRecallSettings,
   type AiAppVersionConfig,
 } from "../app/entities/app-version.entity";
+import { FilesService } from "../../files/files.service";
 import { LlmUsageType } from "../llm/entities/llm.entity";
 import { LlmService } from "../llm/llm.service";
 import { AiRuntimeService } from "./ai-runtime.service";
@@ -82,6 +83,7 @@ const PromptOptimizeSchema = z
 type SseEvent =
   | { content: string }
   | { message: string }
+  | { status: string }
   | { sessionId: number; userMessageId: number; assistantMessageId: number }
   | { elapsedMs: number; tokens?: number }
   | { items: string[] }
@@ -147,6 +149,9 @@ type AgentToolRunResult = {
   answer?: string;
   messages: BaseMessageLike[];
 };
+type AgentToolRunEvent =
+  | { type: "tool-call" }
+  | { type: "result"; result: AgentToolRunResult };
 
 @Injectable()
 export class ChatService {
@@ -163,6 +168,7 @@ export class ChatService {
     private readonly chatMemoryService: ChatMemoryService,
     private readonly chatMemoryQueueService: ChatMemoryQueueService,
     private readonly llmService: LlmService,
+    private readonly filesService: FilesService,
   ) {}
 
   private sse(data: SseEvent, event?: string) {
@@ -195,6 +201,41 @@ export class ChatService {
       maxRetries: 0,
       temperature,
     });
+  }
+
+  async transcribeAppSpeech(appId: number, fileId: number, userId: number) {
+    const draft = await this.aiRuntimeService.getDraft(appId, userId);
+    if (!draft.config.toggles?.voiceInput) {
+      throw new BadRequestException("应用未开启语音输入");
+    }
+
+    const { file, buffer } = await this.filesService.getOwnedObjectBuffer(
+      fileId,
+      userId,
+    );
+    if (!file.contentType.toLowerCase().startsWith("audio/")) {
+      throw new BadRequestException("请选择音频文件");
+    }
+
+    return this.llmService.transcribeAudio({
+      buffer,
+      contentType: file.contentType,
+      filename: file.originalName,
+    });
+  }
+
+  async synthesizeAppSpeech(appId: number, text: string, userId: number) {
+    const draft = await this.aiRuntimeService.getDraft(appId, userId);
+    if (!draft.config.toggles?.voiceOutput) {
+      throw new BadRequestException("应用未开启语音输出");
+    }
+
+    const content = text.trim();
+    if (!content) {
+      throw new BadRequestException("语音文本不能为空");
+    }
+
+    return this.llmService.synthesizeSpeech(content);
   }
 
   private createKnowledgeQueryRewriteMessages(
@@ -525,12 +566,12 @@ export class ChatService {
     return normalizedArgs;
   }
 
-  private async runAgentWithTools(params: {
+  private async *runAgentWithTools(params: {
     model: ChatOpenAI;
     tools: StructuredToolInterface[];
     systemPrompt: string;
     messages: BaseMessageLike[];
-  }): Promise<AgentToolRunResult> {
+  }): AsyncGenerator<AgentToolRunEvent> {
     const toolMap = new Map(params.tools.map((item) => [item.name, item]));
     const messages: BaseMessageLike[] = [
       ["system", params.systemPrompt],
@@ -546,9 +587,9 @@ export class ChatService {
 
       if (!toolCalls.length) {
         const answer = this.getMessageText(aiMessage.content).trim();
-        if (answer) {
-          messages.push(aiMessage);
-          return { answer, messages };
+        if (answer && !hasExecutedTools) {
+          yield { type: "result", result: { answer, messages } };
+          return;
         }
         if (hasExecutedTools) {
           messages.push([
@@ -556,9 +597,11 @@ export class ChatService {
             "请基于以上已获得的信息直接回答用户，不要再调用任何工具；如果信息不足，请说明不足。",
           ]);
         }
-        return { messages };
+        yield { type: "result", result: { messages } };
+        return;
       }
 
+      yield { type: "tool-call" };
       messages.push(aiMessage);
       for (const toolCall of toolCalls) {
         if (!toolCall.id || !toolCall.name) {
@@ -598,7 +641,7 @@ export class ChatService {
       "请基于以上已获得的信息直接回答用户，不要再调用任何工具；如果信息不足，请说明不足。",
     ]);
 
-    return { messages };
+    yield { type: "result", result: { messages } };
   }
 
   private async *streamModelAnswerChunks(params: {
@@ -616,6 +659,17 @@ export class ChatService {
     }
 
     return [...params.messages, ["ai", chunks.join("")]] as BaseMessageLike[];
+  }
+
+  private async *streamTextChunks(
+    text: string,
+  ): AsyncGenerator<string, BaseMessageLike[]> {
+    const chunkSize = 12;
+    for (let index = 0; index < text.length; index += chunkSize) {
+      yield text.slice(index, index + chunkSize);
+      await new Promise((resolve) => setTimeout(resolve, 12));
+    }
+    return [["ai", text]] as BaseMessageLike[];
   }
 
   private createTokenUsageTracker(): TokenUsageTracker {
@@ -838,6 +892,9 @@ export class ChatService {
         "session",
       );
 
+      if (attachmentFileIds.length) {
+        yield this.sse({ status: "解析附件中" }, "status");
+      }
       const currentAttachmentContext =
         await this.chatAttachmentService.processMessageAttachments({
           session,
@@ -865,6 +922,9 @@ export class ChatService {
         await this.chatAttachmentService.hasRecallableChunks(session.id, {
           excludeMessageId: userMessage.id,
         });
+      if (knowledgeConfig.ids.length || hasHistoricalAttachments) {
+        yield this.sse({ status: "完善用户问题" }, "status");
+      }
       const recallQueries =
         knowledgeConfig.ids.length || hasHistoricalAttachments
           ? await this.rewriteKnowledgeQueries(
@@ -874,6 +934,9 @@ export class ChatService {
               currentAttachmentContext.context,
             )
           : [content];
+      if (knowledgeConfig.ids.length || hasHistoricalAttachments) {
+        yield this.sse({ status: "检索知识库中" }, "status");
+      }
       const [historicalAttachmentRecall, recalledItems] = await Promise.all([
         hasHistoricalAttachments
           ? Promise.all(
@@ -947,6 +1010,7 @@ export class ChatService {
           "attachments",
         );
       }
+      yield this.sse({ status: "生成回复中" }, "status");
 
       const { agent, tools, systemPrompt } =
         await this.aiRuntimeService.createAgentFromDraft(draft, model, userId, {
@@ -960,17 +1024,42 @@ export class ChatService {
 
       let resultMessages: BaseMessageLike[] = [];
       if (tools.length) {
-        const result = await this.runAgentWithTools({
+        let result: AgentToolRunResult | undefined;
+        let pluginStatusSent = false;
+        const toolRun = this.runAgentWithTools({
           model,
           tools,
           systemPrompt,
           messages,
         });
+        for await (const event of toolRun) {
+          if (event.type === "tool-call") {
+            if (!pluginStatusSent) {
+              pluginStatusSent = true;
+              yield this.sse({ status: "调用插件获取数据中" }, "status");
+            }
+            continue;
+          }
+          result = event.result;
+        }
+        if (!result) {
+          result = { messages };
+        }
         if (result.answer) {
-          output += result.answer;
-          resultMessages = result.messages;
-          yield this.sse({ content: result.answer });
+          const answerStream = this.streamTextChunks(result.answer);
+          while (true) {
+            const chunk = await answerStream.next();
+            if (chunk.done) {
+              resultMessages = [...result.messages, ...chunk.value];
+              break;
+            }
+            output += chunk.value;
+            yield this.sse({ content: chunk.value });
+          }
         } else {
+          if (pluginStatusSent) {
+            yield this.sse({ status: "生成回复中" }, "status");
+          }
           const answerStream = this.streamModelAnswerChunks({
             model,
             messages: result.messages,
@@ -1000,6 +1089,7 @@ export class ChatService {
       tokenUsage.add(this.getTotalTokens(resultMessages));
 
       if (draft.config.toggles?.questionSuggestions) {
+        yield this.sse({ status: "生成追问建议中" }, "status");
         let suggestions: string[] = [];
         try {
           suggestions = await this.createQuestionSuggestions(

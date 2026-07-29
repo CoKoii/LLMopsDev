@@ -7,6 +7,7 @@ describe('renderMarkdown', () => {
 
     expect(html).toContain('class="shiki dark-plus"')
     expect(html).toContain('style="color:#569CD6"')
+    expect(html.match(/class="line"/g)).toHaveLength(1)
   })
 
   it('escapes unsupported code fences', () => {

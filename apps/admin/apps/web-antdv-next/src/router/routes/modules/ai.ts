@@ -57,6 +57,26 @@ const routes: RouteRecordRaw[] = [
           title: 'Rerank',
         },
       },
+      {
+        name: 'AiSpeechToTextModels',
+        path: 'speech-to-text-models',
+        component: () =>
+          import('#/views/ai/model-management/speech-to-text.vue'),
+        meta: {
+          icon: 'lucide:mic',
+          title: '语音识别',
+        },
+      },
+      {
+        name: 'AiTextToSpeechModels',
+        path: 'text-to-speech-models',
+        component: () =>
+          import('#/views/ai/model-management/text-to-speech.vue'),
+        meta: {
+          icon: 'lucide:volume-2',
+          title: '语音合成',
+        },
+      },
     ],
   },
 ];

@@ -6,7 +6,9 @@ export namespace AiModelApi {
     | 'embedding'
     | 'multimodal'
     | 'rerank'
-    | 'structured';
+    | 'speech_to_text'
+    | 'structured'
+    | 'text_to_speech';
   export type TestStatus = 'failed' | 'success' | 'untested';
 
   export interface ModelConfig {

@@ -7,6 +7,8 @@ export const usageTypeOptions = [
   { label: 'Embedding 模型', value: 'embedding' },
   { label: '多模态模型', value: 'multimodal' },
   { label: 'Rerank 模型', value: 'rerank' },
+  { label: '语音识别', value: 'speech_to_text' },
+  { label: '语音合成', value: 'text_to_speech' },
 ];
 
 export const testStatusMeta = {
@@ -74,6 +76,8 @@ export function useFormSchema(): VbenFormSchema[] {
       component: 'Textarea',
       componentProps: {
         allowClear: true,
+        placeholder:
+          '语音合成自定义音色可填写 voice=音色ID；qwen-audio-3.0-tts-flash 默认 longanhuan_v3.6，plus 默认 longanlingxin',
         rows: 4,
       },
       fieldName: 'remark',

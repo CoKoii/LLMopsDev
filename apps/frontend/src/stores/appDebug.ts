@@ -24,6 +24,12 @@ export type AppDebugMessage = {
   knowledgeCitations?: AppKnowledgeCitation[]
   attachmentQuery?: string
   attachmentCitations?: AppAttachmentCitation[]
+  statusText?: string
+  audioMessage?: boolean
+  audioUrl?: string
+  audioGenerating?: boolean
+  audioTranscribing?: boolean
+  audioTextVisible?: boolean
 }
 
 export const useAppDebugStore = defineStore('appDebug', () => {
@@ -51,6 +57,12 @@ export const useAppDebugStore = defineStore('appDebug', () => {
   ) => {
     sessions.value[appId] = getMessages(appId).map((message) =>
       message.key === key ? { ...message, ...patch } : message,
+    )
+  }
+
+  const toggleAudioText = (appId: number, key: string) => {
+    sessions.value[appId] = getMessages(appId).map((message) =>
+      message.key === key ? { ...message, audioTextVisible: !message.audioTextVisible } : message,
     )
   }
 
@@ -83,6 +95,7 @@ export const useAppDebugStore = defineStore('appDebug', () => {
     setMessages,
     pushMessage,
     updateMessage,
+    toggleAudioText,
     clearMessages,
     getSessionId,
     setSessionId,

@@ -7,6 +7,8 @@ export enum LlmUsageType {
   EMBEDDING = "embedding",
   MULTIMODAL = "multimodal",
   RERANK = "rerank",
+  SPEECH_TO_TEXT = "speech_to_text",
+  TEXT_TO_SPEECH = "text_to_speech",
 }
 
 export enum LlmTestStatus {

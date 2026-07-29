@@ -64,22 +64,27 @@ function renderCodeFallback(content: string) {
   return `<pre><code>${escapeHtml(content)}</code></pre>`
 }
 
+function normalizeFenceContent(content: string) {
+  return content.replace(/\r?\n$/, '')
+}
+
 const markdown = new MarkdownIt({
   html: false,
   linkify: true,
   breaks: true,
   highlight(content, language) {
     const normalizedLanguage = normalizeCodeLanguage(language)
+    const normalizedContent = normalizeFenceContent(content)
 
     if (!normalizedLanguage || plainTextLanguages.has(normalizedLanguage)) {
-      return renderCodeFallback(content)
+      return renderCodeFallback(normalizedContent)
     }
 
     if (!highlightedLanguages.has(normalizedLanguage)) {
-      return renderCodeFallback(content)
+      return renderCodeFallback(normalizedContent)
     }
 
-    return highlighter.codeToHtml(content, {
+    return highlighter.codeToHtml(normalizedContent, {
       lang: normalizedLanguage,
       theme: codeTheme,
     })

@@ -9,6 +9,8 @@ import {
   ChevronDown,
   CircleStop,
   CloudUpload,
+  LoaderCircle,
+  Mic,
   Paperclip,
   Save,
   Send,
@@ -16,8 +18,8 @@ import {
 } from '@lucide/vue'
 import { Attachments, Bubble, Sender } from 'ant-design-x-vue'
 import type { Attachment, AttachmentsProps, BubbleListProps } from 'ant-design-x-vue'
-import { Button } from 'antdv-next'
-import { computed, h, ref, watch, type VNode } from 'vue'
+import { Button, message } from 'antdv-next'
+import { computed, h, onBeforeUnmount, onMounted, ref, watch, type VNode } from 'vue'
 
 export type DebugChatMessage = {
   key: string
@@ -30,6 +32,12 @@ export type DebugChatMessage = {
   knowledgeCitations?: AppKnowledgeCitation[]
   attachmentQuery?: string
   attachmentCitations?: AppAttachmentCitation[]
+  statusText?: string
+  audioMessage?: boolean
+  audioUrl?: string
+  audioGenerating?: boolean
+  audioTranscribing?: boolean
+  audioTextVisible?: boolean
 }
 
 type ChatRoles = NonNullable<BubbleListProps['roles']>
@@ -45,9 +53,19 @@ type AttachmentCitationView = {
   fileNames: string[]
 }
 
+type MessageUiState = {
+  bubbleContentClassName: string
+  bubbleRootClassName: string
+  showText: boolean
+  showTextStatus: boolean
+  showVoiceBubble: boolean
+  showVoiceStatus: boolean
+}
+
 type DebugChatDisplayMessage = DebugChatMessage & {
   knowledgeCitationView: KnowledgeCitationView
   attachmentCitationView: AttachmentCitationView
+  ui: MessageUiState
 }
 
 const acceptedAttachmentTypes =
@@ -78,6 +96,8 @@ const props = defineProps<{
   attachments: DebugComposerAttachment[]
   responding: boolean
   showMemoryButton: boolean
+  voiceInputEnabled: boolean
+  transcribingVoice: boolean
 }>()
 
 const emit = defineEmits<{
@@ -88,6 +108,8 @@ const emit = defineEmits<{
   removeAttachment: [uid: string]
   submitSuggested: [value: string]
   submitMessage: [value: string]
+  submitVoice: [file: File]
+  toggleAudioText: [key: string]
   stopResponse: []
 }>()
 
@@ -96,6 +118,16 @@ const attachmentsRef = ref<InstanceType<typeof Attachments> | null>(null)
 const senderRef = ref<InstanceType<typeof Sender> | null>(null)
 const attachmentsOpen = ref(false)
 const attachmentItems = ref<Attachment[]>([])
+const audioElements = new Map<string, HTMLAudioElement>()
+const audioDurations = ref<Record<string, number>>({})
+const audioProgresses = ref<Record<string, number>>({})
+const playingAudioKey = ref('')
+const voiceContextMenu = ref({ key: '', visible: false, x: 0, y: 0 })
+const voiceRecording = ref(false)
+let mediaRecorder: MediaRecorder | undefined
+let voiceChunks: Blob[] = []
+let voiceStartedAt = 0
+const voiceMimeCandidates = ['audio/ogg;codecs=opus', 'audio/webm;codecs=opus', 'audio/webm']
 const senderModel = computed({
   get: () => props.senderValue,
   set: (value: string) => emit('update:senderValue', value),
@@ -143,12 +175,30 @@ const createAttachmentCitationView = (message: DebugChatMessage): AttachmentCita
 }
 
 const displayMessages = computed<DebugChatDisplayMessage[]>(() =>
-  props.messages.map((message) => ({
-    ...message,
-    knowledgeCitationView: createKnowledgeCitationView(message),
-    attachmentCitationView: createAttachmentCitationView(message),
-  })),
+  props.messages.map((message) => {
+    const displayMessage = {
+      ...message,
+      knowledgeCitationView: createKnowledgeCitationView(message),
+      attachmentCitationView: createAttachmentCitationView(message),
+    }
+    const ui = createMessageUiState(displayMessage)
+
+    return {
+      ...displayMessage,
+      ui,
+      rootClassName: ui.bubbleRootClassName,
+      classNames: {
+        content: ui.bubbleContentClassName,
+      },
+    }
+  }),
 )
+
+const voiceBubbleMinWidthRem = 12
+const voiceBubbleMaxWidthRem = 22
+const voiceStatusWidthRem = 18
+const voiceDurationForMaxWidth = 60
+const voiceBarPattern = [8, 13, 18, 12, 22, 16, 10, 19, 24, 14, 20, 15]
 
 const formatFileSize = (size: number) => {
   if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`
@@ -239,6 +289,250 @@ function handleSubmit(value: string) {
   emit('submitMessage', value)
 }
 
+function setAudioElement(key: string, element: Element | null) {
+  if (element instanceof HTMLAudioElement) {
+    audioElements.set(key, element)
+    return
+  }
+  audioElements.delete(key)
+}
+
+function formatAudioTime(seconds: number | undefined) {
+  const total = Number.isFinite(seconds) && seconds ? Math.max(0, Math.round(seconds)) : 0
+  const minutes = Math.floor(total / 60)
+  const remainingSeconds = `${total % 60}`.padStart(2, '0')
+  return `${minutes}:${remainingSeconds}`
+}
+
+function getAudioStatus(item: DebugChatDisplayMessage) {
+  const progress = audioProgresses.value[item.key]
+  const duration = audioDurations.value[item.key]
+  if (!progress && !duration) return ''
+  return formatAudioTime(progress || duration)
+}
+
+function getVoiceDuration(item: DebugChatDisplayMessage) {
+  return audioDurations.value[item.key] || 0
+}
+
+function getVoiceWidth(item: DebugChatDisplayMessage) {
+  const duration = Math.min(getVoiceDuration(item), voiceDurationForMaxWidth)
+  const ratio = duration / voiceDurationForMaxWidth
+  return voiceBubbleMinWidthRem + (voiceBubbleMaxWidthRem - voiceBubbleMinWidthRem) * ratio
+}
+
+function getVoiceBubbleStyle(item: DebugChatDisplayMessage) {
+  if (item.ui.showVoiceStatus) {
+    return {
+      width: `${voiceStatusWidthRem}rem`,
+    }
+  }
+  const width = getVoiceWidth(item)
+  return {
+    width: `${width}rem`,
+  }
+}
+
+function getVoiceBars(item: DebugChatDisplayMessage) {
+  const width = getVoiceWidth(item)
+  const ratio = (width - voiceBubbleMinWidthRem) / (voiceBubbleMaxWidthRem - voiceBubbleMinWidthRem)
+  const count = Math.round(9 + ratio * 13)
+  return Array.from(
+    { length: count },
+    (_, index) => voiceBarPattern[index % voiceBarPattern.length],
+  )
+}
+
+function getVoiceBarClass(item: DebugChatDisplayMessage, index: number) {
+  return {
+    'is-played': isVoiceBarPlayed(item, index),
+    'is-loading': item.audioGenerating || item.audioTranscribing,
+  }
+}
+
+function getAudioProgressRatio(item: DebugChatDisplayMessage) {
+  const duration = audioDurations.value[item.key]
+  if (!duration) return 0
+  const progress = audioProgresses.value[item.key] ?? 0
+  return Math.min(1, Math.max(0, progress / duration))
+}
+
+function isVoiceBarPlayed(item: DebugChatDisplayMessage, index: number) {
+  const playedBars = Math.ceil(getAudioProgressRatio(item) * getVoiceBars(item).length)
+  return index < playedBars
+}
+
+function handleAudioLoaded(item: DebugChatDisplayMessage, event: Event) {
+  const audio = event.target
+  if (!(audio instanceof HTMLAudioElement) || !Number.isFinite(audio.duration)) return
+  audioDurations.value = { ...audioDurations.value, [item.key]: audio.duration }
+}
+
+function handleAudioTimeUpdate(item: DebugChatDisplayMessage, event: Event) {
+  const audio = event.target
+  if (!(audio instanceof HTMLAudioElement)) return
+  audioProgresses.value = { ...audioProgresses.value, [item.key]: audio.currentTime }
+}
+
+function handleAudioEnded(item: DebugChatDisplayMessage) {
+  if (playingAudioKey.value === item.key) playingAudioKey.value = ''
+  audioProgresses.value = { ...audioProgresses.value, [item.key]: 0 }
+}
+
+function toggleVoicePlayback(item: DebugChatDisplayMessage) {
+  if (!item.audioUrl || item.audioGenerating) return
+  const audio = audioElements.get(item.key)
+  if (!audio) return
+
+  if (playingAudioKey.value && playingAudioKey.value !== item.key) {
+    audioElements.get(playingAudioKey.value)?.pause()
+  }
+
+  if (audio.paused) {
+    void audio.play().then(() => {
+      playingAudioKey.value = item.key
+    })
+    return
+  }
+
+  audio.pause()
+  playingAudioKey.value = ''
+}
+
+function normalizeStatusText(text: string | undefined) {
+  return text?.replace(/[.。…]+$/g, '').trim() ?? ''
+}
+
+function createMessageUiState(item: DebugChatMessage): MessageUiState {
+  const content = item.content.trim()
+  const processing = Boolean(item.pending || item.audioGenerating || item.audioTranscribing)
+  const showVoiceBubble = Boolean(item.audioMessage || item.audioUrl)
+  const showText = item.audioMessage ? Boolean(item.audioTextVisible) : Boolean(content)
+  const showTextStatus = Boolean(item.statusText && !showVoiceBubble && !content && processing)
+  const showVoiceStatus = Boolean(
+    showVoiceBubble && !item.audioUrl && item.statusText && processing,
+  )
+  const fullTextBubble =
+    item.role === 'assistant' &&
+    showText &&
+    !item.audioMessage &&
+    Boolean(content) &&
+    (item.pending || content.length > 24)
+  const hideContent = !showTextStatus && !showVoiceBubble && !showText
+  const bubbleContentClassName = [
+    hideContent ? 'debug-bubble-content--empty' : '',
+    showTextStatus ? 'debug-bubble-content--status' : '',
+    showVoiceBubble ? 'debug-bubble-content--voice' : '',
+    fullTextBubble ? 'debug-bubble-content--text' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  return {
+    bubbleContentClassName,
+    bubbleRootClassName: fullTextBubble ? 'debug-bubble--text' : '',
+    showText,
+    showTextStatus,
+    showVoiceBubble,
+    showVoiceStatus,
+  }
+}
+
+function closeVoiceContextMenu() {
+  voiceContextMenu.value = { key: '', visible: false, x: 0, y: 0 }
+}
+
+function openVoiceContextMenu(item: DebugChatDisplayMessage, event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  if (!item.content.trim()) {
+    closeVoiceContextMenu()
+    return
+  }
+  voiceContextMenu.value = {
+    key: item.key,
+    visible: true,
+    x: event.clientX,
+    y: event.clientY,
+  }
+}
+
+function toggleAudioTextFromMenu() {
+  if (!voiceContextMenu.value.key) return
+  emit('toggleAudioText', voiceContextMenu.value.key)
+  closeVoiceContextMenu()
+}
+
+function resolveVoiceMimeType() {
+  return voiceMimeCandidates.find((type) => MediaRecorder.isTypeSupported(type))
+}
+
+async function startVoiceRecording(event: PointerEvent) {
+  event.preventDefault()
+  if (
+    !props.voiceInputEnabled ||
+    props.responding ||
+    props.transcribingVoice ||
+    hasUploadingAttachments.value ||
+    voiceRecording.value
+  ) {
+    return
+  }
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    message.warning('当前浏览器不支持录音')
+    return
+  }
+
+  let stream: MediaStream
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  } catch {
+    message.warning('无法获取麦克风权限')
+    return
+  }
+  voiceChunks = []
+  voiceStartedAt = Date.now()
+  const mimeType = resolveVoiceMimeType()
+  mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+  mediaRecorder.ondataavailable = (recordEvent) => {
+    if (recordEvent.data.size > 0) voiceChunks.push(recordEvent.data)
+  }
+  mediaRecorder.onstop = () => {
+    stream.getTracks().forEach((track) => track.stop())
+    voiceRecording.value = false
+    const duration = Date.now() - voiceStartedAt
+    if (duration < 400 || !voiceChunks.length) return
+
+    const type = mediaRecorder?.mimeType || 'audio/webm'
+    const extension = type.includes('ogg') ? 'ogg' : 'webm'
+    emit(
+      'submitVoice',
+      new File([new Blob(voiceChunks, { type })], `voice-${Date.now()}.${extension}`, { type }),
+    )
+  }
+  mediaRecorder.start()
+  voiceRecording.value = true
+}
+
+function stopVoiceRecording() {
+  if (!voiceRecording.value || mediaRecorder?.state !== 'recording') return
+  mediaRecorder.stop()
+}
+
+function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeVoiceContextMenu()
+}
+
+onMounted(() => {
+  window.addEventListener('click', closeVoiceContextMenu)
+  window.addEventListener('keydown', handleWindowKeydown)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('click', closeVoiceContextMenu)
+  window.removeEventListener('keydown', handleWindowKeydown)
+})
+
 watch(
   () => props.responding,
   (responding) => {
@@ -303,7 +597,10 @@ defineExpose({ scrollToBottom })
             }"
           >
             <span>{{ item.role === 'assistant' ? appName : userName }}</span>
-            <div v-if="item.role === 'user' && item.attachments?.length" class="chat-message-attachments">
+            <div
+              v-if="item.role === 'user' && item.attachments?.length"
+              class="chat-message-attachments"
+            >
               <Attachments.FileCard
                 v-for="attachment in item.attachments"
                 :key="attachment.uid"
@@ -388,7 +685,9 @@ defineExpose({ scrollToBottom })
                       </strong>
                       <em>匹配度 {{ citation.score.toFixed(2) }}</em>
                     </div>
-                    <span v-if="citation.displayLabel && citation.displayLabel !== citation.fileName">
+                    <span
+                      v-if="citation.displayLabel && citation.displayLabel !== citation.fileName"
+                    >
                       {{ citation.fileName }}
                     </span>
                     <span v-if="citation.duplicateOfLabel">
@@ -402,14 +701,82 @@ defineExpose({ scrollToBottom })
           </div>
         </template>
         <template #message="{ item }">
-          <div class="chat-message-content">
+          <div
+            class="chat-message-content"
+            :class="{
+              'chat-message-content--status-only': item.ui.showTextStatus,
+            }"
+          >
             <div
+              v-if="item.ui.showVoiceBubble"
+              class="voice-message-row"
+              :class="{
+                'voice-message-row--user': item.role === 'user',
+                'voice-message-row--assistant': item.role === 'assistant',
+              }"
+              @contextmenu="openVoiceContextMenu(item, $event)"
+            >
+              <button
+                class="voice-bubble"
+                type="button"
+                :style="getVoiceBubbleStyle(item)"
+                @click="toggleVoicePlayback(item)"
+              >
+                <span class="voice-bubble__wave">
+                  <span
+                    v-for="(height, index) in getVoiceBars(item)"
+                    :key="index"
+                    :class="getVoiceBarClass(item, index)"
+                    :style="{ height: `${height}px`, animationDelay: `${index * 0.04}s` }"
+                  ></span>
+                </span>
+                <span v-if="item.ui.showVoiceStatus" class="voice-bubble__status">
+                  {{ normalizeStatusText(item.statusText) }}
+                </span>
+                <span v-if="getAudioStatus(item)" class="voice-bubble__time">
+                  {{ getAudioStatus(item) }}
+                </span>
+              </button>
+              <audio
+                v-if="item.audioUrl"
+                :ref="(element) => setAudioElement(item.key, element as Element | null)"
+                :src="item.audioUrl"
+                preload="metadata"
+                @loadedmetadata="handleAudioLoaded(item, $event)"
+                @timeupdate="handleAudioTimeUpdate(item, $event)"
+                @ended="handleAudioEnded(item)"
+              />
+            </div>
+            <div v-if="item.ui.showTextStatus" class="processing-status">
+              <span>{{ normalizeStatusText(item.statusText) }}</span>
+              <span class="processing-status__dots"><i></i><i></i><i></i></span>
+            </div>
+            <div
+              v-if="item.ui.showText && item.audioMessage"
+              class="transcript-bubble"
+              :class="{
+                'transcript-bubble--user': item.role === 'user',
+              }"
+            >
+              <div class="chat-markdown" v-html="renderMarkdown(item.content)"></div>
+            </div>
+            <div
+              v-else-if="item.ui.showText"
               class="chat-markdown"
-              v-html="renderMarkdown(item.content || (item.pending ? '...' : ''))"
+              v-html="renderMarkdown(item.content)"
             ></div>
           </div>
         </template>
       </Bubble.List>
+      <div
+        v-if="voiceContextMenu.visible"
+        class="voice-context-menu"
+        :style="{ left: `${voiceContextMenu.x}px`, top: `${voiceContextMenu.y}px` }"
+        @click.stop
+        @contextmenu.prevent
+      >
+        <button type="button" @click="toggleAudioTextFromMenu">转文字</button>
+      </div>
     </div>
 
     <Button v-if="responding" class="stop-button" @click="emit('stopResponse')">
@@ -453,8 +820,35 @@ defineExpose({ scrollToBottom })
             </Sender.Header>
           </template>
           <template #prefix>
-            <Button type="text" shape="circle" :disabled="responding" @click="toggleAttachmentsOpen">
+            <Button
+              type="text"
+              shape="circle"
+              :disabled="responding"
+              @click="toggleAttachmentsOpen"
+            >
               <template #icon><Paperclip :size="16" /></template>
+            </Button>
+            <Button
+              v-if="voiceInputEnabled"
+              type="text"
+              shape="circle"
+              class="voice-record-button"
+              :class="{ 'is-recording': voiceRecording }"
+              :disabled="responding || transcribingVoice || hasUploadingAttachments"
+              :title="voiceRecording ? '松开发送语音' : '按住说话'"
+              @pointerdown="startVoiceRecording"
+              @pointerup="stopVoiceRecording"
+              @pointercancel="stopVoiceRecording"
+              @pointerleave="stopVoiceRecording"
+            >
+              <template #icon>
+                <LoaderCircle
+                  v-if="transcribingVoice"
+                  class="voice-record-button__loading"
+                  :size="16"
+                />
+                <Mic v-else :size="16" />
+              </template>
             </Button>
           </template>
           <template #actions>
@@ -647,7 +1041,230 @@ defineExpose({ scrollToBottom })
 
 :global(.chat-message-content) {
   display: grid;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+:global(.chat-message-content--status-only) {
+  gap: 0;
+}
+
+:global(.debug-bubble--text) {
+  width: 100%;
+}
+
+:global(.debug-bubble--text .ant-bubble-content-wrapper) {
+  width: 100%;
+}
+
+:global(.debug-bubble-content--empty) {
+  display: none;
+}
+
+:global(.debug-bubble-content--status) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0 !important;
+  line-height: 1.8rem !important;
+}
+
+:global(.debug-bubble-content--text) {
+  width: 100%;
+  max-width: 100%;
+}
+
+:global(.debug-bubble-content--voice) {
+  padding: 0 !important;
+  min-height: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+:global(.voice-message-row) {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  max-width: min(28rem, 100%);
+}
+
+:global(.voice-message-row--user) {
+  justify-content: flex-end;
+}
+
+:global(.voice-bubble) {
+  display: flex;
+  align-items: center;
+  min-width: 12rem;
+  max-width: 22rem;
+  height: 4rem;
   gap: 1rem;
+  padding: 0 1.2rem;
+  color: #111827;
+  background: #f1f2f4;
+  border: 0;
+  border-radius: 0.8rem;
+  cursor: pointer;
+  transition:
+    background-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+:global(.voice-bubble:hover),
+:global(.voice-bubble:focus-visible) {
+  background: #e9eaee;
+  outline: 0;
+}
+
+:global(.voice-bubble__wave) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  gap: 0.34rem;
+  min-width: 0;
+}
+
+:global(.voice-bubble__wave span) {
+  display: block;
+  width: 0.34rem;
+  flex: 0 0 0.34rem;
+  background: #d1d5db;
+  border-radius: 999px;
+  transition:
+    height 0.16s ease,
+    background-color 0.16s ease;
+}
+
+:global(.voice-bubble__wave span.is-played) {
+  background: #4b5563;
+}
+
+:global(.voice-bubble__wave span.is-loading) {
+  animation: voice-wave-loading 1.05s ease-in-out infinite;
+}
+
+:global(.voice-bubble__time) {
+  flex: 0 0 4.2rem;
+  margin-left: auto;
+  color: #111827;
+  font-size: 1.3rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.8rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+:global(.voice-bubble__status) {
+  flex: none;
+  max-width: 8.8rem;
+  overflow: hidden;
+  color: #4b5563;
+  font-size: 1.3rem;
+  line-height: 1.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.voice-message-row audio) {
+  display: none;
+}
+
+:global(.processing-status) {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: min(32rem, 100%);
+  gap: 0.4rem;
+  color: #4b5563;
+  font-size: 1.3rem;
+  line-height: 1.8rem;
+}
+
+:global(.processing-status > span:first-child) {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.8rem;
+}
+
+:global(.processing-status__dots) {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.8rem;
+  gap: 0.25rem;
+}
+
+:global(.processing-status__dots i) {
+  width: 0.3rem;
+  height: 0.3rem;
+  background: #9ca3af;
+  border-radius: 50%;
+  animation: status-dot 1.1s ease-in-out infinite;
+}
+
+:global(.processing-status__dots i:nth-child(2)) {
+  animation-delay: 0.14s;
+}
+
+:global(.processing-status__dots i:nth-child(3)) {
+  animation-delay: 0.28s;
+}
+
+.voice-record-button__loading {
+  animation: voice-spin 0.9s linear infinite;
+}
+
+:global(.transcript-bubble) {
+  max-width: min(38rem, 100%);
+  padding: 0.8rem 1.1rem;
+  color: var(--color-text);
+  background: #f1f2f4;
+  border-radius: 0.8rem;
+}
+
+:global(.transcript-bubble--user) {
+  justify-self: end;
+}
+
+.voice-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 9.6rem;
+  padding: 0.4rem;
+  background: #fff;
+  border: 0.1rem solid #e5e7eb;
+  border-radius: 0.8rem;
+  box-shadow:
+    0 1.2rem 3rem rgb(15 23 42 / 12%),
+    0 0.2rem 0.8rem rgb(15 23 42 / 8%);
+}
+
+.voice-context-menu button {
+  display: block;
+  width: 100%;
+  min-height: 3.2rem;
+  padding: 0 1rem;
+  color: #111827;
+  font: inherit;
+  font-size: 1.3rem;
+  line-height: 1.8rem;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 0.6rem;
+  cursor: pointer;
+}
+
+.voice-context-menu button:hover,
+.voice-context-menu button:focus-visible {
+  background: #f3f4f6;
+  outline: 0;
+}
+
+.voice-record-button.is-recording {
+  color: #dc2626;
+  background: rgb(220 38 38 / 10%);
 }
 
 .chat-composer p {
@@ -666,6 +1283,48 @@ defineExpose({ scrollToBottom })
   color: var(--color-white);
   font-size: 1.2rem;
   border-radius: 50%;
+}
+
+@keyframes voice-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes voice-wave-loading {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: scaleY(0.65);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleY(1.08);
+  }
+}
+
+@keyframes status-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.3rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes status-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-0.2rem);
+  }
 }
 
 :global(.chat-avatar--user) {
@@ -688,6 +1347,7 @@ defineExpose({ scrollToBottom })
 }
 
 :global(.chat-markdown) {
+  display: block;
   width: 100%;
   min-width: 0;
   overflow-wrap: anywhere;

@@ -7,7 +7,10 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
+import { File } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import { DataSource, Not, Repository, type SelectQueryBuilder } from "typeorm";
+import WebSocket, { type RawData } from "ws";
 import { RequestContextService } from "../../../common/request-context/request-context.service";
 import {
   createPageResult,
@@ -38,9 +41,214 @@ type ChatModelOptions = {
 };
 
 const trimTrailingSlash = (value: string) => value.trim().replace(/\/+$/, "");
+const resolveAudioEndpoint = (baseUrl: string, path: string) =>
+  `${trimTrailingSlash(baseUrl)}${path}`;
+const isWebSocketUrl = (value: string) => /^wss?:\/\//i.test(value.trim());
+const isDashScopeMultimodalGenerationUrl = (value: string) =>
+  value.includes("/multimodal-generation/generation");
+const assertHttpAudioEndpoint = (llm: Llm) => {
+  if (!isWebSocketUrl(llm.baseUrl)) return;
+  throw new BadRequestException(
+    `${llm.usageType}模型配置的是 WebSocket 地址，当前语音功能只支持 HTTP/OpenAI-compatible 音频接口；请配置 https 地址，或先实现 WebSocket 实时语音协议`,
+  );
+};
+const AUDIO_WEBSOCKET_TIMEOUT_MS = 30_000;
+const ASR_TEST_SILENCE = Buffer.alloc(32_000);
+const TTS_FINISH_DELAY_MS = 500;
+const DEFAULT_TTS_SPEECH_RATE = 120;
+const DEFAULT_TTS_SPEED = 1.15;
+const DEFAULT_QWEN_AUDIO_TTS_PLUS_VOICE = "longanlingxin";
+const DEFAULT_QWEN_AUDIO_TTS_FLASH_VOICE = "longanhuan_v3.6";
+const DEFAULT_COSYVOICE_V3_VOICE = "longanyang";
+const DEFAULT_OPENAI_VOICE = "alloy";
+const QWEN_AUDIO_TTS_PLUS_VOICES = new Set(["longanlingxin", "longanlufeng"]);
+const QWEN_AUDIO_TTS_FLASH_VOICES = new Set([
+  "longanhuan_v3.6",
+  "longjielidou_v3.6",
+  "loongeva_v3.6",
+  "loongjohn",
+]);
+
+type WebSocketEventMessage = {
+  header?: {
+    event?: string;
+    error_code?: string;
+    error_message?: string;
+  };
+  payload?: {
+    output?: {
+      sentence?: {
+        heartbeat?: boolean;
+        sentence_end?: boolean;
+        text?: string;
+      };
+    };
+  };
+};
+
+type DashScopeAsrResponse = {
+  text?: unknown;
+  sentence?: {
+    text?: unknown;
+  };
+  output?: {
+    text?: unknown;
+    sentence?: {
+      text?: unknown;
+    };
+  };
+};
+
+const toBuffer = (data: RawData) => {
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return Buffer.from(data);
+};
+
+const parseWebSocketMessage = (data: RawData) => {
+  try {
+    return JSON.parse(toBuffer(data).toString("utf8")) as WebSocketEventMessage;
+  } catch {
+    return undefined;
+  }
+};
+
+const resolveAsrAudioFormat = (contentType: string, filename: string) => {
+  const value = `${contentType} ${filename}`.toLowerCase();
+  if (value.includes("mp3") || value.endsWith(".mp3")) {
+    return { format: "mp3", sampleRate: 44_100 };
+  }
+  if (value.includes("wav") || value.endsWith(".wav")) {
+    return { format: "wav", sampleRate: 16_000 };
+  }
+  if (value.includes("aac") || value.endsWith(".aac")) {
+    return { format: "aac", sampleRate: 44_100 };
+  }
+  if (value.includes("amr") || value.endsWith(".amr")) {
+    return { format: "amr", sampleRate: 8_000 };
+  }
+  if (value.includes("speex") || value.endsWith(".spx")) {
+    return { format: "speex", sampleRate: 16_000 };
+  }
+  if (
+    value.includes("opus") ||
+    value.includes("ogg") ||
+    value.includes("webm")
+  ) {
+    return { format: "opus", sampleRate: 48_000 };
+  }
+  return { format: "pcm", sampleRate: 16_000 };
+};
+
+const createAudioDataUri = (contentType: string, buffer: Buffer) => {
+  const mimeType = contentType.split(";")[0]?.trim() || "audio/wav";
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+};
+
+const extractAsrText = (payload: DashScopeAsrResponse) => {
+  const candidates = [
+    payload.text,
+    payload.output?.text,
+    payload.sentence?.text,
+    payload.output?.sentence?.text,
+  ];
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+};
+
+const parseLlmRemarkOptions = (remark?: string | null) => {
+  const text = remark?.trim();
+  if (!text) return {};
+
+  try {
+    const value = JSON.parse(text) as unknown;
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+  } catch {
+    // Fallback to key=value lines below.
+  }
+
+  return Object.fromEntries(
+    text
+      .split(/\r?\n|;/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const separatorIndex = line.search(/[:=：]/);
+        if (separatorIndex < 0) return undefined;
+        return [
+          line.slice(0, separatorIndex).trim(),
+          line.slice(separatorIndex + 1).trim(),
+        ] as const;
+      })
+      .filter((item): item is readonly [string, string] => Boolean(item)),
+  );
+};
+
+const getOptionString = (options: Record<string, unknown>, keys: string[]) => {
+  for (const key of keys) {
+    const value = options[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+};
+
+const resolveSpeechVoice = (llm: Llm, voice?: string) => {
+  const configuredRequestVoice = voice?.trim();
+  const modelName = llm.modelName.toLowerCase();
+  if (configuredRequestVoice) {
+    if (
+      modelName.includes("qwen-audio-3.0-tts-plus") &&
+      QWEN_AUDIO_TTS_FLASH_VOICES.has(configuredRequestVoice)
+    ) {
+      throw new BadRequestException(
+        `当前语音合成模型 ${llm.modelName} 不支持 flash 音色 ${configuredRequestVoice}，请使用 plus 音色 longanlingxin、longanlufeng，或在模型备注中配置对应模型的基础/复刻音色`,
+      );
+    }
+    if (
+      modelName.includes("qwen-audio-3.0-tts-flash") &&
+      QWEN_AUDIO_TTS_PLUS_VOICES.has(configuredRequestVoice)
+    ) {
+      throw new BadRequestException(
+        `当前语音合成模型 ${llm.modelName} 不支持 plus 音色 ${configuredRequestVoice}，请使用 flash 音色 longanhuan_v3.6、longjielidou_v3.6、loongeva_v3.6、loongjohn，或在模型备注中配置对应模型的基础/复刻音色`,
+      );
+    }
+    return configuredRequestVoice;
+  }
+
+  const options = parseLlmRemarkOptions(llm.remark);
+  const configuredVoice = getOptionString(options, ["voice", "音色"]);
+  if (configuredVoice) return configuredVoice;
+
+  if (modelName.includes("cosyvoice-v3.5")) {
+    throw new BadRequestException(
+      "CosyVoice v3.5 没有系统音色，请先在百炼创建声音设计/声音复刻音色，并在模型备注中填写 voice=音色ID",
+    );
+  }
+  if (modelName.includes("qwen-audio-3.0-tts-plus")) {
+    return DEFAULT_QWEN_AUDIO_TTS_PLUS_VOICE;
+  }
+  if (modelName.includes("qwen-audio-3.0-tts-flash")) {
+    return DEFAULT_QWEN_AUDIO_TTS_FLASH_VOICE;
+  }
+  if (modelName.includes("qwen-audio"))
+    return DEFAULT_QWEN_AUDIO_TTS_FLASH_VOICE;
+  if (modelName.includes("cosyvoice-v3")) return DEFAULT_COSYVOICE_V3_VOICE;
+  if (modelName.includes("qwen")) return "Cherry";
+  return DEFAULT_OPENAI_VOICE;
+};
 
 const normalizeMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+
+const wait = (milliseconds: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
 
 const extractMessageText = (message: AIMessage) => {
   const content = message.content;
@@ -68,6 +276,8 @@ const SINGLE_ENABLED_USAGE_TYPES = new Set<LlmUsageType>([
   LlmUsageType.EMBEDDING,
   LlmUsageType.MULTIMODAL,
   LlmUsageType.RERANK,
+  LlmUsageType.SPEECH_TO_TEXT,
+  LlmUsageType.TEXT_TO_SPEECH,
 ]);
 const API_KEY_CONFIGURED_ALIAS = "apiKeyConfigured";
 
@@ -275,6 +485,407 @@ export class LlmService {
     };
   }
 
+  async transcribeAudio(params: {
+    buffer: Buffer;
+    contentType: string;
+    filename: string;
+  }) {
+    const llm = await this.resolveEnabledSystemModel(
+      LlmUsageType.SPEECH_TO_TEXT,
+    );
+    if (isWebSocketUrl(llm.baseUrl)) {
+      return this.transcribeAudioByWebSocket(llm, params);
+    }
+    assertHttpAudioEndpoint(llm);
+
+    if (isDashScopeMultimodalGenerationUrl(llm.baseUrl)) {
+      return this.transcribeAudioByDashScope(llm, params);
+    }
+
+    const formData = new FormData();
+    formData.append("model", llm.modelName);
+    formData.append(
+      "file",
+      new File([new Uint8Array(params.buffer)], params.filename, {
+        type: params.contentType,
+      }),
+    );
+
+    const response = await fetch(
+      resolveAudioEndpoint(llm.baseUrl, "/audio/transcriptions"),
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${llm.apiKey}`,
+        },
+        body: formData,
+      },
+    );
+
+    const responseText = await response.text();
+    if (!response.ok) {
+      throw new BadGatewayException(
+        `语音识别调用失败：${response.status} ${responseText}`,
+      );
+    }
+
+    try {
+      const payload = JSON.parse(responseText) as { text?: unknown };
+      const text = typeof payload.text === "string" ? payload.text.trim() : "";
+      if (text) return { text };
+    } catch {
+      const text = responseText.trim();
+      if (text) return { text };
+    }
+
+    throw new BadGatewayException("语音识别调用失败：返回内容为空");
+  }
+
+  private async transcribeAudioByDashScope(
+    llm: Llm,
+    params: {
+      buffer: Buffer;
+      contentType: string;
+      filename: string;
+    },
+  ) {
+    const { format, sampleRate } = resolveAsrAudioFormat(
+      params.contentType,
+      params.filename,
+    );
+    const response = await fetch(trimTrailingSlash(llm.baseUrl), {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${llm.apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: llm.modelName,
+        input: {
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  input_audio: {
+                    data: createAudioDataUri(params.contentType, params.buffer),
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        parameters: {
+          format,
+          sample_rate: sampleRate,
+        },
+      }),
+    });
+
+    const responseText = await response.text();
+    if (!response.ok) {
+      throw new BadGatewayException(
+        `语音识别调用失败：${response.status} ${responseText}`,
+      );
+    }
+
+    try {
+      const payload = JSON.parse(responseText) as DashScopeAsrResponse;
+      const text = extractAsrText(payload);
+      if (text) return { text };
+    } catch {
+      const text = responseText.trim();
+      if (text) return { text };
+    }
+
+    throw new BadGatewayException("语音识别调用失败：返回内容为空");
+  }
+
+  async synthesizeSpeech(text: string, voice?: string) {
+    const llm = await this.resolveEnabledSystemModel(
+      LlmUsageType.TEXT_TO_SPEECH,
+    );
+    if (isWebSocketUrl(llm.baseUrl)) {
+      return this.synthesizeSpeechByWebSocket(llm, text, voice);
+    }
+    assertHttpAudioEndpoint(llm);
+    const response = await fetch(
+      resolveAudioEndpoint(llm.baseUrl, "/audio/speech"),
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${llm.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: llm.modelName,
+          input: text,
+          voice: resolveSpeechVoice(llm, voice),
+          response_format: "mp3",
+          speed: DEFAULT_TTS_SPEED,
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      throw new BadGatewayException(
+        `语音合成调用失败：${response.status} ${await response.text()}`,
+      );
+    }
+
+    return {
+      buffer: Buffer.from(await response.arrayBuffer()),
+      contentType: response.headers.get("content-type") || "audio/mpeg",
+    };
+  }
+
+  private createAudioWebSocket(llm: Llm) {
+    return new WebSocket(trimTrailingSlash(llm.baseUrl), {
+      headers: {
+        Authorization: `bearer ${llm.apiKey}`,
+        "X-DashScope-DataInspection": "enable",
+      },
+    });
+  }
+
+  private transcribeAudioByWebSocket(
+    llm: Llm,
+    params: {
+      buffer: Buffer;
+      contentType: string;
+      filename: string;
+    },
+  ) {
+    const { format, sampleRate } = resolveAsrAudioFormat(
+      params.contentType,
+      params.filename,
+    );
+    return new Promise<{ text: string }>((resolve, reject) => {
+      const taskId = randomUUID();
+      const texts: string[] = [];
+      let settled = false;
+      let taskStarted = false;
+      const ws = this.createAudioWebSocket(llm);
+      const timer = setTimeout(() => {
+        finish(new BadGatewayException("语音识别调用超时"));
+      }, AUDIO_WEBSOCKET_TIMEOUT_MS);
+
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        ws.close();
+        if (error) {
+          reject(error);
+          return;
+        }
+        const text = texts.join("").trim();
+        if (!text) {
+          reject(new BadGatewayException("语音识别调用失败：未返回识别文本"));
+          return;
+        }
+        resolve({ text });
+      };
+
+      const sendJson = (payload: unknown) => {
+        ws.send(JSON.stringify(payload));
+      };
+
+      ws.on("open", () => {
+        sendJson({
+          header: {
+            action: "run-task",
+            task_id: taskId,
+            streaming: "duplex",
+          },
+          payload: {
+            task_group: "audio",
+            task: "asr",
+            function: "recognition",
+            model: llm.modelName,
+            parameters: {
+              format,
+              sample_rate: sampleRate,
+            },
+            input: {},
+          },
+        });
+      });
+
+      ws.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = parseWebSocketMessage(data);
+        const event = message?.header?.event;
+
+        if (event === "task-started" && !taskStarted) {
+          taskStarted = true;
+          ws.send(params.buffer);
+          sendJson({
+            header: {
+              action: "finish-task",
+              task_id: taskId,
+              streaming: "duplex",
+            },
+            payload: { input: {} },
+          });
+          return;
+        }
+
+        if (event === "result-generated") {
+          const sentence = message?.payload?.output?.sentence;
+          const text = sentence?.text?.trim();
+          if (text && sentence?.sentence_end && !sentence.heartbeat) {
+            texts.push(text);
+          }
+          return;
+        }
+
+        if (event === "task-finished") {
+          finish();
+          return;
+        }
+
+        if (event === "task-failed") {
+          finish(
+            new BadGatewayException(
+              `语音识别调用失败：${message?.header?.error_code ?? ""} ${
+                message?.header?.error_message ?? ""
+              }`.trim(),
+            ),
+          );
+        }
+      });
+
+      ws.on("error", (error) => {
+        finish(
+          new BadGatewayException(
+            `语音识别 WebSocket 连接失败：${error.message}`,
+          ),
+        );
+      });
+    });
+  }
+
+  private synthesizeSpeechByWebSocket(llm: Llm, text: string, voice?: string) {
+    return new Promise<{ buffer: Buffer; contentType: string }>(
+      (resolve, reject) => {
+        const taskId = randomUUID();
+        const chunks: Buffer[] = [];
+        let settled = false;
+        let textSent = false;
+        const ws = this.createAudioWebSocket(llm);
+        const timer = setTimeout(() => {
+          finish(new BadGatewayException("语音合成调用超时"));
+        }, AUDIO_WEBSOCKET_TIMEOUT_MS);
+
+        const finish = (error?: Error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          ws.close();
+          if (error) {
+            reject(error);
+            return;
+          }
+          if (!chunks.length) {
+            reject(new BadGatewayException("语音合成调用失败：未返回音频"));
+            return;
+          }
+          resolve({
+            buffer: Buffer.concat(chunks),
+            contentType: "audio/mpeg",
+          });
+        };
+
+        const sendJson = (payload: unknown) => {
+          ws.send(JSON.stringify(payload));
+        };
+
+        ws.on("open", () => {
+          sendJson({
+            header: {
+              action: "run-task",
+              task_id: taskId,
+              streaming: "duplex",
+            },
+            payload: {
+              task_group: "audio",
+              task: "tts",
+              function: "SpeechSynthesizer",
+              model: llm.modelName,
+              parameters: {
+                text_type: "PlainText",
+                voice: resolveSpeechVoice(llm, voice),
+                format: "mp3",
+                speech_rate: DEFAULT_TTS_SPEECH_RATE,
+                enable_ssml: false,
+              },
+              input: {},
+            },
+          });
+        });
+
+        ws.on("message", (data, isBinary) => {
+          if (isBinary) {
+            chunks.push(toBuffer(data));
+            return;
+          }
+          const message = parseWebSocketMessage(data);
+          const event = message?.header?.event;
+
+          if (event === "task-started" && !textSent) {
+            textSent = true;
+            sendJson({
+              header: {
+                action: "continue-task",
+                task_id: taskId,
+                streaming: "duplex",
+              },
+              payload: {
+                input: { text },
+              },
+            });
+            void wait(TTS_FINISH_DELAY_MS).then(() => {
+              if (settled) return;
+              sendJson({
+                header: {
+                  action: "finish-task",
+                  task_id: taskId,
+                  streaming: "duplex",
+                },
+                payload: { input: {} },
+              });
+            });
+            return;
+          }
+
+          if (event === "task-finished") {
+            finish();
+            return;
+          }
+
+          if (event === "task-failed") {
+            finish(
+              new BadGatewayException(
+                `语音合成调用失败：${message?.header?.error_code ?? ""} ${
+                  message?.header?.error_message ?? ""
+                }`.trim(),
+              ),
+            );
+          }
+        });
+
+        ws.on("error", (error) => {
+          finish(
+            new BadGatewayException(
+              `语音合成 WebSocket 连接失败：${error.message}`,
+            ),
+          );
+        });
+      },
+    );
+  }
+
   async create(createLlmDto: CreateLlmDto) {
     const userId = this.requestContext.getUserId();
 
@@ -365,7 +976,11 @@ export class LlmService {
           ? await this.testEmbedding(llm)
           : llm.usageType === LlmUsageType.RERANK
             ? await this.testRerank(llm)
-            : await this.testChat(llm, dto.prompt?.trim() || "请回复 ok");
+            : llm.usageType === LlmUsageType.SPEECH_TO_TEXT
+              ? await this.testSpeechToText(llm)
+              : llm.usageType === LlmUsageType.TEXT_TO_SPEECH
+                ? await this.testTextToSpeech(llm)
+                : await this.testChat(llm, dto.prompt?.trim() || "请回复 ok");
 
       await this.llmRepository.update(id, {
         lastTestStatus: LlmTestStatus.SUCCESS,
@@ -438,5 +1053,138 @@ export class LlmService {
     }
 
     return `Rerank 测试成功，模型 ${llm.modelName}`;
+  }
+
+  private async testSpeechToText(llm: Llm) {
+    if (isWebSocketUrl(llm.baseUrl)) {
+      await this.testSpeechToTextByWebSocket(llm);
+      return `语音识别 WebSocket 测试成功，模型 ${llm.modelName}`;
+    }
+    assertHttpAudioEndpoint(llm);
+    return `语音识别模型配置校验通过，模型 ${llm.modelName}，运行时使用用户录音测试`;
+  }
+
+  private async testTextToSpeech(llm: Llm) {
+    if (isWebSocketUrl(llm.baseUrl)) {
+      await this.synthesizeSpeechByWebSocket(llm, "你好");
+      return `语音合成 WebSocket 测试成功，模型 ${llm.modelName}`;
+    }
+    assertHttpAudioEndpoint(llm);
+    const response = await fetch(
+      resolveAudioEndpoint(llm.baseUrl, "/audio/speech"),
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${llm.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: llm.modelName,
+          input: "你好",
+          voice: resolveSpeechVoice(llm),
+          response_format: "mp3",
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      throw new BadGatewayException(
+        `语音合成调用失败：${response.status} ${await response.text()}`,
+      );
+    }
+
+    return `语音合成测试成功，模型 ${llm.modelName}`;
+  }
+
+  private testSpeechToTextByWebSocket(llm: Llm) {
+    return new Promise<void>((resolve, reject) => {
+      const taskId = randomUUID();
+      let settled = false;
+      let taskStarted = false;
+      const ws = this.createAudioWebSocket(llm);
+      const timer = setTimeout(() => {
+        finish(new BadGatewayException("语音识别 WebSocket 测试超时"));
+      }, AUDIO_WEBSOCKET_TIMEOUT_MS);
+
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        ws.close();
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      };
+
+      const sendJson = (payload: unknown) => {
+        ws.send(JSON.stringify(payload));
+      };
+
+      ws.on("open", () => {
+        sendJson({
+          header: {
+            action: "run-task",
+            task_id: taskId,
+            streaming: "duplex",
+          },
+          payload: {
+            task_group: "audio",
+            task: "asr",
+            function: "recognition",
+            model: llm.modelName,
+            parameters: {
+              format: "pcm",
+              sample_rate: 16_000,
+            },
+            input: {},
+          },
+        });
+      });
+
+      ws.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = parseWebSocketMessage(data);
+        const event = message?.header?.event;
+
+        if (event === "task-started" && !taskStarted) {
+          taskStarted = true;
+          ws.send(ASR_TEST_SILENCE);
+          sendJson({
+            header: {
+              action: "finish-task",
+              task_id: taskId,
+              streaming: "duplex",
+            },
+            payload: { input: {} },
+          });
+          return;
+        }
+
+        if (event === "task-finished") {
+          finish();
+          return;
+        }
+
+        if (event === "task-failed") {
+          finish(
+            new BadGatewayException(
+              `语音识别 WebSocket 测试失败：${message?.header?.error_code ?? ""} ${
+                message?.header?.error_message ?? ""
+              }`.trim(),
+            ),
+          );
+        }
+      });
+
+      ws.on("error", (error) => {
+        finish(
+          new BadGatewayException(
+            `语音识别 WebSocket 连接失败：${error.message}`,
+          ),
+        );
+      });
+    });
   }
 }

@@ -33,6 +33,8 @@ const systemUsageTypes = new Set<AiModelApi.UsageType>([
   'embedding',
   'multimodal',
   'rerank',
+  'speech_to_text',
+  'text_to_speech',
 ]);
 const pageTitle = computed(() => getUsageTypeText(props.usageType));
 

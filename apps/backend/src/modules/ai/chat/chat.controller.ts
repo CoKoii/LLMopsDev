@@ -18,6 +18,8 @@ import { ChatService } from "./chat.service";
 import { ChatMemoryService } from "./chat-memory.service";
 import { DebugAppChatDto } from "./dto/debug-app-chat.dto";
 import { OptimizeAppPromptDto } from "./dto/optimize-app-prompt.dto";
+import { SynthesizeAppSpeechDto } from "./dto/synthesize-app-speech.dto";
+import { TranscribeAppAudioDto } from "./dto/transcribe-app-audio.dto";
 import { UpdateChatMemoryDto } from "./dto/update-chat-memory.dto";
 
 @Controller("ai/apps")
@@ -51,6 +53,37 @@ export class ChatController {
         type: "text/event-stream; charset=utf-8",
       },
     );
+  }
+  // -------------------------
+
+  // -------------------------
+  // 调试AI应用语音输入识别
+  @Post(":id/speech/transcriptions")
+  transcribeSpeech(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: TranscribeAppAudioDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.chatService.transcribeAppSpeech(id, dto.fileId, user.userId);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 调试AI应用语音输出合成
+  @Post(":id/speech/synthesis")
+  @HttpCode(HttpStatus.OK)
+  @SkipResponseWrap()
+  async synthesizeSpeech(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: SynthesizeAppSpeechDto,
+    @CurrentUser() user: AuthUser,
+  ): Promise<StreamableFile> {
+    const result = await this.chatService.synthesizeAppSpeech(
+      id,
+      dto.text,
+      user.userId,
+    );
+    return new StreamableFile(result.buffer, { type: result.contentType });
   }
   // -------------------------
 

@@ -18,7 +18,13 @@ export class CreateLlmDto {
   modelName!: string;
 
   @IsString({ message: "服务地址必须为字符串" })
-  @IsUrl({ require_tld: false }, { message: "服务地址必须是合法URL" })
+  @IsUrl(
+    {
+      protocols: ["http", "https", "ws", "wss"],
+      require_tld: false,
+    },
+    { message: "服务地址必须是合法URL" },
+  )
   @Length(1, 1024, { message: "服务地址长度必须在1到1024个字符之间" })
   baseUrl!: string;
 

@@ -81,6 +81,12 @@ type ChatMessage = {
   pending?: boolean
   knowledgeQuery?: string
   knowledgeCitations?: AppKnowledgeCitation[]
+  audioUrl?: string
+  audioGenerating?: boolean
+  audioMessage?: boolean
+  audioTranscribing?: boolean
+  statusText?: string
+  audioTextVisible?: boolean
 }
 
 const route = useRoute()
@@ -181,12 +187,16 @@ const {
   senderValue,
   attachments,
   responding,
+  transcribingVoice,
   uploadFiles,
   removeAttachment,
   submitMessage: submitDebugMessage,
+  submitVoiceMessage,
   stopResponse,
   clearChat,
-} = useAppDebugSession(appId, saveDraftNow, settings)
+} = useAppDebugSession(appId, saveDraftNow, settings, {
+  voiceOutputEnabled: () => toggleSettings.voiceOutput,
+})
 const isPageTab = (page: unknown): page is PageTab => {
   return typeof page === 'string' && pageTabs.some((item) => item.page === page)
 }
@@ -976,12 +986,16 @@ onMounted(() => {
           :attachments="attachments"
           :responding="responding"
           :show-memory-button="toggleSettings.longTermMemory"
+          :voice-input-enabled="toggleSettings.voiceInput"
+          :transcribing-voice="transcribingVoice"
           @clear-chat="clearChat"
           @open-memory="openMemoryModal"
           @submit-suggested="submitSuggestedPrompt"
           @upload-files="uploadFiles"
           @remove-attachment="removeAttachment"
           @submit-message="(value) => submitDebugMessage(value, scrollChatToBottom)"
+          @submit-voice="(file) => submitVoiceMessage(file, scrollChatToBottom)"
+          @toggle-audio-text="(key) => debugStore.toggleAudioText(appId, key)"
           @stop-response="stopResponse"
         />
       </main>

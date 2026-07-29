@@ -18,7 +18,14 @@ export interface PageParams {
   categoryKey?: string
 }
 
-export type LlmUsageType = 'chat' | 'structured' | 'embedding' | 'multimodal' | 'rerank'
+export type LlmUsageType =
+  | 'chat'
+  | 'structured'
+  | 'embedding'
+  | 'multimodal'
+  | 'rerank'
+  | 'speech_to_text'
+  | 'text_to_speech'
 export type LlmTestStatus = 'untested' | 'success' | 'failed'
 
 export interface LlmItem {
@@ -596,6 +603,7 @@ type StreamAiAppDebugParams = {
   onMeta?: (meta: { elapsedMs: number; tokens?: number }) => void
   onKnowledge?: (payload: { query: string; items: AppKnowledgeCitation[] }) => void
   onAttachments?: (payload: { query: string; items: AppAttachmentCitation[] }) => void
+  onStatus?: (status: string) => void
   onSuggestions?: (items: string[]) => void
   onError?: (message: string) => void
   signal?: AbortSignal
@@ -611,6 +619,7 @@ export const streamAiAppDebugApi = async ({
   onMeta,
   onKnowledge,
   onAttachments,
+  onStatus,
   onSuggestions,
   onError,
   signal,
@@ -658,9 +667,16 @@ export const streamAiAppDebugApi = async ({
       userMessageId?: number
       assistantMessageId?: number
       items?: string[] | AppKnowledgeCitation[] | AppAttachmentCitation[]
+      status?: string
     }
     if (eventName === 'error') {
       onError?.((payload as { message?: string }).message || '调试接口请求失败')
+      return
+    }
+    if (eventName === 'status') {
+      if (typeof payload.status === 'string' && payload.status.trim()) {
+        onStatus?.(payload.status.trim())
+      }
       return
     }
     if (eventName === 'suggestions') {
@@ -720,6 +736,32 @@ export const streamAiAppDebugApi = async ({
   if (buffer) {
     consumeEvent(buffer)
   }
+}
+
+export const transcribeAiAppSpeechApi = async (
+  appId: number,
+  fileId: number,
+): Promise<{ text: string }> => {
+  return request.post(`/ai/apps/${appId}/speech/transcriptions`, { fileId })
+}
+
+export const synthesizeAiAppSpeechApi = async (appId: number, text: string): Promise<Blob> => {
+  const baseURL = import.meta.env.VITE_API_BASE_URL || ''
+  const token = getAccessToken()
+  const response = await fetch(`${baseURL}/ai/apps/${appId}/speech/synthesis`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ text }),
+  })
+
+  if (!response.ok) {
+    throw new Error('语音合成失败')
+  }
+
+  return response.blob()
 }
 
 export const listPluginsApi = async (params?: PageParams): Promise<PageResult<PluginItem>> => {
