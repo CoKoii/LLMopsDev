@@ -35,13 +35,14 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
     const accessStore = useAccessStore();
     const authStore = useAuthStore();
     accessStore.setAccessToken(null);
+    accessStore.setRefreshToken(null);
     if (
       preferences.app.loginExpiredMode === 'modal' &&
       accessStore.isAccessChecked
     ) {
       accessStore.setLoginExpired(true);
     } else {
-      await authStore.logout();
+      await authStore.logout(true, false);
     }
   }
 
@@ -50,10 +51,15 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
    */
   async function doRefreshToken() {
     const accessStore = useAccessStore();
-    const resp = await refreshTokenApi();
-    const newToken = resp.data;
-    accessStore.setAccessToken(newToken);
-    return newToken;
+    const refreshToken = accessStore.refreshToken;
+    if (!refreshToken) {
+      throw new Error('Refresh token is missing.');
+    }
+
+    const tokens = await refreshTokenApi(refreshToken);
+    accessStore.setAccessToken(tokens.accessToken);
+    accessStore.setRefreshToken(tokens.refreshToken);
+    return tokens.accessToken;
   }
 
   function formatToken(token: null | string) {
