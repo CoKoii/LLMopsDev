@@ -127,6 +127,7 @@ const voiceRecording = ref(false)
 let mediaRecorder: MediaRecorder | undefined
 let voiceChunks: Blob[] = []
 let voiceStartedAt = 0
+let audioProgressFrame = 0
 const voiceMimeCandidates = ['audio/ogg;codecs=opus', 'audio/webm;codecs=opus', 'audio/webm']
 const senderModel = computed({
   get: () => props.senderValue,
@@ -294,6 +295,7 @@ function setAudioElement(key: string, element: Element | null) {
     audioElements.set(key, element)
     return
   }
+  if (playingAudioKey.value === key) stopAudioProgressLoop()
   audioElements.delete(key)
 }
 
@@ -359,19 +361,17 @@ function getAudioProgressRatio(item: DebugChatDisplayMessage) {
   return Math.min(1, Math.max(0, progress / duration))
 }
 
-function getVoiceBarStyle(item: DebugChatDisplayMessage, height: number, index: number) {
+function getVoiceWaveStyle(item: DebugChatDisplayMessage) {
   return {
-    '--voice-bar-progress': `${getVoiceBarProgress(item, index) * 100}%`,
-    height: `${height}px`,
-    animationDelay: `${index * 0.04}s`,
+    '--voice-progress': `${getAudioProgressRatio(item) * 100}%`,
   }
 }
 
-function getVoiceBarProgress(item: DebugChatDisplayMessage, index: number) {
-  const bars = getVoiceBarCount(item)
-  if (!bars) return 0
-
-  return Math.min(1, Math.max(0, getAudioProgressRatio(item) * bars - index))
+function getVoiceBarStyle(height: number, index: number) {
+  return {
+    height: `${height}px`,
+    animationDelay: `${index * 0.04}s`,
+  }
 }
 
 function handleAudioLoaded(item: DebugChatDisplayMessage, event: Event) {
@@ -380,15 +380,44 @@ function handleAudioLoaded(item: DebugChatDisplayMessage, event: Event) {
   audioDurations.value = { ...audioDurations.value, [item.key]: audio.duration }
 }
 
+function updateAudioProgress(key: string, currentTime: number) {
+  audioProgresses.value = { ...audioProgresses.value, [key]: currentTime }
+}
+
+function stopAudioProgressLoop() {
+  if (audioProgressFrame) {
+    cancelAnimationFrame(audioProgressFrame)
+    audioProgressFrame = 0
+  }
+}
+
+function syncPlayingAudioProgress() {
+  const key = playingAudioKey.value
+  const audio = key ? audioElements.get(key) : undefined
+  if (!audio || audio.paused || audio.ended) {
+    stopAudioProgressLoop()
+    return
+  }
+
+  updateAudioProgress(key, audio.currentTime)
+  audioProgressFrame = requestAnimationFrame(syncPlayingAudioProgress)
+}
+
+function startAudioProgressLoop() {
+  stopAudioProgressLoop()
+  audioProgressFrame = requestAnimationFrame(syncPlayingAudioProgress)
+}
+
 function handleAudioTimeUpdate(item: DebugChatDisplayMessage, event: Event) {
+  if (playingAudioKey.value === item.key) return
   const audio = event.target
-  if (!(audio instanceof HTMLAudioElement)) return
-  audioProgresses.value = { ...audioProgresses.value, [item.key]: audio.currentTime }
+  if (audio instanceof HTMLAudioElement) updateAudioProgress(item.key, audio.currentTime)
 }
 
 function handleAudioEnded(item: DebugChatDisplayMessage) {
+  stopAudioProgressLoop()
   if (playingAudioKey.value === item.key) playingAudioKey.value = ''
-  audioProgresses.value = { ...audioProgresses.value, [item.key]: 0 }
+  updateAudioProgress(item.key, 0)
 }
 
 function toggleVoicePlayback(item: DebugChatDisplayMessage) {
@@ -403,12 +432,16 @@ function toggleVoicePlayback(item: DebugChatDisplayMessage) {
   if (audio.paused) {
     void audio.play().then(() => {
       playingAudioKey.value = item.key
+      updateAudioProgress(item.key, audio.currentTime)
+      startAudioProgressLoop()
     })
     return
   }
 
   audio.pause()
   playingAudioKey.value = ''
+  stopAudioProgressLoop()
+  updateAudioProgress(item.key, audio.currentTime)
 }
 
 function normalizeStatusText(text: string | undefined) {
@@ -543,6 +576,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('click', closeVoiceContextMenu)
   window.removeEventListener('keydown', handleWindowKeydown)
+  stopAudioProgressLoop()
 })
 
 watch(
@@ -734,13 +768,23 @@ defineExpose({ scrollToBottom })
                 :style="getVoiceBubbleStyle(item)"
                 @click="toggleVoicePlayback(item)"
               >
-                <span class="voice-bubble__wave">
-                  <span
-                    v-for="(height, index) in getVoiceBars(item)"
-                    :key="index"
-                    :class="getVoiceBarClass(item)"
-                    :style="getVoiceBarStyle(item, height, index)"
-                  ></span>
+                <span class="voice-bubble__wave" :style="getVoiceWaveStyle(item)">
+                  <span class="voice-bubble__wave-layer voice-bubble__wave-layer--base">
+                    <span
+                      v-for="(height, index) in getVoiceBars(item)"
+                      :key="index"
+                      :class="getVoiceBarClass(item)"
+                      :style="getVoiceBarStyle(height, index)"
+                    ></span>
+                  </span>
+                  <span class="voice-bubble__wave-layer voice-bubble__wave-layer--progress">
+                    <span
+                      v-for="(height, index) in getVoiceBars(item)"
+                      :key="index"
+                      :class="getVoiceBarClass(item)"
+                      :style="getVoiceBarStyle(height, index)"
+                    ></span>
+                  </span>
                 </span>
                 <span v-if="item.ui.showVoiceStatus" class="voice-bubble__status">
                   {{ normalizeStatusText(item.statusText) }}
@@ -886,6 +930,10 @@ defineExpose({ scrollToBottom })
 .app-orchestration__preview *::before,
 .app-orchestration__preview *::after {
   box-sizing: border-box;
+}
+
+.app-orchestration__preview {
+  --chat-bubble-adjacent-gap: 0.4rem;
 }
 
 .orchestration-workspace-panel {
@@ -1094,8 +1142,12 @@ defineExpose({ scrollToBottom })
   box-shadow: none !important;
 }
 
+:global(.app-orchestration__preview .ant-bubble-header) {
+  margin-bottom: var(--chat-bubble-adjacent-gap);
+}
+
 :global(.app-orchestration__preview .ant-bubble-footer) {
-  margin-top: 0.8rem;
+  margin-top: var(--chat-bubble-adjacent-gap);
 }
 
 :global(.voice-message-row) {
@@ -1115,8 +1167,8 @@ defineExpose({ scrollToBottom })
   min-width: 12rem;
   max-width: 22rem;
   height: 4rem;
-  gap: 0.65rem;
-  padding: 0 0.9rem 0 1.1rem;
+  gap: 0.45rem;
+  padding: 0 0.95rem;
   color: #111827;
   background: #f1f2f4;
   border: 0;
@@ -1134,37 +1186,50 @@ defineExpose({ scrollToBottom })
 }
 
 :global(.voice-bubble__wave) {
+  --voice-progress: 0%;
+
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: center;
-  flex: 1 1 auto;
-  gap: 0.32rem;
+  flex: 1 1 0;
+  height: 2.4rem;
   min-width: 0;
 }
 
-:global(.voice-bubble__wave span) {
-  --voice-bar-progress: 0%;
+:global(.voice-bubble__wave-layer) {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  pointer-events: none;
+}
 
+:global(.voice-bubble__wave-layer--progress) {
+  clip-path: inset(0 calc(100% - var(--voice-progress)) 0 0);
+  will-change: clip-path;
+}
+
+:global(.voice-bubble__wave-layer span) {
   display: block;
   width: 0.34rem;
   flex: 0 0 0.34rem;
   background-color: #d1d5db;
-  background-image: linear-gradient(#4b5563, #4b5563);
-  background-repeat: no-repeat;
-  background-size: var(--voice-bar-progress) 100%;
   border-radius: 999px;
-  transition:
-    height 0.16s ease,
-    background-size 0.22s linear;
+  transition: height 0.16s ease;
 }
 
-:global(.voice-bubble__wave span.is-loading) {
+:global(.voice-bubble__wave-layer--progress span) {
+  background-color: #4b5563;
+}
+
+:global(.voice-bubble__wave-layer span.is-loading) {
   animation: voice-wave-loading 1.05s ease-in-out infinite;
 }
 
 :global(.voice-bubble__time) {
-  flex: 0 0 3.4rem;
-  margin-left: auto;
+  flex: 0 0 3.1rem;
   color: #111827;
   font-size: 1.3rem;
   font-variant-numeric: tabular-nums;
@@ -1644,7 +1709,7 @@ defineExpose({ scrollToBottom })
 }
 
 .knowledge-citations {
-  margin: 0.2rem 0;
+  margin: 0;
 }
 
 .knowledge-citations summary {
