@@ -77,7 +77,7 @@ const listItems = computed<ListBoxItem[]>(() =>
 )
 
 const formatAppDescription = (item: AiAppItem) => {
-  const modelName = item.model ? `${item.model.provider}·${item.model.modelName}` : '未选择模型'
+  const modelName = item.model?.modelName || '未选择模型'
   return `${item.category?.name || '未分类'} · ${modelName}`
 }
 

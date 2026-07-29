@@ -11,6 +11,7 @@ import {
 } from "@nestjs/common";
 import { CreateLlmDto } from "./dto/create-llm.dto";
 import { QueryLlmsDto } from "./dto/query-llms.dto";
+import { TestLlmDto } from "./dto/test-llm.dto";
 import { UpdateLlmDto } from "./dto/update-llm.dto";
 import { LlmService } from "./llm.service";
 
@@ -39,6 +40,14 @@ export class LlmController {
   @Get(":id")
   findOne(@Param("id", ParseIntPipe) id: number) {
     return this.llmService.findOne(id);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 测试模型连通性
+  @Post(":id/test")
+  test(@Param("id", ParseIntPipe) id: number, @Body() dto: TestLlmDto) {
+    return this.llmService.test(id, dto);
   }
   // -------------------------
 

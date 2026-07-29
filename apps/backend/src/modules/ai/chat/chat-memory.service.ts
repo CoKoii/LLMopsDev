@@ -1,15 +1,14 @@
-import { ChatOpenAI } from "@langchain/openai";
 import { ForbiddenException, Injectable } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import { InjectRepository } from "@nestjs/typeorm";
 import { MoreThan, Repository } from "typeorm";
 import { z } from "zod";
-import { getAiEnvironment } from "../../../common/config/env";
 import {
   AiAppVersion,
   AiAppVersionStatus,
 } from "../app/entities/app-version.entity";
 import { AiApp } from "../app/entities/app.entity";
+import { LlmUsageType } from "../llm/entities/llm.entity";
+import { LlmService } from "../llm/llm.service";
 import {
   CHAT_MESSAGE_ROLE,
   CHAT_MESSAGE_STATUS,
@@ -71,7 +70,7 @@ export class ChatMemoryService {
     private readonly summaryRepository: Repository<ChatSessionSummary>,
     @InjectRepository(ChatUserMemory)
     private readonly memoryRepository: Repository<ChatUserMemory>,
-    private readonly configService: ConfigService,
+    private readonly llmService: LlmService,
   ) {}
 
   async getMemory(appId: number, userId: number) {
@@ -247,14 +246,9 @@ export class ChatMemoryService {
   }
 
   private createStructuredOutputModel() {
-    const config = getAiEnvironment(this.configService).structuredOutput;
-
-    return new ChatOpenAI({
-      apiKey: config.apiKey,
-      model: config.model,
+    return this.llmService.createDefaultChatModel(LlmUsageType.STRUCTURED, {
       maxRetries: 0,
       temperature: 0,
-      configuration: { baseURL: config.baseUrl },
     });
   }
 
@@ -263,7 +257,7 @@ export class ChatMemoryService {
     messages: ChatMessage[],
   ) {
     const structuredModel =
-      this.createStructuredOutputModel().withStructuredOutput(
+      (await this.createStructuredOutputModel()).withStructuredOutput(
         SessionSummarySchema,
         { name: "SessionSummary", includeRaw: true },
       );
@@ -294,7 +288,7 @@ export class ChatMemoryService {
     sessionSummary: string;
   }) {
     const structuredModel =
-      this.createStructuredOutputModel().withStructuredOutput(
+      (await this.createStructuredOutputModel()).withStructuredOutput(
         LongTermMemorySchema,
         { name: "LongTermMemory", includeRaw: true },
       );

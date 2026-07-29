@@ -7,7 +7,7 @@ import {
   type PageResult,
   resolvePageQuery,
 } from "../../../common/http/page-query.dto";
-import { Llm } from "../llm/entities/llm.entity";
+import { Llm, LlmUsageType } from "../llm/entities/llm.entity";
 import { Knowledge } from "../knowledge/entities/knowledge.entity";
 import { Plugin } from "../plugin/entities/plugin.entity";
 import { CreateAppDto } from "./dto/create-app.dto";
@@ -24,7 +24,7 @@ import { AiApp } from "./entities/app.entity";
 
 const DRAFT_VERSION = "draft";
 
-type AppModelSummary = Pick<Llm, "id" | "provider" | "modelName">;
+type AppModelSummary = Pick<Llm, "id" | "modelName">;
 type AppListItem = AiApp & {
   model: AppModelSummary | null;
 };
@@ -264,6 +264,18 @@ export class AppService {
     };
   }
 
+  private async ensureSelectableChatModel(llmId?: number | null) {
+    if (llmId === undefined || llmId === null) return;
+
+    const llm = await this.llmRepository.findOne({
+      select: ["id", "usageType", "enabled"],
+      where: { id: llmId },
+    });
+    if (!llm || llm.usageType !== LlmUsageType.CHAT || !llm.enabled) {
+      throw new NotFoundException("可用对话模型不存在");
+    }
+  }
+
   private async ensureApp(
     id: number,
     userId: number,
@@ -392,8 +404,8 @@ export class AppService {
     ];
     const llms = llmIds.length
       ? await this.llmRepository.find({
-          select: ["id", "provider", "modelName"],
-          where: { id: In(llmIds) },
+          select: ["id", "modelName"],
+          where: { id: In(llmIds), usageType: LlmUsageType.CHAT, enabled: true },
         })
       : [];
     const llmById = new Map(llms.map((llm) => [llm.id, llm]));
@@ -410,7 +422,6 @@ export class AppService {
           model: llm
             ? {
                 id: llm.id,
-                provider: llm.provider,
                 modelName: llm.modelName,
               }
             : null,
@@ -446,6 +457,7 @@ export class AppService {
   // 自动保存AI应用草稿版本
   async updateDraft(id: number, dto: UpdateAppDraftDto, userId: number) {
     const draft = await this.ensureDraftVersion(id, userId);
+    await this.ensureSelectableChatModel(dto.config?.llmId);
     draft.config = this.mergeConfig(draft.config, dto.config);
     return this.withVersionRelations(
       await this.appVersionRepository.save(draft),

@@ -1,7 +1,6 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { createAgent } from "langchain";
 import {
-  BadRequestException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -13,7 +12,7 @@ import {
   type AiAppVersionConfig,
 } from "../app/entities/app-version.entity";
 import { AiApp } from "../app/entities/app.entity";
-import { Llm } from "../llm/entities/llm.entity";
+import { LlmService } from "../llm/llm.service";
 import { PluginToolService } from "../plugin/plugin-tool.service";
 
 const DRAFT_VERSION = "draft";
@@ -37,8 +36,7 @@ export class AiRuntimeService {
     private readonly appRepository: Repository<AiApp>,
     @InjectRepository(AiAppVersion)
     private readonly appVersionRepository: Repository<AiAppVersion>,
-    @InjectRepository(Llm)
-    private readonly llmRepository: Repository<Llm>,
+    private readonly llmService: LlmService,
     private readonly pluginToolService: PluginToolService,
   ) {}
 
@@ -60,33 +58,19 @@ export class AiRuntimeService {
     return draft;
   }
 
-  private async resolveLlm(config: AiAppVersionConfig) {
-    if (!config.llmId) {
-      throw new BadRequestException("请先选择模型");
-    }
-
-    const llm = await this.llmRepository.findOne({
-      where: { id: config.llmId },
-    });
-    if (!llm) throw new BadRequestException("模型不存在");
-
-    return llm;
-  }
-
   async createModel(config: AiAppVersionConfig): Promise<ChatOpenAI> {
-    const llm = await this.resolveLlm(config);
+    if (!config.llmId) {
+      throw new NotFoundException("请先选择模型");
+    }
     const settings = config.modelSettings ?? {};
 
-    return new ChatOpenAI({
-      apiKey: llm.apiKey,
-      model: llm.modelName,
+    return this.llmService.createChatModelById(config.llmId, {
       maxRetries: 1,
       streamUsage: true,
       temperature: settings.temperature,
       topP: settings.topP,
       frequencyPenalty: settings.frequencyPenalty,
       presencePenalty: settings.presencePenalty,
-      configuration: { baseURL: llm.url },
     });
   }
 
@@ -160,6 +144,8 @@ export class AiRuntimeService {
     return {
       draft,
       model,
+      tools,
+      systemPrompt,
       agent: createAgent({
         model,
         tools,

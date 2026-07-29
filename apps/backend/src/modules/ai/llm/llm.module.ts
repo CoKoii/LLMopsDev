@@ -8,5 +8,6 @@ import { LlmService } from "./llm.service";
   imports: [TypeOrmModule.forFeature([Llm])],
   controllers: [LlmController],
   providers: [LlmService],
+  exports: [LlmService],
 })
 export class LlmModule {}

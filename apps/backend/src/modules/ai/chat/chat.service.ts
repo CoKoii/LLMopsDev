@@ -1,4 +1,5 @@
-import { type BaseMessageLike } from "@langchain/core/messages";
+import { ToolMessage, type BaseMessageLike } from "@langchain/core/messages";
+import type { StructuredToolInterface } from "@langchain/core/tools";
 import { ChatOpenAI } from "@langchain/openai";
 import {
   BadRequestException,
@@ -7,12 +8,10 @@ import {
   Logger,
   NotFoundException,
 } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Readable } from "node:stream";
 import { Repository } from "typeorm";
 import { z } from "zod";
-import { getAiEnvironment } from "../../../common/config/env";
 import {
   type AppKnowledgeRecallItem,
   KnowledgeService,
@@ -22,6 +21,8 @@ import {
   type AiAppKnowledgeRecallSettings,
   type AiAppVersionConfig,
 } from "../app/entities/app-version.entity";
+import { LlmUsageType } from "../llm/entities/llm.entity";
+import { LlmService } from "../llm/llm.service";
 import { AiRuntimeService } from "./ai-runtime.service";
 import { ChatAttachmentService } from "./chat-attachment.service";
 import { ChatMemoryQueueService } from "./chat-memory-queue.service";
@@ -135,6 +136,16 @@ type StructuredOutputWithRaw<T> = {
   raw: unknown;
 };
 
+type AgentToolCall = {
+  id?: string;
+  name?: string;
+  args?: Record<string, unknown>;
+};
+type AgentToolRunResult = {
+  answer?: string;
+  messages: BaseMessageLike[];
+};
+
 @Injectable()
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
@@ -149,7 +160,7 @@ export class ChatService {
     private readonly chatAttachmentService: ChatAttachmentService,
     private readonly chatMemoryService: ChatMemoryService,
     private readonly chatMemoryQueueService: ChatMemoryQueueService,
-    private readonly configService: ConfigService,
+    private readonly llmService: LlmService,
   ) {}
 
   private sse(data: SseEvent, event?: string) {
@@ -178,14 +189,9 @@ export class ChatService {
   }
 
   private createStructuredOutputModel(temperature = 0) {
-    const config = getAiEnvironment(this.configService).structuredOutput;
-
-    return new ChatOpenAI({
-      apiKey: config.apiKey,
-      model: config.model,
+    return this.llmService.createDefaultChatModel(LlmUsageType.STRUCTURED, {
       maxRetries: 0,
       temperature,
-      configuration: { baseURL: config.baseUrl },
     });
   }
 
@@ -227,7 +233,7 @@ export class ChatService {
     if (!fallback) return [];
 
     try {
-      const model = this.createStructuredOutputModel();
+      const model = await this.createStructuredOutputModel();
       const structuredModel = model.withStructuredOutput(
         KnowledgeQueryRewriteSchema,
         {
@@ -237,7 +243,9 @@ export class ChatService {
       );
       const response = (await structuredModel.invoke(
         this.createKnowledgeQueryRewriteMessages(fallback, history),
-      )) as StructuredOutputWithRaw<z.infer<typeof KnowledgeQueryRewriteSchema>>;
+      )) as StructuredOutputWithRaw<
+        z.infer<typeof KnowledgeQueryRewriteSchema>
+      >;
       tokenUsage?.add(getAiMessageTokens(response.raw));
       const queries = this.normalizeKnowledgeQueries(
         response.parsed.queries,
@@ -379,7 +387,7 @@ export class ChatService {
     assistantMessage: string,
     tokenUsage?: TokenUsageTracker,
   ): Promise<string[]> {
-    const model = this.createStructuredOutputModel(1.5);
+    const model = await this.createStructuredOutputModel(1.5);
     const structuredModel = model.withStructuredOutput(
       QuestionSuggestionsSchema,
       {
@@ -418,6 +426,177 @@ export class ChatService {
 
   private getTotalTokens(messages: BaseMessageLike[]) {
     return getAiMessageTokens(messages) || undefined;
+  }
+
+  private getMessageText(content: unknown): string {
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return "";
+
+    return content
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (
+          typeof item === "object" &&
+          item !== null &&
+          "text" in item &&
+          typeof item.text === "string"
+        ) {
+          return item.text;
+        }
+        return "";
+      })
+      .join("");
+  }
+
+  private getToolCalls(message: unknown): AgentToolCall[] {
+    const toolCalls = (message as { tool_calls?: unknown }).tool_calls;
+    if (!Array.isArray(toolCalls)) return [];
+
+    return toolCalls
+      .filter(
+        (item): item is AgentToolCall =>
+          typeof item === "object" && item !== null,
+      )
+      .map((item) => ({
+        id: typeof item.id === "string" ? item.id : undefined,
+        name: typeof item.name === "string" ? item.name : undefined,
+        args:
+          typeof item.args === "object" && item.args !== null ? item.args : {},
+      }));
+  }
+
+  private getToolSchemaShape(tool: StructuredToolInterface) {
+    const schema = tool.schema as {
+      shape?: unknown;
+      _def?: { shape?: unknown };
+    };
+    const shape = schema.shape ?? schema._def?.shape;
+
+    return typeof shape === "function" ? shape() : shape;
+  }
+
+  private toolExpectsBody(tool: StructuredToolInterface) {
+    const shape = this.getToolSchemaShape(tool);
+    return typeof shape === "object" && shape !== null && "body" in shape;
+  }
+
+  private normalizeToolArgs(
+    tool: StructuredToolInterface,
+    args: Record<string, unknown> = {},
+  ) {
+    const normalizedArgs =
+      this.toolExpectsBody(tool) && args.body === undefined
+        ? { body: args }
+        : args;
+
+    if (typeof normalizedArgs.body !== "string") return normalizedArgs;
+
+    const body = normalizedArgs.body.trim();
+    if (!body) return { ...normalizedArgs, body: {} };
+
+    try {
+      const parsed: unknown = JSON.parse(body);
+      if (typeof parsed === "object" && parsed !== null) {
+        return { ...normalizedArgs, body: parsed };
+      }
+    } catch {
+      return normalizedArgs;
+    }
+
+    return normalizedArgs;
+  }
+
+  private async runAgentWithTools(params: {
+    model: ChatOpenAI;
+    tools: StructuredToolInterface[];
+    systemPrompt: string;
+    messages: BaseMessageLike[];
+  }): Promise<AgentToolRunResult> {
+    const toolMap = new Map(params.tools.map((item) => [item.name, item]));
+    const messages: BaseMessageLike[] = [
+      ["system", params.systemPrompt],
+      ...params.messages,
+    ];
+    const modelWithTools = params.model.bindTools(params.tools);
+    const maxToolRounds = 8;
+    let hasExecutedTools = false;
+
+    for (let round = 1; round <= maxToolRounds; round += 1) {
+      const aiMessage = await modelWithTools.invoke(messages);
+      const toolCalls = this.getToolCalls(aiMessage);
+
+      if (!toolCalls.length) {
+        const answer = this.getMessageText(aiMessage.content).trim();
+        if (answer) {
+          messages.push(aiMessage);
+          return { answer, messages };
+        }
+        if (hasExecutedTools) {
+          messages.push([
+            "human",
+            "请基于以上已获得的信息直接回答用户，不要再调用任何工具；如果信息不足，请说明不足。",
+          ]);
+        }
+        return { messages };
+      }
+
+      messages.push(aiMessage);
+      for (const toolCall of toolCalls) {
+        if (!toolCall.id || !toolCall.name) {
+          throw new Error(
+            `模型返回了无效工具调用：${JSON.stringify(toolCall)}`,
+          );
+        }
+
+        const selectedTool = toolMap.get(toolCall.name);
+        if (!selectedTool) {
+          messages.push(
+            new ToolMessage({
+              content: JSON.stringify({
+                ok: false,
+                error: `工具不存在：${toolCall.name}`,
+              }),
+              name: toolCall.name,
+              tool_call_id: toolCall.id,
+            }),
+          );
+          continue;
+        }
+
+        const toolResult = await selectedTool.invoke({
+          type: "tool_call",
+          id: toolCall.id,
+          name: toolCall.name,
+          args: this.normalizeToolArgs(selectedTool, toolCall.args),
+        });
+        messages.push(toolResult as BaseMessageLike);
+        hasExecutedTools = true;
+      }
+    }
+
+    messages.push([
+      "human",
+      "请基于以上已获得的信息直接回答用户，不要再调用任何工具；如果信息不足，请说明不足。",
+    ]);
+
+    return { messages };
+  }
+
+  private async *streamModelAnswerChunks(params: {
+    model: ChatOpenAI;
+    messages: BaseMessageLike[];
+  }): AsyncGenerator<string, BaseMessageLike[]> {
+    const chunks: string[] = [];
+    const stream = await params.model.stream(params.messages);
+
+    for await (const chunk of stream) {
+      const content = this.getMessageText(chunk.content);
+      if (!content) continue;
+      chunks.push(content);
+      yield content;
+    }
+
+    return [...params.messages, ["ai", chunks.join("")]] as BaseMessageLike[];
   }
 
   private createTokenUsageTracker(): TokenUsageTracker {
@@ -667,9 +846,10 @@ export class ChatService {
         await this.chatAttachmentService.hasRecallableChunks(session.id, {
           excludeMessageId: userMessage.id,
         });
-      const recallQueries = knowledgeConfig.ids.length || hasHistoricalAttachments
-        ? await this.rewriteKnowledgeQueries(content, history, tokenUsage)
-        : [content];
+      const recallQueries =
+        knowledgeConfig.ids.length || hasHistoricalAttachments
+          ? await this.rewriteKnowledgeQueries(content, history, tokenUsage)
+          : [content];
       const [historicalAttachmentRecall, recalledItems] = await Promise.all([
         hasHistoricalAttachments
           ? Promise.all(
@@ -688,7 +868,10 @@ export class ChatService {
                 .filter(Boolean)
                 .join("\n\n"),
               items: results.flatMap((result) => result.items),
-              tokens: results.reduce((total, result) => total + (result.tokens ?? 0), 0),
+              tokens: results.reduce(
+                (total, result) => total + (result.tokens ?? 0),
+                0,
+              ),
             }))
           : Promise.resolve({
               context: "",
@@ -698,12 +881,13 @@ export class ChatService {
         knowledgeConfig.ids.length
           ? Promise.all(
               recallQueries.map(async (query) => {
-                const result = await this.knowledgeService.recallForAppWithUsage({
-                  knowledgeIds: knowledgeConfig.ids,
-                  settings: knowledgeConfig.settings,
-                  query,
-                  userId,
-                });
+                const result =
+                  await this.knowledgeService.recallForAppWithUsage({
+                    knowledgeIds: knowledgeConfig.ids,
+                    settings: knowledgeConfig.settings,
+                    query,
+                    userId,
+                  });
                 tokenUsage.add(result.tokens);
 
                 return result.items.map((item) => ({ ...item, query }));
@@ -740,30 +924,56 @@ export class ChatService {
         );
       }
 
-      const { agent } = await this.aiRuntimeService.createAgentFromDraft(
-        draft,
-        model,
-        userId,
-        {
+      const { agent, tools, systemPrompt } =
+        await this.aiRuntimeService.createAgentFromDraft(draft, model, userId, {
           longTermMemoryContext,
           sessionSummaryContext,
           knowledgeContext,
           currentAttachmentContext: currentAttachmentContext.context,
           recalledAttachmentContext: historicalAttachmentRecall.context,
-        },
-      );
+        });
       const messages = this.createMessages(content, history);
 
-      const run = await agent.streamEvents({ messages }, { version: "v3" });
-
-      for await (const item of run.messages) {
-        for await (const content of item.text) {
-          output += content;
-          yield this.sse({ content });
+      let resultMessages: BaseMessageLike[] = [];
+      if (tools.length) {
+        const result = await this.runAgentWithTools({
+          model,
+          tools,
+          systemPrompt,
+          messages,
+        });
+        if (result.answer) {
+          output += result.answer;
+          resultMessages = result.messages;
+          yield this.sse({ content: result.answer });
+        } else {
+          const answerStream = this.streamModelAnswerChunks({
+            model,
+            messages: result.messages,
+          });
+          while (true) {
+            const chunk = await answerStream.next();
+            if (chunk.done) {
+              resultMessages = chunk.value;
+              break;
+            }
+            output += chunk.value;
+            yield this.sse({ content: chunk.value });
+          }
         }
+      } else {
+        const run = await agent.streamEvents({ messages }, { version: "v3" });
+
+        for await (const item of run.messages) {
+          for await (const content of item.text) {
+            output += content;
+            yield this.sse({ content });
+          }
+        }
+        const result = await run.output;
+        resultMessages = result.messages;
       }
-      const result = await run.output;
-      tokenUsage.add(this.getTotalTokens(result.messages));
+      tokenUsage.add(this.getTotalTokens(resultMessages));
 
       if (draft.config.toggles?.questionSuggestions) {
         let suggestions: string[] = [];

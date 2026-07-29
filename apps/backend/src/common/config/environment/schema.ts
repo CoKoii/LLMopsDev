@@ -36,33 +36,6 @@ export const validationSchema = Joi.object({
   [ENV.REDIS_PASSWORD]: Joi.string().allow("").required(),
   [ENV.REDIS_DB]: Joi.number().integer().min(0).required(),
   [ENV.REDIS_KEY_PREFIX]: Joi.string().allow("").required(),
-  [ENV.AI_ENABLED]: Joi.boolean().truthy("true").falsy("false").required(),
-  [ENV.AI_API_KEY]: Joi.when(ENV.AI_ENABLED, {
-    is: true,
-    then: Joi.string().trim().required(),
-    otherwise: Joi.string().allow("").required(),
-  }),
-  [ENV.AI_BASE_URL]: Joi.when(ENV.AI_ENABLED, {
-    is: true,
-    then: Joi.string().trim().required(),
-    otherwise: Joi.string().allow("").required(),
-  }),
-  [ENV.AI_CHAT_MODEL]: Joi.when(ENV.AI_ENABLED, {
-    is: true,
-    then: Joi.string().trim().required(),
-    otherwise: Joi.string().allow("").required(),
-  }),
-  [ENV.AI_STRUCTURED_OUTPUT_MODEL]: Joi.when(ENV.AI_ENABLED, {
-    is: true,
-    then: Joi.string().trim().allow("").required(),
-    otherwise: Joi.string().allow("").required(),
-  }),
-  [ENV.AI_EMBEDDING_MODEL]: Joi.when(ENV.AI_ENABLED, {
-    is: true,
-    then: Joi.string().trim().required(),
-    otherwise: Joi.string().allow("").required(),
-  }),
-  [ENV.AI_TEMPERATURE]: Joi.number().min(0).max(2).required(),
   [ENV.MAIL_ENABLED]: Joi.boolean().truthy("true").falsy("false").required(),
   [ENV.MAIL_HOST]: Joi.when(ENV.MAIL_ENABLED, {
     is: true,

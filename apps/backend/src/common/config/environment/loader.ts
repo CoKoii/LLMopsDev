@@ -2,7 +2,6 @@ import type { ConfigService } from "@nestjs/config";
 import * as dotenv from "dotenv";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { createAiEnvironment } from "./ai.env";
 import { createAppEnvironment } from "./app.env";
 import { createAuthEnvironment } from "./auth.env";
 import { createDatabaseEnvironment } from "./database.env";
@@ -73,12 +72,6 @@ export const getDatabaseEnvironmentFromProcess = () =>
 export const getRedisEnvironment = (
   configService: Pick<ConfigService, "get">,
 ) => createRedisEnvironment(withConfigService(configService));
-
-export const getAiEnvironment = (configService: Pick<ConfigService, "get">) =>
-  createAiEnvironment(withConfigService(configService));
-
-export const getAiEnvironmentFromProcess = () =>
-  createAiEnvironment(withProcessEnvironment);
 
 export const getMailEnvironment = (configService: Pick<ConfigService, "get">) =>
   createMailEnvironment(withConfigService(configService));

@@ -4,13 +4,10 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { ChatOpenAI } from "@langchain/openai";
-import { ConfigService } from "@nestjs/config";
 import { InjectRepository } from "@nestjs/typeorm";
 import { randomUUID } from "crypto";
 import { Repository } from "typeorm";
 import { z } from "zod";
-import { getAiEnvironment } from "../../../common/config/env";
 import { OssService } from "../../../common/oss/oss.service";
 import { FilesService } from "../../files/files.service";
 import {
@@ -54,6 +51,8 @@ import {
   type AppKnowledgeRecallItem,
   type AppKnowledgeRecallSettings,
 } from "./knowledge-recall.service";
+import { LlmUsageType } from "../llm/entities/llm.entity";
+import { LlmService } from "../llm/llm.service";
 import { estimateTokens } from "./token-estimator";
 
 export type {
@@ -131,7 +130,6 @@ export class KnowledgeService {
     private readonly documentRepository: Repository<KnowledgeDocument>,
     @InjectRepository(KnowledgeDocumentChunk)
     private readonly chunkRepository: Repository<KnowledgeDocumentChunk>,
-    private readonly configService: ConfigService,
     private readonly filesService: FilesService,
     private readonly ossService: OssService,
     private readonly documentParserService: DocumentParserService,
@@ -142,17 +140,13 @@ export class KnowledgeService {
     private readonly documentVectorStoreService: DocumentVectorStoreService,
     private readonly documentProcessQueueService: DocumentProcessQueueService,
     private readonly knowledgeRecallService: KnowledgeRecallService,
+    private readonly llmService: LlmService,
   ) {}
 
   private createWebClipModel() {
-    const config = getAiEnvironment(this.configService).structuredOutput;
-
-    return new ChatOpenAI({
-      apiKey: config.apiKey,
-      model: config.model,
+    return this.llmService.createDefaultChatModel(LlmUsageType.STRUCTURED, {
       maxRetries: 1,
       temperature: 0,
-      configuration: { baseURL: config.baseUrl },
     });
   }
 
@@ -166,7 +160,7 @@ export class KnowledgeService {
     const fallbackMarkdown = buildFallbackWebClipMarkdown(dto);
 
     try {
-      const model = this.createWebClipModel().withStructuredOutput(
+      const model = (await this.createWebClipModel()).withStructuredOutput(
         WebClipCleanSchema,
         { name: "WebClipClean" },
       );
@@ -631,8 +625,7 @@ export class KnowledgeService {
       characterCount: metadata.characterCount,
       recallCount: 0,
       enabled: true,
-      embeddingModel:
-        document.embeddingModel ?? this.documentEmbeddingService.model,
+      embeddingModel: document.embeddingModel ?? "",
       embeddingDimension: document.embeddingDimension,
       vectorId: randomUUID(),
       metadata,

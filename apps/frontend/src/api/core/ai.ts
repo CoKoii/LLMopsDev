@@ -13,15 +13,26 @@ export interface PageParams {
   page?: number
   pageSize?: number
   name?: string
+  usageType?: LlmUsageType
   scope?: 'mine' | 'available'
   categoryKey?: string
 }
 
+export type LlmUsageType = 'chat' | 'structured' | 'embedding' | 'multimodal'
+export type LlmTestStatus = 'untested' | 'success' | 'failed'
+
 export interface LlmItem {
   id: number
-  provider: string
+  usageType: LlmUsageType
   modelName: string
-  url: string
+  baseUrl: string
+  enabled: boolean
+  isDefault: boolean
+  apiKeyConfigured: boolean
+  lastTestStatus: LlmTestStatus
+  lastTestMessage?: string | null
+  lastTestedAt?: string | null
+  remark?: string | null
   createdAt?: string
   updatedAt?: string
 }
@@ -44,7 +55,7 @@ export interface AiAppItem {
   image?: string | null
   description?: string | null
   category?: AiAppCategoryItem | null
-  model?: Pick<LlmItem, 'id' | 'provider' | 'modelName'> | null
+  model?: Pick<LlmItem, 'id' | 'modelName'> | null
   status: boolean
   createdAt?: string
   updatedAt?: string
@@ -301,10 +312,15 @@ export interface ParsedDocument {
 export type CleanedDocument = ParsedDocument
 export type EnhancedDocument = ParsedDocument
 
-export type CreateLlmPayload = Omit<LlmItem, 'id' | 'createdAt' | 'updatedAt'> & {
+export interface CreateLlmPayload {
+  usageType: LlmUsageType
+  modelName: string
+  baseUrl: string
   apiKey: string
+  enabled?: boolean
+  remark?: string | null
 }
-export type UpdateLlmPayload = Partial<CreateLlmPayload>
+export type UpdateLlmPayload = Partial<Omit<CreateLlmPayload, 'usageType'>>
 
 export interface CreateAiAppPayload {
   name: string

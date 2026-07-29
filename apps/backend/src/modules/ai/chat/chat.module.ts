@@ -4,7 +4,7 @@ import { FilesModule } from "../../files/files.module";
 import { AiAppVersion } from "../app/entities/app-version.entity";
 import { KnowledgeModule } from "../knowledge/knowledge.module";
 import { AiApp } from "../app/entities/app.entity";
-import { Llm } from "../llm/entities/llm.entity";
+import { LlmModule } from "../llm/llm.module";
 import { PluginModule } from "../plugin/plugin.module";
 import { AiRuntimeService } from "./ai-runtime.service";
 import { ChatAttachmentService } from "./chat-attachment.service";
@@ -25,7 +25,6 @@ import { ChatUserMemory } from "./entities/chat-user-memory.entity";
     TypeOrmModule.forFeature([
       AiApp,
       AiAppVersion,
-      Llm,
       ChatSession,
       ChatMessage,
       ChatAttachment,
@@ -36,6 +35,7 @@ import { ChatUserMemory } from "./entities/chat-user-memory.entity";
     FilesModule,
     PluginModule,
     KnowledgeModule,
+    LlmModule,
   ],
   controllers: [ChatController],
   providers: [

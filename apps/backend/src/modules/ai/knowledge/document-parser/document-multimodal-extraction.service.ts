@@ -1,12 +1,9 @@
 import { AIMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
-import { BadRequestException, Injectable } from "@nestjs/common";
-import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
-import { Llm } from "../../llm/entities/llm.entity";
+import { Injectable } from "@nestjs/common";
+import { LlmUsageType } from "../../llm/entities/llm.entity";
+import { LlmService } from "../../llm/llm.service";
 
-const MULTIMODAL_EXTRACTION_MODEL = "gemini-2.5-flash-lite";
-const TEXT_ONLY_MULTIMODAL_HOSTS = new Set(["api.deepseek.com"]);
 const MULTIMODAL_EXTRACTION_PROMPT = [
   "将附件内容转换为后续对话和检索可使用的中文文本。",
   "保留可见事实、文字、结构、关键数值和空间关系。",
@@ -63,15 +60,12 @@ export const getAiMessageTokens = (value: unknown): number => {
 
 @Injectable()
 export class DocumentMultimodalExtractionService {
-  constructor(
-    @InjectRepository(Llm)
-    private readonly llmRepository: Repository<Llm>,
-  ) {}
+  constructor(private readonly llmService: LlmService) {}
 
   async extractImage(
     options: MultimodalExtractionOptions,
   ): Promise<MultimodalExtractionResult> {
-    const model = await this.createModel();
+    const { model, modelName } = await this.createModel();
     const imageUrl = `data:${options.contentType};base64,${options.buffer.toString("base64")}`;
     const response = await model.invoke([
       ["system", MULTIMODAL_EXTRACTION_PROMPT],
@@ -87,42 +81,23 @@ export class DocumentMultimodalExtractionService {
     return {
       text: getMessageText(response),
       tokens: getAiMessageTokens(response),
-      model: MULTIMODAL_EXTRACTION_MODEL,
+      model: modelName,
     };
   }
 
   private async createModel() {
-    const llm = await this.resolveMultimodalLlm();
-
-    return new ChatOpenAI({
-      apiKey: llm.apiKey,
-      model: MULTIMODAL_EXTRACTION_MODEL,
-      maxRetries: 1,
-      temperature: 0,
-      configuration: { baseURL: llm.url },
-    });
-  }
-
-  private async resolveMultimodalLlm() {
-    const llms = await this.llmRepository.find({ order: { id: "DESC" } });
-    const llm = llms.find(
-      (item) => !this.isKnownTextOnlyMultimodalEndpoint(item),
+    const llm = await this.llmService.resolveEnabledSystemModel(
+      LlmUsageType.MULTIMODAL,
     );
-    if (llm) return llm;
-
-    throw new BadRequestException(
-      `请先配置支持多模态解析的模型通道，解析模型固定使用 ${MULTIMODAL_EXTRACTION_MODEL}`,
-    );
-  }
-
-  private isKnownTextOnlyMultimodalEndpoint(llm: Llm) {
-    try {
-      const host = new URL(llm.url).host.toLowerCase();
-      if (TEXT_ONLY_MULTIMODAL_HOSTS.has(host)) return true;
-    } catch {
-      return false;
-    }
-
-    return llm.provider.toLowerCase().includes("deepseek");
+    return {
+      modelName: llm.modelName,
+      model: new ChatOpenAI({
+        apiKey: llm.apiKey,
+        model: llm.modelName,
+        maxRetries: 1,
+        temperature: 0,
+        configuration: { baseURL: llm.baseUrl },
+      }),
+    };
   }
 }

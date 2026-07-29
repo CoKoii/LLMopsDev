@@ -1,7 +1,6 @@
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { BadGatewayException, Injectable } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
-import { getAiEnvironment } from "../../../../common/config/env";
+import { LlmService } from "../../llm/llm.service";
 import type { EmbeddingResult } from "./document-embedding.types";
 
 interface EmbedOptions {
@@ -30,20 +29,7 @@ const chunkArray = <T>(items: T[], size: number) => {
 
 @Injectable()
 export class DocumentEmbeddingService {
-  readonly model: string;
-
-  private readonly embeddings: OpenAIEmbeddings;
-
-  constructor(configService: ConfigService) {
-    const config = getAiEnvironment(configService).embedding;
-    this.model = config.model;
-    this.embeddings = new OpenAIEmbeddings({
-      apiKey: config.apiKey,
-      model: config.model,
-      batchSize: EMBEDDING_BATCH_SIZE,
-      configuration: { baseURL: config.baseUrl },
-    });
-  }
+  constructor(private readonly llmService: LlmService) {}
 
   async embed(
     input: string[],
@@ -56,23 +42,28 @@ export class DocumentEmbeddingService {
   private async executeEmbed(input: string[]): Promise<EmbeddingResult> {
     const texts = input.map((item) => item.trim()).filter(Boolean);
     if (!texts.length) {
-      return { model: this.model, dimension: 0, vectors: [] };
+      return { model: "", dimension: 0, vectors: [] };
     }
 
+    const { embeddings, modelName } =
+      await this.llmService.createEmbeddingClient();
     const vectors: number[][] = [];
     for (const batch of chunkArray(texts, EMBEDDING_BATCH_SIZE)) {
-      vectors.push(...(await this.embedTextsWithRetry(batch)));
+      vectors.push(...(await this.embedTextsWithRetry(embeddings, batch)));
     }
 
     const dimension = vectors[0]?.length ?? 0;
     return {
-      model: this.model,
+      model: modelName,
       dimension,
       vectors,
     };
   }
 
-  private async embedTextsWithRetry(input: string[]): Promise<number[][]> {
+  private async embedTextsWithRetry(
+    embeddings: OpenAIEmbeddings,
+    input: string[],
+  ): Promise<number[][]> {
     let lastError: unknown;
 
     for (
@@ -81,7 +72,7 @@ export class DocumentEmbeddingService {
       attempt += 1
     ) {
       try {
-        return await this.embedTexts(input);
+        return await this.embedTexts(embeddings, input);
       } catch (error) {
         lastError = error;
         if (
@@ -97,9 +88,12 @@ export class DocumentEmbeddingService {
     throw lastError;
   }
 
-  private async embedTexts(input: string[]): Promise<number[][]> {
+  private async embedTexts(
+    embeddings: OpenAIEmbeddings,
+    input: string[],
+  ): Promise<number[][]> {
     try {
-      return await this.embeddings.embedDocuments(input);
+      return await embeddings.embedDocuments(input);
     } catch (error) {
       const message = getErrorMessage(error);
       throw new BadGatewayException(`在线 embedding 调用失败：${message}`);

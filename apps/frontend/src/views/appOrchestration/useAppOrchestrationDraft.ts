@@ -174,7 +174,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
 
   const modelOptions = computed(() =>
     llms.value.map((item) => ({
-      label: `${item.provider} · ${item.modelName}`,
+      label: item.modelName,
       value: item.id,
     })),
   )

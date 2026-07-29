@@ -1,7 +1,7 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { FilesModule } from "../../files/files.module";
-import { Llm } from "../llm/entities/llm.entity";
+import { LlmModule } from "../llm/llm.module";
 import { DocumentProcessProcessor } from "./document-process.processor";
 import { DocumentProcessQueueService } from "./document-process-queue.service";
 import { DocumentCleanerService } from "./document-cleaner/document-cleaner.service";
@@ -24,9 +24,9 @@ import { KnowledgeService } from "./knowledge.service";
       Knowledge,
       KnowledgeDocument,
       KnowledgeDocumentChunk,
-      Llm,
     ]),
     FilesModule,
+    LlmModule,
   ],
   controllers: [KnowledgeController],
   providers: [
