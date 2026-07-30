@@ -31,6 +31,7 @@ import { QueryKnowledgeDocumentChunksDto } from "./dto/query-knowledge-document-
 import { QueryKnowledgeDocumentsDto } from "./dto/query-knowledge-documents.dto";
 import { QueryKnowledgeDto } from "./dto/query-knowledge.dto";
 import { RecallTestDto } from "./dto/recall-test.dto";
+import { ReprocessKnowledgeDocumentDto } from "./dto/reprocess-knowledge-document.dto";
 import { UpdateKnowledgeDocumentChunkDto } from "./dto/update-knowledge-document-chunk.dto";
 import { UpdateKnowledgeDocumentDto } from "./dto/update-knowledge-document.dto";
 import { UpdateKnowledgeDto } from "./dto/update-knowledge.dto";
@@ -764,6 +765,31 @@ export class KnowledgeService {
       await this.documentRepository.save(document);
       throw error;
     }
+
+    return this.withAccessibleDocumentUrl(document);
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 重新处理知识库文档
+  async reprocessDocument(
+    knowledgeId: number,
+    documentId: number,
+    dto: ReprocessKnowledgeDocumentDto | undefined,
+    userId: number,
+  ) {
+    const document = await this.findOwnedDocument(
+      knowledgeId,
+      documentId,
+      userId,
+    );
+
+    await this.documentProcessQueueService.enqueue({
+      knowledgeId,
+      documentId,
+      userId,
+      chunkConfig: dto?.chunkConfig,
+    });
 
     return this.withAccessibleDocumentUrl(document);
   }

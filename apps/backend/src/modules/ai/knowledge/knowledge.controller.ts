@@ -19,6 +19,7 @@ import { QueryKnowledgeDocumentChunksDto } from "./dto/query-knowledge-document-
 import { QueryKnowledgeDocumentsDto } from "./dto/query-knowledge-documents.dto";
 import { QueryKnowledgeDto } from "./dto/query-knowledge.dto";
 import { RecallTestDto } from "./dto/recall-test.dto";
+import { ReprocessKnowledgeDocumentDto } from "./dto/reprocess-knowledge-document.dto";
 import { UpdateKnowledgeDocumentChunkDto } from "./dto/update-knowledge-document-chunk.dto";
 import { UpdateKnowledgeDocumentDto } from "./dto/update-knowledge-document.dto";
 import { UpdateKnowledgeDto } from "./dto/update-knowledge.dto";
@@ -174,6 +175,24 @@ export class KnowledgeController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.knowledgeService.createDocument(id, dto, user.userId);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 重新处理知识库文档
+  @Post(":id/documents/:documentId/reprocess")
+  reprocessDocument(
+    @Param("id", ParseIntPipe) id: number,
+    @Param("documentId", ParseIntPipe) documentId: number,
+    @Body() dto: ReprocessKnowledgeDocumentDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.knowledgeService.reprocessDocument(
+      id,
+      documentId,
+      dto,
+      user.userId,
+    );
   }
   // -------------------------
 

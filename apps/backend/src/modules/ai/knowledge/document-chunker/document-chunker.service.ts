@@ -341,6 +341,12 @@ const finalizeSection = (
   };
 };
 
+const isHeadingOnlySection = (section: Pick<DocumentSection, "units">) =>
+  section.units.length > 0 &&
+  section.units.every((unit) =>
+    unit.blockTypes.every((type) => type === "heading"),
+  );
+
 const overlapTail = (text: string) => {
   const normalized = compact(text);
   if (estimateTokens(normalized) <= OVERLAP_TOKENS) return normalized;
@@ -412,6 +418,7 @@ export class DocumentChunkerService {
 
     const pushCurrent = () => {
       if (!current.units.length) return;
+      if (isHeadingOnlySection(current)) return;
       sections.push(finalizeSection(current));
     };
 

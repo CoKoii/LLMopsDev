@@ -99,6 +99,7 @@ type KnowledgeCitation = {
   documentName: string;
   chunkIndex: number;
   score: number;
+  headingPath?: string[];
   text: string;
 };
 
@@ -194,6 +195,18 @@ export class ChatService {
   private compactText(value: string, maxLength: number) {
     const text = value.replace(/\s+/g, " ").trim();
     return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+  }
+
+  private getKnowledgeHeadingPath(item: AppKnowledgeRecallItem) {
+    const metadata = item.metadata ?? {};
+    const candidates = [metadata.sectionHeadingPath, metadata.headingPath];
+    const headingPath = candidates.find(
+      (value): value is string[] =>
+        Array.isArray(value) &&
+        value.every((item) => typeof item === "string" && item.trim()),
+    );
+
+    return headingPath?.map((item) => item.trim());
   }
 
   private createStructuredOutputModel(temperature = 0) {
@@ -411,6 +424,7 @@ export class ChatService {
 
       const citationId = citations.length + 1;
       const itemQueries = item.queries ?? [item.query];
+      const headingPath = this.getKnowledgeHeadingPath(item);
       citations.push({
         id: citationId,
         queries: itemQueries,
@@ -420,6 +434,7 @@ export class ChatService {
         documentName: item.documentName,
         chunkIndex: item.chunkIndex,
         score: item.score,
+        headingPath,
         text: this.compactText(item.text, 180),
       });
       contextParts.push(
@@ -427,6 +442,7 @@ export class ChatService {
           `资料 ${citationId}：知识库：${item.knowledgeName}`,
           `检索问题：${itemQueries.join("；")}`,
           `文档：${item.documentName} / 片段 #${item.chunkIndex + 1}`,
+          headingPath?.length ? `章节：${headingPath.join(" > ")}` : "",
           `匹配度：${item.score}`,
           `内容：${text}`,
         ]
