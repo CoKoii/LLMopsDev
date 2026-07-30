@@ -195,10 +195,8 @@ const displayMessages = computed<DebugChatDisplayMessage[]>(() =>
   }),
 )
 
-const voiceBubbleMinWidthRem = 12
-const voiceBubbleMaxWidthRem = 22
-const voiceStatusWidthRem = 18
-const voiceDurationForMaxWidth = 60
+const voiceBubbleWidthRem = 18
+const voiceBarCount = 14
 const voiceBarPattern = [8, 13, 18, 12, 22, 16, 10, 19, 24, 14, 20, 15]
 
 const formatFileSize = (size: number) => {
@@ -307,7 +305,7 @@ function formatAudioTime(seconds: number | undefined) {
 }
 
 function getAudioStatus(item: DebugChatDisplayMessage) {
-  if (item.ui.showVoiceStatus) return ''
+  if (item.ui.showVoiceStatus) return normalizeStatusText(item.statusText) || '生成中'
   if (
     item.audioGenerating ||
     (item.pending && item.audioMessage && !audioDurations.value[item.key])
@@ -320,37 +318,15 @@ function getAudioStatus(item: DebugChatDisplayMessage) {
   return formatAudioTime(progress || duration)
 }
 
-function getVoiceDuration(item: DebugChatDisplayMessage) {
-  return audioDurations.value[item.key] || 0
-}
-
-function getVoiceWidth(item: DebugChatDisplayMessage) {
-  const duration = Math.min(getVoiceDuration(item), voiceDurationForMaxWidth)
-  const ratio = duration / voiceDurationForMaxWidth
-  return voiceBubbleMinWidthRem + (voiceBubbleMaxWidthRem - voiceBubbleMinWidthRem) * ratio
-}
-
-function getVoiceBubbleStyle(item: DebugChatDisplayMessage) {
-  if (item.ui.showVoiceStatus) {
-    return {
-      width: `${voiceStatusWidthRem}rem`,
-    }
-  }
-  const width = getVoiceWidth(item)
+function getVoiceBubbleStyle() {
   return {
-    width: `${width}rem`,
+    width: `${voiceBubbleWidthRem}rem`,
   }
 }
 
-function getVoiceBarCount(item: DebugChatDisplayMessage) {
-  const width = getVoiceWidth(item)
-  const ratio = (width - voiceBubbleMinWidthRem) / (voiceBubbleMaxWidthRem - voiceBubbleMinWidthRem)
-  return Math.round(9 + ratio * 13)
-}
-
-function getVoiceBars(item: DebugChatDisplayMessage) {
+function getVoiceBars() {
   return Array.from(
-    { length: getVoiceBarCount(item) },
+    { length: voiceBarCount },
     (_, index) => voiceBarPattern[index % voiceBarPattern.length] ?? voiceBarPattern[0] ?? 12,
   )
 }
@@ -452,7 +428,10 @@ function toggleVoicePlayback(item: DebugChatDisplayMessage) {
 }
 
 function normalizeStatusText(text: string | undefined) {
-  return text?.replace(/[.。…]+$/g, '').trim() ?? ''
+  const value = text?.replace(/[.。…]+$/g, '').trim() ?? ''
+  if (value.includes('回复')) return '生成中'
+  if (value.includes('语音')) return '合成中'
+  return value
 }
 
 function createMessageUiState(item: DebugChatMessage): MessageUiState {
@@ -772,13 +751,13 @@ defineExpose({ scrollToBottom })
               <button
                 class="voice-bubble"
                 type="button"
-                :style="getVoiceBubbleStyle(item)"
+                :style="getVoiceBubbleStyle()"
                 @click="toggleVoicePlayback(item)"
               >
                 <span class="voice-bubble__wave" :style="getVoiceWaveStyle(item)">
                   <span class="voice-bubble__wave-layer voice-bubble__wave-layer--base">
                     <span
-                      v-for="(height, index) in getVoiceBars(item)"
+                      v-for="(height, index) in getVoiceBars()"
                       :key="index"
                       :class="getVoiceBarClass(item)"
                       :style="getVoiceBarStyle(height, index)"
@@ -786,17 +765,20 @@ defineExpose({ scrollToBottom })
                   </span>
                   <span class="voice-bubble__wave-layer voice-bubble__wave-layer--progress">
                     <span
-                      v-for="(height, index) in getVoiceBars(item)"
+                      v-for="(height, index) in getVoiceBars()"
                       :key="index"
                       :class="getVoiceBarClass(item)"
                       :style="getVoiceBarStyle(height, index)"
                     ></span>
                   </span>
                 </span>
-                <span v-if="item.ui.showVoiceStatus" class="voice-bubble__status">
-                  {{ normalizeStatusText(item.statusText) }}
-                </span>
-                <span v-if="getAudioStatus(item)" class="voice-bubble__time">
+                <span
+                  class="voice-bubble__meta"
+                  :class="{
+                    'is-empty': !getAudioStatus(item),
+                    'is-status': item.ui.showVoiceStatus || item.audioGenerating,
+                  }"
+                >
                   {{ getAudioStatus(item) }}
                 </span>
               </button>
@@ -1172,8 +1154,9 @@ defineExpose({ scrollToBottom })
 :global(.voice-bubble) {
   display: flex;
   align-items: center;
-  min-width: 12rem;
-  max-width: 22rem;
+  width: 18rem;
+  min-width: 18rem;
+  max-width: 18rem;
   height: 4rem;
   gap: 0.45rem;
   padding: 0 0.95rem;
@@ -1199,7 +1182,7 @@ defineExpose({ scrollToBottom })
   position: relative;
   display: flex;
   align-items: center;
-  flex: 1 1 0;
+  flex: 1 1 auto;
   height: 2.4rem;
   min-width: 0;
 }
@@ -1236,25 +1219,35 @@ defineExpose({ scrollToBottom })
   animation: voice-wave-loading 1.05s ease-in-out infinite;
 }
 
-:global(.voice-bubble__time) {
-  flex: 0 0 3.1rem;
+:global(.voice-bubble__meta) {
+  flex: 0 0 5.2rem;
+  overflow: hidden;
   color: #111827;
   font-size: 1.3rem;
   font-variant-numeric: tabular-nums;
   line-height: 1.8rem;
   text-align: right;
-  white-space: nowrap;
-}
-
-:global(.voice-bubble__status) {
-  flex: none;
-  max-width: 8.8rem;
-  overflow: hidden;
-  color: #4b5563;
-  font-size: 1.3rem;
-  line-height: 1.8rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition:
+    color 0.16s ease,
+    opacity 0.16s ease;
+}
+
+:global(.voice-bubble__meta.is-empty) {
+  opacity: 0;
+}
+
+:global(.voice-bubble__meta:not(.is-empty)) {
+  opacity: 1;
+}
+
+:global(.voice-bubble__meta:not(:empty)) {
+  color: #111827;
+}
+
+:global(.voice-bubble__meta.is-status) {
+  color: #4b5563;
 }
 
 :global(.voice-message-row audio) {
