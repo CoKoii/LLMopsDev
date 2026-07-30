@@ -40,6 +40,11 @@ type ChatModelOptions = {
   topP?: number;
 };
 
+export type SpeechAudioChunk = {
+  buffer: Buffer;
+  contentType: string;
+};
+
 const trimTrailingSlash = (value: string) => value.trim().replace(/\/+$/, "");
 const resolveAudioEndpoint = (baseUrl: string, path: string) =>
   `${trimTrailingSlash(baseUrl)}${path}`;
@@ -53,8 +58,11 @@ const assertHttpAudioEndpoint = (llm: Llm) => {
   );
 };
 const AUDIO_WEBSOCKET_TIMEOUT_MS = 30_000;
+const TTS_STREAM_IDLE_TIMEOUT_MS = 45_000;
 const ASR_TEST_SILENCE = Buffer.alloc(32_000);
 const TTS_FINISH_DELAY_MS = 500;
+const TTS_STREAM_SEGMENT_MIN_CHARS = 18;
+const TTS_STREAM_SEGMENT_MAX_CHARS = 80;
 const DEFAULT_TTS_SPEECH_RATE = 120;
 const DEFAULT_TTS_SPEED = 1.15;
 const DEFAULT_QWEN_AUDIO_TTS_PLUS_VOICE = "longanlingxin";
@@ -249,6 +257,46 @@ const wait = (milliseconds: number) =>
   new Promise<void>((resolve) => {
     setTimeout(resolve, milliseconds);
   });
+
+const findSpeechSegmentEnd = (text: string) => {
+  const sentenceEndPattern = /[。！？.!?]\s*/gu;
+  let match: RegExpExecArray | null;
+  let endIndex = -1;
+  while ((match = sentenceEndPattern.exec(text))) {
+    endIndex = match.index + match[0].length;
+  }
+  if (endIndex >= TTS_STREAM_SEGMENT_MIN_CHARS) return endIndex;
+  if (text.length < TTS_STREAM_SEGMENT_MAX_CHARS) return -1;
+
+  const softBreaks = ["，", "、", ",", ";", "；", "\n"];
+  const searchStart = Math.floor(TTS_STREAM_SEGMENT_MAX_CHARS / 2);
+  const windowText = text.slice(searchStart, TTS_STREAM_SEGMENT_MAX_CHARS);
+  const softIndex = Math.max(
+    ...softBreaks.map((item) => windowText.lastIndexOf(item)),
+  );
+  if (softIndex >= 0) return searchStart + softIndex + 1;
+
+  return TTS_STREAM_SEGMENT_MAX_CHARS;
+};
+
+async function* createSpeechTextSegments(input: AsyncIterable<string>) {
+  let buffer = "";
+
+  for await (const chunk of input) {
+    buffer += chunk;
+    for (;;) {
+      const endIndex = findSpeechSegmentEnd(buffer);
+      if (endIndex < 0) break;
+
+      const text = buffer.slice(0, endIndex).trim();
+      buffer = buffer.slice(endIndex);
+      if (text) yield text;
+    }
+  }
+
+  const tail = buffer.trim();
+  if (tail) yield tail;
+}
 
 const extractMessageText = (message: AIMessage) => {
   const content = message.content;
@@ -639,6 +687,22 @@ export class LlmService {
     };
   }
 
+  async *streamSynthesizeSpeech(text: AsyncIterable<string>, voice?: string) {
+    const llm = await this.resolveEnabledSystemModel(
+      LlmUsageType.TEXT_TO_SPEECH,
+    );
+    if (!isWebSocketUrl(llm.baseUrl)) {
+      const chunks: string[] = [];
+      for await (const chunk of text) chunks.push(chunk);
+      if (!chunks.join("").trim()) return;
+
+      yield await this.synthesizeSpeech(chunks.join(""), voice);
+      return;
+    }
+
+    yield* this.streamSynthesizeSpeechByWebSocket(llm, text, voice);
+  }
+
   private createAudioWebSocket(llm: Llm) {
     return new WebSocket(trimTrailingSlash(llm.baseUrl), {
       headers: {
@@ -884,6 +948,151 @@ export class LlmService {
         });
       },
     );
+  }
+
+  private streamSynthesizeSpeechByWebSocket(
+    llm: Llm,
+    text: AsyncIterable<string>,
+    voice?: string,
+  ) {
+    const taskId = randomUUID();
+    const contentType = "audio/mpeg";
+    const stream = new ReadableStream<SpeechAudioChunk>({
+      start: (controller) => {
+        const ws = this.createAudioWebSocket(llm);
+        let settled = false;
+        let taskStarted = false;
+        let inputFinished = false;
+        let timer: NodeJS.Timeout;
+        const refreshTimeout = () => {
+          clearTimeout(timer);
+          timer = setTimeout(() => {
+            finish(new BadGatewayException("语音合成空闲超时"));
+          }, TTS_STREAM_IDLE_TIMEOUT_MS);
+        };
+        refreshTimeout();
+
+        const finish = (error?: Error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          ws.close();
+          if (error) {
+            controller.error(error);
+            return;
+          }
+          controller.close();
+        };
+
+        const sendJson = (payload: unknown) => {
+          refreshTimeout();
+          ws.send(JSON.stringify(payload));
+        };
+
+        const finishTask = () => {
+          if (inputFinished || settled) return;
+          inputFinished = true;
+          sendJson({
+            header: {
+              action: "finish-task",
+              task_id: taskId,
+              streaming: "duplex",
+            },
+            payload: { input: {} },
+          });
+        };
+
+        const pumpText = async () => {
+          try {
+            for await (const segment of createSpeechTextSegments(text)) {
+              if (settled) return;
+              sendJson({
+                header: {
+                  action: "continue-task",
+                  task_id: taskId,
+                  streaming: "duplex",
+                },
+                payload: {
+                  input: { text: segment },
+                },
+              });
+            }
+            void wait(TTS_FINISH_DELAY_MS).then(finishTask);
+          } catch (error) {
+            finish(
+              error instanceof Error
+                ? error
+                : new BadGatewayException(String(error)),
+            );
+          }
+        };
+
+        ws.on("open", () => {
+          sendJson({
+            header: {
+              action: "run-task",
+              task_id: taskId,
+              streaming: "duplex",
+            },
+            payload: {
+              task_group: "audio",
+              task: "tts",
+              function: "SpeechSynthesizer",
+              model: llm.modelName,
+              parameters: {
+                text_type: "PlainText",
+                voice: resolveSpeechVoice(llm, voice),
+                format: "mp3",
+                speech_rate: DEFAULT_TTS_SPEECH_RATE,
+                enable_ssml: false,
+              },
+              input: {},
+            },
+          });
+        });
+
+        ws.on("message", (data, isBinary) => {
+          if (settled) return;
+          if (isBinary) {
+            refreshTimeout();
+            controller.enqueue({ buffer: toBuffer(data), contentType });
+            return;
+          }
+
+          refreshTimeout();
+          const message = parseWebSocketMessage(data);
+          const event = message?.header?.event;
+          if (event === "task-started" && !taskStarted) {
+            taskStarted = true;
+            void pumpText();
+            return;
+          }
+          if (event === "task-finished") {
+            finish();
+            return;
+          }
+          if (event === "task-failed") {
+            finish(
+              new BadGatewayException(
+                `语音合成调用失败：${message?.header?.error_code ?? ""} ${
+                  message?.header?.error_message ?? ""
+                }`.trim(),
+              ),
+            );
+          }
+        });
+
+        ws.on("error", (error) => {
+          finish(
+            new BadGatewayException(
+              `语音合成 WebSocket 连接失败：${error.message}`,
+            ),
+          );
+        });
+      },
+    });
+
+    return stream.values();
   }
 
   async create(createLlmDto: CreateLlmDto) {

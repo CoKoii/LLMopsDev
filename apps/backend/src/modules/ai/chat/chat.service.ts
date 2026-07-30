@@ -23,7 +23,7 @@ import {
 } from "../app/entities/app-version.entity";
 import { FilesService } from "../../files/files.service";
 import { LlmUsageType } from "../llm/entities/llm.entity";
-import { LlmService } from "../llm/llm.service";
+import { LlmService, type SpeechAudioChunk } from "../llm/llm.service";
 import { AiRuntimeService } from "./ai-runtime.service";
 import { ChatAttachmentService } from "./chat-attachment.service";
 import { ChatMemoryQueueService } from "./chat-memory-queue.service";
@@ -82,11 +82,14 @@ const PromptOptimizeSchema = z
 
 type SseEvent =
   | { content: string }
+  | { contentType: string }
+  | { contentType: string; data: string }
   | { message: string }
   | { status: string }
   | { sessionId: number; userMessageId: number; assistantMessageId: number }
   | { elapsedMs: number; tokens?: number }
   | { items: string[] }
+  | Record<string, never>
   | KnowledgeCitationEvent
   | AttachmentCitationEvent;
 
@@ -140,6 +143,63 @@ type StructuredOutputWithRaw<T> = {
   parsed: T;
   raw: unknown;
 };
+
+class AsyncQueue<T> implements AsyncIterable<T> {
+  private readonly items: T[] = [];
+  private readonly waiters: Array<{
+    resolve: (value: IteratorResult<T>) => void;
+    reject: (error: unknown) => void;
+  }> = [];
+  private closed = false;
+  private error: unknown;
+
+  push(item: T) {
+    if (this.closed) return;
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      waiter.resolve({ value: item, done: false });
+      return;
+    }
+    this.items.push(item);
+  }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    while (this.waiters.length) {
+      this.waiters.shift()?.resolve({ value: undefined, done: true });
+    }
+  }
+
+  fail(error: unknown) {
+    if (this.closed) return;
+    this.closed = true;
+    this.error = error;
+    while (this.waiters.length) {
+      this.waiters.shift()?.reject(error);
+    }
+  }
+
+  drainReady() {
+    return this.items.splice(0);
+  }
+
+  async next(): Promise<IteratorResult<T>> {
+    if (this.items.length) {
+      return { value: this.items.shift() as T, done: false };
+    }
+    if (this.error) throw this.error;
+    if (this.closed) return { value: undefined, done: true };
+
+    return new Promise<IteratorResult<T>>((resolve, reject) => {
+      this.waiters.push({ resolve, reject });
+    });
+  }
+
+  [Symbol.asyncIterator]() {
+    return this;
+  }
+}
 
 type AgentToolCall = {
   id?: string;
@@ -197,6 +257,31 @@ export class ChatService {
     return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
   }
 
+  private encodeSpeechAudioChunk(chunk: SpeechAudioChunk) {
+    return {
+      contentType: chunk.contentType,
+      data: chunk.buffer.toString("base64"),
+    };
+  }
+
+  private startSpeechAudioStream(input: AsyncQueue<string>) {
+    const output = new AsyncQueue<SpeechAudioChunk>();
+    void (async () => {
+      try {
+        for await (const chunk of this.llmService.streamSynthesizeSpeech(
+          input,
+        )) {
+          output.push(chunk);
+        }
+        output.close();
+      } catch (error) {
+        output.fail(error);
+      }
+    })();
+
+    return output;
+  }
+
   private getKnowledgeHeadingPath(item: AppKnowledgeRecallItem) {
     const metadata = item.metadata ?? {};
     const candidates = [metadata.sectionHeadingPath, metadata.headingPath];
@@ -235,20 +320,6 @@ export class ChatService {
       contentType: file.contentType,
       filename: file.originalName,
     });
-  }
-
-  async synthesizeAppSpeech(appId: number, text: string, userId: number) {
-    const draft = await this.aiRuntimeService.getDraft(appId, userId);
-    if (!draft.config.toggles?.voiceOutput) {
-      throw new BadRequestException("应用未开启语音输出");
-    }
-
-    const content = text.trim();
-    if (!content) {
-      throw new BadRequestException("语音文本不能为空");
-    }
-
-    return this.llmService.synthesizeSpeech(content);
   }
 
   private createKnowledgeQueryRewriteMessages(
@@ -877,6 +948,7 @@ export class ChatService {
     const startedAt = Date.now();
     let output = "";
     let assistantMessage: ChatMessage | undefined;
+    let activeSpeechInput: AsyncQueue<string> | undefined;
     const tokenUsage = this.createTokenUsageTracker();
 
     try {
@@ -886,6 +958,46 @@ export class ChatService {
       }
       const draft = await this.aiRuntimeService.getDraft(appId, userId);
       const model = await this.aiRuntimeService.createModel(draft.config);
+      const speechInput = draft.config.toggles?.voiceOutput
+        ? new AsyncQueue<string>()
+        : undefined;
+      activeSpeechInput = speechInput;
+      const speechOutput = speechInput
+        ? this.startSpeechAudioStream(speechInput)
+        : undefined;
+      let speechStarted = false;
+      const service = this;
+      const drainReadySpeechAudio = function* () {
+        for (const chunk of speechOutput?.drainReady() ?? []) {
+          yield service.sse(service.encodeSpeechAudioChunk(chunk), "audio");
+        }
+      };
+      const emitContent = async function* (value: string) {
+        output += value;
+        if (speechInput) {
+          if (!speechStarted) {
+            speechStarted = true;
+            yield service.sse({ contentType: "audio/mpeg" }, "audio-start");
+          }
+          speechInput.push(value);
+        }
+        yield service.sse({ content: value });
+        yield* drainReadySpeechAudio();
+      };
+      const finishSpeech = async function* () {
+        if (!speechInput || !speechOutput) return;
+        speechInput.close();
+        try {
+          for await (const chunk of speechOutput) {
+            yield service.sse(service.encodeSpeechAudioChunk(chunk), "audio");
+          }
+          yield service.sse({}, "audio-end");
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          yield service.sse({ message }, "audio-error");
+        }
+      };
       const session = await this.resolveDebugSession({
         appId,
         userId,
@@ -1069,8 +1181,7 @@ export class ChatService {
               resultMessages = [...result.messages, ...chunk.value];
               break;
             }
-            output += chunk.value;
-            yield this.sse({ content: chunk.value });
+            yield* emitContent(chunk.value);
           }
         } else {
           if (pluginStatusSent) {
@@ -1086,8 +1197,7 @@ export class ChatService {
               resultMessages = chunk.value;
               break;
             }
-            output += chunk.value;
-            yield this.sse({ content: chunk.value });
+            yield* emitContent(chunk.value);
           }
         }
       } else {
@@ -1095,13 +1205,13 @@ export class ChatService {
 
         for await (const item of run.messages) {
           for await (const content of item.text) {
-            output += content;
-            yield this.sse({ content });
+            yield* emitContent(content);
           }
         }
         const result = await run.output;
         resultMessages = result.messages;
       }
+      yield* finishSpeech();
       tokenUsage.add(this.getTotalTokens(resultMessages));
 
       if (draft.config.toggles?.questionSuggestions) {
@@ -1157,6 +1267,7 @@ export class ChatService {
       const stack = error instanceof Error ? error.stack : undefined;
 
       this.logger.error(`AI应用调试失败: ${message}`, stack);
+      activeSpeechInput?.close();
       if (assistantMessage) {
         await this.messageRepository.update(assistantMessage.id, {
           content: output || message,

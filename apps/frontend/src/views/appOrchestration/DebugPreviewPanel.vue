@@ -307,6 +307,13 @@ function formatAudioTime(seconds: number | undefined) {
 }
 
 function getAudioStatus(item: DebugChatDisplayMessage) {
+  if (item.ui.showVoiceStatus) return ''
+  if (
+    item.audioGenerating ||
+    (item.pending && item.audioMessage && !audioDurations.value[item.key])
+  ) {
+    return '生成中'
+  }
   const progress = audioProgresses.value[item.key]
   const duration = audioDurations.value[item.key]
   if (!progress && !duration) return ''
@@ -799,6 +806,7 @@ defineExpose({ scrollToBottom })
                 :src="item.audioUrl"
                 preload="metadata"
                 @loadedmetadata="handleAudioLoaded(item, $event)"
+                @durationchange="handleAudioLoaded(item, $event)"
                 @timeupdate="handleAudioTimeUpdate(item, $event)"
                 @ended="handleAudioEnded(item)"
               />

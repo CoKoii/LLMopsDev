@@ -1,6 +1,5 @@
 import {
   streamAiAppDebugApi,
-  synthesizeAiAppSpeechApi,
   transcribeAiAppSpeechApi,
   uploadFileApi,
   type UploadedFile,
@@ -32,6 +31,105 @@ type UploadFileWithUid = File & {
   uid?: string
 }
 
+type StreamingAudioSink = {
+  append: (base64: string, contentType: string) => void
+  finish: () => void
+  fail: () => void
+}
+
+const base64ToUint8Array = (value: string): Uint8Array<ArrayBuffer> => {
+  const binary = window.atob(value)
+  const bytes = new Uint8Array(new ArrayBuffer(binary.length))
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return bytes
+}
+
+const createStreamingAudioSink = (
+  contentType: string,
+  onUrl: (url: string) => void,
+): StreamingAudioSink => {
+  const chunks: Uint8Array<ArrayBuffer>[] = []
+  const createBlobUrl = () => {
+    const url = URL.createObjectURL(new Blob(chunks, { type: contentType }))
+    onUrl(url)
+  }
+
+  if (!('MediaSource' in window) || !MediaSource.isTypeSupported(contentType)) {
+    return {
+      append: (base64) => {
+        chunks.push(base64ToUint8Array(base64))
+      },
+      finish: createBlobUrl,
+      fail: () => undefined,
+    }
+  }
+
+  const mediaSource = new MediaSource()
+  const streamUrl = URL.createObjectURL(mediaSource)
+  const pending: Uint8Array<ArrayBuffer>[] = []
+  let sourceBuffer: SourceBuffer | undefined
+  let finished = false
+  let failed = false
+  onUrl(streamUrl)
+
+  const appendNext = () => {
+    if (!sourceBuffer || sourceBuffer.updating) return
+    const chunk = pending.shift()
+    if (chunk) {
+      sourceBuffer.appendBuffer(chunk)
+      return
+    }
+    if (finished && mediaSource.readyState === 'open') {
+      try {
+        mediaSource.endOfStream()
+      } catch {
+        // The media element may have been detached while the stream was ending.
+      }
+    }
+  }
+
+  mediaSource.addEventListener(
+    'sourceopen',
+    () => {
+      if (failed) return
+      try {
+        sourceBuffer = mediaSource.addSourceBuffer(contentType)
+        sourceBuffer.mode = 'sequence'
+        sourceBuffer.addEventListener('updateend', appendNext)
+        appendNext()
+      } catch {
+        failed = true
+        createBlobUrl()
+      }
+    },
+    { once: true },
+  )
+
+  return {
+    append: (base64) => {
+      const chunk = base64ToUint8Array(base64)
+      chunks.push(chunk)
+      if (failed) return
+      pending.push(chunk)
+      appendNext()
+    },
+    finish: () => {
+      finished = true
+      createBlobUrl()
+      if (failed) {
+        return
+      }
+      appendNext()
+    },
+    fail: () => {
+      failed = true
+      pending.length = 0
+    },
+  }
+}
+
 const toDebugAttachment = (file: UploadedFile, uid: string): DebugComposerAttachment => ({
   uid,
   fileId: file.id,
@@ -54,6 +152,7 @@ export function useAppDebugSession(
   const responding = ref(false)
   const transcribingVoice = ref(false)
   let debugAbortController: AbortController | undefined
+  let activeAudioSink: StreamingAudioSink | undefined
 
   const hasUploadingAttachments = () =>
     attachments.value.some((item) => item.status === 'uploading')
@@ -94,38 +193,6 @@ export function useAppDebugSession(
     attachments.value = attachments.value.filter((item) => item.uid !== uid)
   }
 
-  const createAssistantAudio = async (
-    assistantKey: string,
-    assistantText: string,
-    scrollToBottom: () => Promise<void>,
-  ) => {
-    if (!voiceOptions.voiceOutputEnabled?.() || !assistantText) return
-
-    debugStore.updateMessage(appId.value, assistantKey, {
-      audioGenerating: true,
-      audioMessage: true,
-      audioTextVisible: false,
-      statusText: '生成语音中',
-    })
-    try {
-      const audio = await synthesizeAiAppSpeechApi(appId.value, assistantText)
-      const audioUrl = URL.createObjectURL(audio)
-      debugStore.updateMessage(appId.value, assistantKey, {
-        audioUrl,
-        audioGenerating: false,
-        statusText: undefined,
-      })
-      await scrollToBottom()
-    } catch {
-      debugStore.updateMessage(appId.value, assistantKey, {
-        audioGenerating: false,
-        audioMessage: false,
-        statusText: undefined,
-      })
-      notify.warning('语音合成失败，已保留文字回复')
-    }
-  }
-
   const runAssistantResponse = async (
     content: string,
     scrollToBottom: () => Promise<void>,
@@ -150,6 +217,20 @@ export function useAppDebugSession(
     responding.value = true
     let streamFailed = false
     let assistantContent = ''
+    let audioSink: StreamingAudioSink | undefined
+    const ensureAudioSink = (contentType: string) => {
+      if (audioSink) return audioSink
+      audioSink = createStreamingAudioSink(contentType, (audioUrl) => {
+        updateAssistant({
+          audioUrl,
+          audioGenerating: false,
+          audioMessage: true,
+          statusText: undefined,
+        })
+      })
+      activeAudioSink = audioSink
+      return audioSink
+    }
     await scrollToBottom()
 
     try {
@@ -168,21 +249,55 @@ export function useAppDebugSession(
         },
         onContent: async (chunk) => {
           assistantContent += chunk
-          if (!assistantAsAudio) {
-            updateAssistant({
-              content: assistantContent,
-              statusText: undefined,
-            })
-            await scrollToBottom()
-          }
+          updateAssistant({
+            content: assistantContent,
+            ...(!assistantAsAudio ? { statusText: undefined } : {}),
+          })
+          if (!assistantAsAudio) await scrollToBottom()
+        },
+        onAudioStart: ({ contentType }) => {
+          if (!assistantAsAudio) return
+          ensureAudioSink(contentType)
+          updateAssistant({
+            audioGenerating: false,
+            audioMessage: true,
+            statusText: undefined,
+          })
+        },
+        onAudioChunk: async ({ contentType, data }) => {
+          if (!assistantAsAudio) return
+          ensureAudioSink(contentType).append(data, contentType)
+          updateAssistant({
+            audioGenerating: false,
+            audioMessage: true,
+            statusText: undefined,
+          })
+          await scrollToBottom()
+        },
+        onAudioEnd: () => {
+          audioSink?.finish()
+          updateAssistant({
+            audioGenerating: false,
+            audioMessage: assistantAsAudio,
+            statusText: undefined,
+          })
+          activeAudioSink = undefined
+        },
+        onAudioError: (message) => {
+          audioSink?.fail()
+          activeAudioSink = undefined
+          updateAssistant({
+            audioGenerating: false,
+            statusText: undefined,
+          })
+          notify.warning(message || '语音合成失败，已保留文字回复')
         },
         onMeta: (meta) => {
           updateAssistant({
-            ...(assistantAsAudio ? { content: assistantContent } : {}),
             pending: false,
             elapsedMs: meta.elapsedMs,
             tokens: meta.tokens,
-            statusText: assistantAsAudio ? '生成语音中' : undefined,
+            statusText: assistantAsAudio && !audioSink ? '等待语音' : undefined,
           })
         },
         onStatus: async (status) => {
@@ -226,11 +341,10 @@ export function useAppDebugSession(
       if (assistantAsAudio && assistantText && !assistantMessage?.content.trim()) {
         updateAssistant({ content: assistantText })
       }
-      if (!streamFailed && assistantText) {
-        responding.value = false
-        await createAssistantAudio(assistantKey, assistantText, scrollToBottom)
-      }
+      if (!streamFailed && assistantText) responding.value = false
     } catch (error) {
+      audioSink?.fail()
+      activeAudioSink = undefined
       if (error instanceof DOMException && error.name === 'AbortError') return
       updateAssistant({
         content: '调试接口请求失败，请稍后重试。',
@@ -243,6 +357,7 @@ export function useAppDebugSession(
     } finally {
       responding.value = false
       debugAbortController = undefined
+      activeAudioSink = undefined
       await scrollToBottom()
     }
   }
@@ -320,12 +435,15 @@ export function useAppDebugSession(
 
   const stopResponse = () => {
     debugAbortController?.abort()
+    activeAudioSink?.fail()
+    activeAudioSink = undefined
     responding.value = false
     const last = [...debugStore.getMessages(appId.value)].reverse().find((item) => item.pending)
     if (last) {
       debugStore.updateMessage(appId.value, last.key, {
         pending: false,
         content: last.content || '已停止响应',
+        audioGenerating: false,
         statusText: undefined,
       })
     }
@@ -339,6 +457,7 @@ export function useAppDebugSession(
 
   onBeforeUnmount(() => {
     debugAbortController?.abort()
+    activeAudioSink?.fail()
   })
 
   return {
