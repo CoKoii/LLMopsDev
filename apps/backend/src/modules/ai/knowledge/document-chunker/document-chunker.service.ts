@@ -60,6 +60,15 @@ const compact = (value: string) => value.replace(/\s+/g, " ").trim();
 const normalizePreservedText = (value: string) =>
   value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
 
+const normalizeFlowText = (value: string) =>
+  value
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map(compact)
+    .filter(Boolean)
+    .join("\n");
+
 const escapeRegExp = (value: string) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -103,7 +112,7 @@ const normalizeBlockText = (block: ParsedDocumentBlock) => {
   if (PRESERVE_FORMAT_TYPES.has(block.type)) {
     return normalizePreservedText(block.text);
   }
-  return compact(block.text);
+  return normalizeFlowText(block.text);
 };
 
 const blockToUnit = (
@@ -195,16 +204,44 @@ const splitByCharacterLimit = (
   if (unit.tokenCount <= maxTokens) return [unit];
 
   const chunks: ParagraphUnit[] = [];
-  const maxCharacters = Math.max(1, maxTokens);
+  const maxCharacters = Math.max(1, maxTokens * 2);
   const preserveFormat = unit.blockTypes.some((type) =>
     PRESERVE_FORMAT_TYPES.has(type),
   );
+  let start = 0;
 
-  for (let start = 0; start < unit.text.length; start += maxCharacters) {
-    const rawText = unit.text.slice(start, start + maxCharacters);
+  while (start < unit.text.length) {
+    let end = Math.min(unit.text.length, start + maxCharacters);
+    while (
+      end > start + 1 &&
+      estimateTokens(unit.text.slice(start, end)) > maxTokens
+    ) {
+      end -= Math.max(1, Math.ceil((end - start) / 10));
+    }
+    if (end <= start) end = start + 1;
+
+    const windowText = unit.text.slice(start, end);
+    const breakIndex = Math.max(
+      windowText.lastIndexOf("\n"),
+      windowText.lastIndexOf("。"),
+      windowText.lastIndexOf("！"),
+      windowText.lastIndexOf("？"),
+      windowText.lastIndexOf(";"),
+      windowText.lastIndexOf("；"),
+      windowText.lastIndexOf(","),
+      windowText.lastIndexOf("，"),
+      windowText.lastIndexOf(" "),
+    );
+
+    if (breakIndex > Math.floor(windowText.length * 0.5)) {
+      end = start + breakIndex + 1;
+    }
+
+    const rawText = unit.text.slice(start, end);
     const text = preserveFormat
       ? normalizePreservedText(rawText)
-      : compact(rawText);
+      : normalizeFlowText(rawText);
+    start = end;
     if (!text) continue;
 
     chunks.push({
@@ -216,6 +253,39 @@ const splitByCharacterLimit = (
   }
 
   return chunks;
+};
+
+const splitFlowText = (text: string) =>
+  normalizeFlowText(text)
+    .split(/\n+|(?<=[。！？!?；;])\s*/u)
+    .map(compact)
+    .filter(Boolean);
+
+const mergeSmallUnits = (
+  units: ParagraphUnit[],
+  maxTokens: number,
+): ParagraphUnit[] => {
+  const merged: ParagraphUnit[] = [];
+
+  for (const unit of units) {
+    const previous = merged[merged.length - 1];
+    const shouldMerge =
+      previous &&
+      (previous.tokenCount < MIN_CHUNK_TOKENS ||
+        unit.tokenCount < MIN_CHUNK_TOKENS) &&
+      estimateTokens(`${previous.text}\n${unit.text}`) <= maxTokens;
+
+    if (shouldMerge) {
+      merged[merged.length - 1] = {
+        ...mergeUnits([previous, unit]),
+        breakBefore: previous.breakBefore,
+      };
+    } else {
+      merged.push(unit);
+    }
+  }
+
+  return merged;
 };
 
 const splitPreservedUnit = (
@@ -259,10 +329,7 @@ const splitOversizedUnit = (
     return splitPreservedUnit(unit, maxTokens);
   }
 
-  const parts = unit.text
-    .split(/(?<=[。！？.!?])\s+|\n+/u)
-    .map(compact)
-    .filter(Boolean);
+  const parts = splitFlowText(unit.text);
   if (parts.length <= 1) return splitByCharacterLimit(unit, maxTokens);
 
   const chunks: string[] = [];
@@ -278,16 +345,19 @@ const splitOversizedUnit = (
   }
   if (current) chunks.push(current);
 
-  return chunks.flatMap((text, index) =>
-    splitByCharacterLimit(
-      {
-        ...unit,
-        text,
-        tokenCount: estimateTokens(text),
-        breakBefore: index > 0 || unit.breakBefore,
-      },
-      maxTokens,
+  return mergeSmallUnits(
+    chunks.flatMap((text, index) =>
+      splitByCharacterLimit(
+        {
+          ...unit,
+          text,
+          tokenCount: estimateTokens(text),
+          breakBefore: index > 0 || unit.breakBefore,
+        },
+        maxTokens,
+      ),
     ),
+    maxTokens,
   );
 };
 
@@ -341,11 +411,17 @@ const finalizeSection = (
   };
 };
 
+const isContentHeadingText = (value: string) =>
+  /\b(?:19|20)\d{2}[-./年]\d{1,2}\s*[~至-]\s*(?:(?:19|20)\d{2}[-./年]\d{1,2}|至今)\b|https?:\/\/|www\.|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[:：]/.test(
+    value,
+  );
+
 const isHeadingOnlySection = (section: Pick<DocumentSection, "units">) =>
   section.units.length > 0 &&
   section.units.every((unit) =>
     unit.blockTypes.every((type) => type === "heading"),
-  );
+  ) &&
+  !section.units.some((unit) => isContentHeadingText(unit.text));
 
 const overlapTail = (text: string) => {
   const normalized = compact(text);
@@ -533,7 +609,8 @@ export class DocumentChunkerService {
       const merged = mergeUnits(group.units);
       const previousText = chunks[chunks.length - 1]?.text;
       const overlap = previousText ? overlapTail(previousText) : "";
-      const contextualized = group.sectionChunkCount > 1;
+      const contextualized =
+        group.sectionChunkCount > 1 || group.section.headingPath.length > 1;
       const text = contextualized
         ? contextualizeText(group.section, merged.text)
         : merged.text;

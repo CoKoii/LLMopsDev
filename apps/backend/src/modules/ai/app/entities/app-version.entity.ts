@@ -20,6 +20,7 @@ export type AiAppKnowledgeRecallSettings = {
   strategy?: "hybrid" | "vector" | "text";
   limit?: number;
   minScore?: number;
+  vectorWeight?: number;
 };
 
 export type AiAppVersionConfig = {

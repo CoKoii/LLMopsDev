@@ -119,7 +119,8 @@ const knowledgeCatalogLoading = ref(false)
 const knowledgeSettingsDraft = ref<Required<AppKnowledgeRecallSettings>>({
   strategy: 'hybrid',
   limit: 5,
-  minScore: 0.4,
+  minScore: 0.2,
+  vectorWeight: 0.3,
 })
 const activePluginSourceKey = ref<PluginSourceKey>('custom')
 const activePluginCategoryKey = ref(allPluginCategoryKey)
@@ -311,7 +312,8 @@ function normalizeKnowledgeRecallSettings(
   return {
     strategy: settings.strategy ?? 'hybrid',
     limit: Math.round(clampSettingValue(settings.limit, 1, 20, 5)),
-    minScore: clampSettingValue(settings.minScore, 0, 1, 0.4),
+    minScore: clampSettingValue(settings.minScore, 0, 1, 0.2),
+    vectorWeight: clampSettingValue(settings.vectorWeight, 0, 1, 0.3),
   }
 }
 
@@ -1061,6 +1063,23 @@ onMounted(() => {
             />
             <InputNumber
               v-model:value="knowledgeSettingsDraft.minScore"
+              :min="0"
+              :max="1"
+              :step="0.01"
+            />
+          </div>
+        </div>
+        <div class="recall-settings__row">
+          <span>向量相似度权重</span>
+          <div class="recall-setting-control">
+            <Slider
+              v-model:value="knowledgeSettingsDraft.vectorWeight"
+              :min="0"
+              :max="1"
+              :step="0.01"
+            />
+            <InputNumber
+              v-model:value="knowledgeSettingsDraft.vectorWeight"
               :min="0"
               :max="1"
               :step="0.01"

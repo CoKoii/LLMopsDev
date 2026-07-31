@@ -5,6 +5,7 @@ import {
   OnModuleInit,
 } from "@nestjs/common";
 import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
+import { Segment, useDefault } from "segmentit";
 import { DataSource, In, Repository } from "typeorm";
 import { DocumentEmbeddingService } from "./document-embedding/document-embedding.service";
 import { DocumentRerankService } from "./document-rerank/document-rerank.service";
@@ -21,6 +22,8 @@ interface RecallMatch {
   chunkId: number;
   score: number;
   source: KnowledgeRecallStrategy;
+  vectorScore?: number;
+  textScore?: number;
 }
 
 interface RecallCandidate extends RecallMatch {
@@ -31,7 +34,8 @@ interface RecallCandidate extends RecallMatch {
 interface RecallAccumulator {
   chunkId: number;
   source: KnowledgeRecallStrategy;
-  rrfScore: number;
+  vectorScore: number;
+  textScore: number;
 }
 
 interface TextRecallRow {
@@ -43,6 +47,7 @@ export interface AppKnowledgeRecallSettings {
   strategy?: KnowledgeRecallStrategy;
   limit?: number;
   minScore?: number;
+  vectorWeight?: number;
 }
 
 export interface AppKnowledgeRecallItem {
@@ -69,8 +74,29 @@ type KnowledgeRecallExecutionOptions = {
   queryVector?: number[];
 };
 
-const RRF_K = 60;
 const DEFAULT_TEXT_SEARCH_TERMS_LIMIT = 24;
+const DEFAULT_MIN_SCORE = 0.2;
+const DEFAULT_VECTOR_WEIGHT = 0.3;
+
+const segmenter = useDefault(new Segment());
+
+const RECALL_STOP_WORDS = new Set([
+  "这个",
+  "那个",
+  "什么",
+  "几个",
+  "几段",
+  "多少",
+  "如何",
+  "怎么",
+  "有",
+  "的",
+  "是",
+  "了",
+  "吗",
+  "呢",
+  "请问",
+]);
 
 const clampScore = (score: number) =>
   Math.max(0, Math.min(1, Number(score.toFixed(4))));
@@ -79,6 +105,15 @@ const normalizeRecallText = (value: string) =>
   value.toLowerCase().replace(/\s+/g, " ").trim();
 
 const uniqueStrings = (items: string[]) => [...new Set(items)];
+
+const normalizeRecallTerm = (value: string) =>
+  value
+    .replace(/^[^\p{L}\p{N}_./+-]+|[^\p{L}\p{N}_./+-]+$/gu, "")
+    .trim()
+    .toLowerCase();
+
+const isValidRecallTerm = (value: string) =>
+  value.length >= 2 && !RECALL_STOP_WORDS.has(value) && !/^\d+$/.test(value);
 
 const extractRecallTerms = (query: string) => {
   const normalizedQuery = normalizeRecallText(query);
@@ -91,18 +126,45 @@ const extractRecallTerms = (query: string) => {
     ),
   );
 
-  for (const match of normalizedQuery.matchAll(/[\u3400-\u9fff]{2,}/g)) {
-    const word = match[0];
-    if (word.length <= 12) terms.push(word);
+  terms.push(
+    ...segmenter
+      .doSegment(normalizedQuery)
+      .map((item) => normalizeRecallTerm(item.w))
+      .filter((item) => /[\u3400-\u9fff]/.test(item)),
+  );
 
-    for (let index = 0; index <= word.length - 2; index += 1) {
-      terms.push(word.slice(index, index + 2));
+  for (const term of [...terms]) {
+    if (!/[\u3400-\u9fff]/.test(term)) continue;
+
+    for (let index = 0; index <= term.length - 2; index += 1) {
+      terms.push(term.slice(index, index + 2));
     }
   }
 
   return uniqueStrings(
-    terms.map((term) => term.trim()).filter((term) => term.length >= 2),
+    terms.map(normalizeRecallTerm).filter(isValidRecallTerm),
   ).slice(0, DEFAULT_TEXT_SEARCH_TERMS_LIMIT);
+};
+
+const termWeight = (term: string) => {
+  if (/^[a-z][a-z0-9_./+-]+$/i.test(term)) return term.length >= 4 ? 1.2 : 1;
+  return term.length >= 3 ? 1.15 : 1;
+};
+
+const calculateTermSimilarity = (queryTerms: string[], text: string) => {
+  if (!queryTerms.length) return 0;
+
+  const textTerms = new Set(extractRecallTerms(text));
+  const totalWeight = queryTerms.reduce(
+    (total, term) => total + termWeight(term),
+    0,
+  );
+  const matchedWeight = queryTerms.reduce(
+    (total, term) => total + (textTerms.has(term) ? termWeight(term) : 0),
+    0,
+  );
+
+  return totalWeight > 0 ? clampScore(matchedWeight / totalWeight) : 0;
 };
 
 const toTsQueryTerm = (value: string) =>
@@ -145,11 +207,8 @@ export class KnowledgeRecallService implements OnModuleInit {
     const query = dto.query.trim();
     if (!query) throw new BadRequestException("检索文本不能为空");
 
-    const { strategy, limit, minScore, items } = await this.executeRecall(
-      knowledgeId,
-      query,
-      dto,
-    );
+    const { strategy, limit, minScore, vectorWeight, items } =
+      await this.executeRecall(knowledgeId, query, dto);
     await this.incrementRecallCounts(knowledgeId, items);
 
     return {
@@ -157,6 +216,7 @@ export class KnowledgeRecallService implements OnModuleInit {
       strategy,
       limit,
       minScore,
+      vectorWeight,
       items,
     };
   }
@@ -231,10 +291,6 @@ export class KnowledgeRecallService implements OnModuleInit {
     };
   }
 
-  private async createQueryVector(query: string) {
-    return (await this.createQueryEmbedding(query)).vector;
-  }
-
   private async createQueryEmbedding(query: string) {
     const embeddingResult = await this.documentEmbeddingService.embed([query]);
     return {
@@ -258,8 +314,9 @@ export class KnowledgeRecallService implements OnModuleInit {
 
     return points.map((point) => ({
       chunkId: point.payload.chunkId,
-      score: point.score,
+      score: clampScore(point.score),
       source: "vector",
+      vectorScore: clampScore(point.score),
     }));
   }
 
@@ -312,33 +369,41 @@ export class KnowledgeRecallService implements OnModuleInit {
       [knowledgeId, tsQuery, terms.map((term) => term.toLowerCase()), limit],
     );
 
+    const maxScore = Math.max(
+      ...rows.map((row) => Number(row.score) || 0),
+      0,
+    );
+
     return rows.map((row) => {
-      const score = Number(row.score) || 0;
+      const rawScore = Number(row.score) || 0;
+      const score = maxScore > 0 ? clampScore(rawScore / maxScore) : 0;
 
       return {
         chunkId: Number(row.chunkId),
         score,
         source: "text",
+        textScore: score,
       };
     });
   }
 
-  private mergeRecallResultSets(
-    resultSets: RecallMatch[][],
-    limit: number,
-  ): RecallMatch[] {
+  private mergeRecallResultSets(resultSets: RecallMatch[][]): RecallMatch[] {
     const matchMap = new Map<number, RecallAccumulator>();
 
     for (const resultSet of resultSets) {
-      for (const [index, match] of resultSet.entries()) {
+      for (const match of resultSet) {
         const existing = matchMap.get(match.chunkId);
-        const rrfScore = 1 / (RRF_K + index + 1);
+        const vectorScore =
+          match.vectorScore ?? (match.source === "vector" ? match.score : 0);
+        const textScore =
+          match.textScore ?? (match.source === "text" ? match.score : 0);
 
         if (!existing) {
           matchMap.set(match.chunkId, {
             chunkId: match.chunkId,
             source: match.source,
-            rrfScore,
+            vectorScore,
+            textScore,
           });
           continue;
         }
@@ -346,20 +411,18 @@ export class KnowledgeRecallService implements OnModuleInit {
         matchMap.set(match.chunkId, {
           chunkId: match.chunkId,
           source: existing.source === match.source ? match.source : "hybrid",
-          rrfScore: existing.rrfScore + rrfScore,
+          vectorScore: Math.max(existing.vectorScore, vectorScore),
+          textScore: Math.max(existing.textScore, textScore),
         });
       }
     }
 
-    const sortedMatches = [...matchMap.values()].sort(
-      (left, right) => right.rrfScore - left.rrfScore,
-    );
-    const maxScore = sortedMatches[0]?.rrfScore ?? 1;
-
-    return sortedMatches.slice(0, limit).map((match) => ({
+    return [...matchMap.values()].map((match) => ({
       chunkId: match.chunkId,
-      score: clampScore(match.rrfScore / maxScore),
+      score: Math.max(match.vectorScore, match.textScore),
       source: match.source,
+      vectorScore: match.vectorScore,
+      textScore: match.textScore,
     }));
   }
 
@@ -384,6 +447,65 @@ export class KnowledgeRecallService implements OnModuleInit {
 
       return [{ ...match, chunk }];
     });
+  }
+
+  private buildCandidateTermText(candidate: RecallCandidate) {
+    const metadata = candidate.chunk.metadata as DocumentChunkMetadata;
+
+    return [
+      candidate.chunk.document.name,
+      metadata.documentTitle,
+      metadata.sectionTitle,
+      ...(metadata.headingPath ?? []),
+      ...(metadata.sectionHeadingPath ?? []),
+      ...(metadata.keywords ?? []),
+      candidate.chunk.searchText,
+      candidate.chunk.text,
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  private scoreCandidates(
+    queryTerms: string[],
+    candidates: RecallCandidate[],
+    strategy: KnowledgeRecallStrategy,
+    vectorWeight: number,
+  ): RecallCandidate[] {
+    const textWeight = 1 - vectorWeight;
+
+    return candidates
+      .map((candidate) => {
+        const vectorScore = clampScore(candidate.vectorScore ?? 0);
+        const textScore = Math.max(
+          clampScore(candidate.textScore ?? 0),
+          calculateTermSimilarity(
+            queryTerms,
+            this.buildCandidateTermText(candidate),
+          ),
+        );
+        const score =
+          strategy === "vector"
+            ? vectorScore
+            : strategy === "text"
+              ? textScore
+              : clampScore(textWeight * textScore + vectorWeight * vectorScore);
+        const source: KnowledgeRecallStrategy =
+          vectorScore > 0 && textScore > 0
+            ? "hybrid"
+            : vectorScore > 0
+              ? "vector"
+              : "text";
+
+        return {
+          ...candidate,
+          score,
+          source: strategy === "hybrid" ? source : strategy,
+          vectorScore,
+          textScore,
+        };
+      })
+      .sort((left, right) => this.compareCandidates(left, right));
   }
 
   private dedupeCandidatesBySection(
@@ -450,9 +572,16 @@ export class KnowledgeRecallService implements OnModuleInit {
   private normalizeRecallSettings(settings: AppKnowledgeRecallSettings = {}) {
     const strategy = settings.strategy ?? "hybrid";
     const limit = Math.min(20, Math.max(1, Math.floor(settings.limit ?? 5)));
-    const minScore = Math.min(1, Math.max(0, settings.minScore ?? 0.4));
+    const minScore = Math.min(
+      1,
+      Math.max(0, settings.minScore ?? DEFAULT_MIN_SCORE),
+    );
+    const vectorWeight = Math.min(
+      1,
+      Math.max(0, settings.vectorWeight ?? DEFAULT_VECTOR_WEIGHT),
+    );
 
-    return { strategy, limit, minScore };
+    return { strategy, limit, minScore, vectorWeight };
   }
 
   private async ensurePostgresTextSearch() {
@@ -475,15 +604,17 @@ export class KnowledgeRecallService implements OnModuleInit {
     settings: AppKnowledgeRecallSettings = {},
     options: KnowledgeRecallExecutionOptions = {},
   ) {
-    const { strategy, limit, minScore } =
+    const { strategy, limit, minScore, vectorWeight } =
       this.normalizeRecallSettings(settings);
     const recallLimit =
-      strategy === "vector" ? limit : Math.min(200, Math.max(limit * 12, 60));
+      strategy === "vector" ? limit : Math.min(1024, Math.max(limit * 16, 64));
     const recallTasks: Array<Promise<RecallMatch[]>> = [];
-    const queryVector =
-      strategy === "hybrid" || strategy === "vector"
-        ? (options.queryVector ?? (await this.createQueryVector(query)))
-        : undefined;
+    let queryVector: number[] | undefined;
+
+    if (strategy === "hybrid" || strategy === "vector") {
+      queryVector =
+        options.queryVector ?? (await this.createQueryEmbedding(query)).vector;
+    }
 
     if (strategy === "hybrid" || strategy === "vector") {
       recallTasks.push(
@@ -496,8 +627,14 @@ export class KnowledgeRecallService implements OnModuleInit {
     }
 
     const resultSets = await Promise.all(recallTasks);
-    const mergedMatches = this.mergeRecallResultSets(resultSets, recallLimit);
-    const candidates = await this.loadCandidates(mergedMatches, knowledgeId);
+    const mergedMatches = this.mergeRecallResultSets(resultSets);
+    const queryTerms = extractRecallTerms(query);
+    const candidates = this.scoreCandidates(
+      queryTerms,
+      await this.loadCandidates(mergedMatches, knowledgeId),
+      strategy,
+      vectorWeight,
+    ).slice(0, recallLimit);
     const rerankedCandidates = await this.rerankCandidates(
       query,
       candidates.filter((item) => item.score >= minScore),
@@ -525,6 +662,7 @@ export class KnowledgeRecallService implements OnModuleInit {
       strategy,
       limit,
       minScore,
+      vectorWeight,
       items,
     };
   }

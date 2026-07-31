@@ -58,7 +58,8 @@ const recallLoading = ref(false)
 const recallQuery = ref('')
 const recallStrategy = ref<KnowledgeRecallStrategy>('hybrid')
 const recallLimit = ref(5)
-const recallMinScore = ref(0.4)
+const recallMinScore = ref(0.2)
+const recallVectorWeight = ref(0.3)
 const recallResults = ref<RecallTestResultItem[]>([])
 const activeRecallItem = ref<RecallTestResultItem>()
 const recallRecentQueries = ref<
@@ -410,6 +411,7 @@ const submitRecallTest = async (text = recallQuery.value) => {
       strategy: recallStrategy.value,
       limit: recallLimit.value,
       minScore: recallMinScore.value,
+      vectorWeight: recallVectorWeight.value,
     })
     recallResults.value = result.items
     saveRecallHistory(query, formatRecallSource(result.strategy))
@@ -759,6 +761,13 @@ onUnmounted(() => {
           <div class="recall-setting-control">
             <Slider v-model:value="recallMinScore" :min="0" :max="1" :step="0.01" />
             <InputNumber v-model:value="recallMinScore" :min="0" :max="1" :step="0.01" />
+          </div>
+        </div>
+        <div class="recall-settings__row">
+          <span>向量相似度权重</span>
+          <div class="recall-setting-control">
+            <Slider v-model:value="recallVectorWeight" :min="0" :max="1" :step="0.01" />
+            <InputNumber v-model:value="recallVectorWeight" :min="0" :max="1" :step="0.01" />
           </div>
         </div>
       </div>

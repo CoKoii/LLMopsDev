@@ -32,4 +32,11 @@ export class RecallTestDto {
   @Min(0, { message: "最小匹配度不能小于0" })
   @Max(1, { message: "最小匹配度不能大于1" })
   minScore?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: "向量相似度权重必须为数字" })
+  @Min(0, { message: "向量相似度权重不能小于0" })
+  @Max(1, { message: "向量相似度权重不能大于1" })
+  vectorWeight?: number;
 }

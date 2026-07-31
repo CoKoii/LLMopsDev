@@ -77,6 +77,7 @@ export interface AppKnowledgeRecallSettings {
   strategy?: KnowledgeRecallStrategy
   limit?: number
   minScore?: number
+  vectorWeight?: number
 }
 
 export type AppPluginOperationSettings = Record<string, unknown>
@@ -436,6 +437,7 @@ export interface RecallTestPayload {
   strategy?: KnowledgeRecallStrategy
   limit?: number
   minScore?: number
+  vectorWeight?: number
 }
 
 export interface RecallTestResultItem {
@@ -456,6 +458,7 @@ export interface RecallTestResult {
   strategy: KnowledgeRecallStrategy
   limit: number
   minScore: number
+  vectorWeight?: number
   items: RecallTestResultItem[]
 }
 
