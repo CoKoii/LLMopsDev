@@ -296,7 +296,7 @@
 .recall-result-card {
   display: flex;
   flex-direction: column;
-  height: 14.2rem;
+  height: 15.8rem;
   padding: 1.2rem;
   border: 0.1rem solid var(--border-color);
   border-radius: 0.8rem;
@@ -364,7 +364,7 @@
 .recall-result-card p {
   display: -webkit-box;
   flex: none;
-  margin: 1rem 0;
+  margin: 0.9rem 0;
   overflow: hidden;
   font-size: 1.2rem;
   line-height: 1.8rem;
@@ -372,6 +372,21 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   line-clamp: 3;
+}
+
+.recall-result-card__scores,
+.recall-detail__scores {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  color: var(--font-light-color);
+  font-size: 1.1rem;
+  line-height: 1.6rem;
+}
+
+.recall-result-card__scores span,
+.recall-detail__scores span {
+  flex: 0 0 auto;
 }
 
 .recall-result-card__file-icon {

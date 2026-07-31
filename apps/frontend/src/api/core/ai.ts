@@ -447,6 +447,8 @@ export interface RecallTestResultItem {
   chunkIndex: number
   score: number
   rerankScore?: number
+  vectorScore?: number
+  textScore?: number
   source: KnowledgeRecallStrategy
   text: string
   searchText: string

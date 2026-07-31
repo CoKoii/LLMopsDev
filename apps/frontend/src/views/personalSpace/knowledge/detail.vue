@@ -174,6 +174,14 @@ const formatRecallScore = (score: number) => Number(score.toFixed(2)).toFixed(2)
 
 const formatRecallScorePercent = (score: number) => `${Math.min(Math.max(score, 0), 1) * 100}%`
 
+const getRecallScoreItems = (record: RecallTestResultItem) =>
+  [
+    { label: '综合', value: record.score },
+    { label: '向量', value: record.vectorScore },
+    { label: '全文', value: record.textScore },
+    { label: '重排', value: record.rerankScore },
+  ].filter((item): item is { label: string; value: number } => typeof item.value === 'number')
+
 const getRecallKeywords = (record?: RecallTestResultItem) => {
   const keywords = record?.metadata?.keywords
   return Array.isArray(keywords)
@@ -717,6 +725,11 @@ onUnmounted(() => {
                   <strong>{{ formatRecallScore(item.score) }}</strong>
                 </div>
                 <p>{{ item.text }}</p>
+                <div class="recall-result-card__scores">
+                  <span v-for="scoreItem in getRecallScoreItems(item)" :key="scoreItem.label">
+                    {{ scoreItem.label }} {{ formatRecallScore(scoreItem.value) }}
+                  </span>
+                </div>
                 <footer>
                   <span class="recall-result-card__file-icon">T</span>
                   <span :title="item.documentName">{{ item.documentName }}</span>
@@ -782,6 +795,11 @@ onUnmounted(() => {
       @ok="recallDetailOpen = false"
     >
       <div v-if="activeRecallItem" class="recall-detail">
+        <div class="recall-detail__scores">
+          <span v-for="scoreItem in getRecallScoreItems(activeRecallItem)" :key="scoreItem.label">
+            {{ scoreItem.label }} {{ formatRecallScore(scoreItem.value) }}
+          </span>
+        </div>
         <label>
           <span>片段内容 <b>*</b></span>
           <textarea :value="activeRecallItem.text" readonly />
