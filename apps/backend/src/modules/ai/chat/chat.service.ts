@@ -455,7 +455,7 @@ export class ChatService {
   }
 
   private resolveKnowledgeContextItemLimit(knowledgeConfig: KnowledgeConfig) {
-    const limit = knowledgeConfig.settings.limit ?? 5;
+    const limit = knowledgeConfig.settings.limit ?? 10;
     return Math.min(20, Math.max(1, Math.floor(limit)));
   }
 
@@ -813,9 +813,7 @@ export class ChatService {
     return this.compactText(message, 60) || "新会话";
   }
 
-  private toStandaloneSessionItem(
-    session: ChatSession,
-  ): StandaloneSessionItem {
+  private toStandaloneSessionItem(session: ChatSession): StandaloneSessionItem {
     return {
       id: session.id,
       appId: session.appId,
@@ -1084,7 +1082,11 @@ export class ChatService {
     userId: number,
     payload: { title: string },
   ) {
-    const session = await this.ensureStandaloneSession(appId, sessionId, userId);
+    const session = await this.ensureStandaloneSession(
+      appId,
+      sessionId,
+      userId,
+    );
     session.title = this.compactText(payload.title, 120) || "新对话";
     session.updatedBy = userId;
     return this.toStandaloneSessionItem(
@@ -1097,7 +1099,11 @@ export class ChatService {
     sessionId: number,
     userId: number,
   ) {
-    const session = await this.ensureStandaloneSession(appId, sessionId, userId);
+    const session = await this.ensureStandaloneSession(
+      appId,
+      sessionId,
+      userId,
+    );
     await this.sessionRepository.delete(session.id);
     return { id: session.id };
   }
@@ -1108,7 +1114,11 @@ export class ChatService {
     userId: number,
     pinned: boolean,
   ) {
-    const session = await this.ensureStandaloneSession(appId, sessionId, userId);
+    const session = await this.ensureStandaloneSession(
+      appId,
+      sessionId,
+      userId,
+    );
     session.pinnedAt = pinned ? new Date() : null;
     session.updatedBy = userId;
     return this.toStandaloneSessionItem(

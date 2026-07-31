@@ -118,7 +118,7 @@ const knowledgeCatalogCache = ref<KnowledgeItem[]>([])
 const knowledgeCatalogLoading = ref(false)
 const knowledgeSettingsDraft = ref<Required<AppKnowledgeRecallSettings>>({
   strategy: 'hybrid',
-  limit: 5,
+  limit: 10,
   minScore: 0.2,
   vectorWeight: 0.3,
 })
@@ -311,7 +311,7 @@ function normalizeKnowledgeRecallSettings(
 ): Required<AppKnowledgeRecallSettings> {
   return {
     strategy: settings.strategy ?? 'hybrid',
-    limit: Math.round(clampSettingValue(settings.limit, 1, 20, 5)),
+    limit: Math.round(clampSettingValue(settings.limit, 1, 20, 10)),
     minScore: clampSettingValue(settings.minScore, 0, 1, 0.2),
     vectorWeight: clampSettingValue(settings.vectorWeight, 0, 1, 0.3),
   }

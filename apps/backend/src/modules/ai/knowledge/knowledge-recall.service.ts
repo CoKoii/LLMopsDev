@@ -45,7 +45,18 @@ interface RecallAccumulator {
 
 interface TextRecallRow {
   chunkId: number | string;
-  score: number | string;
+}
+
+interface TextRecallTermFrequencyRow {
+  term: string;
+  documentFrequency: number | string;
+  total: number | string;
+}
+
+interface WeightedRecallQuery {
+  terms: Map<string, number>;
+  phrases: Map<string, number>;
+  totalTermWeight: number;
 }
 
 export interface AppKnowledgeRecallSettings {
@@ -82,9 +93,14 @@ type KnowledgeRecallExecutionOptions = {
 };
 
 const DEFAULT_TEXT_SEARCH_TERMS_LIMIT = 24;
+const DEFAULT_RECALL_LIMIT = 10;
 const DEFAULT_MIN_SCORE = 0.2;
 const DEFAULT_VECTOR_WEIGHT = 0.3;
 const RELAXED_MIN_SCORE = 0.12;
+const SECTION_EXPANSION_ANCHOR_LIMIT = 6;
+const SECTION_EXPANSION_PARENT_LIMIT = 3;
+const SECTION_EXPANSION_MAX_SIBLINGS_PER_PARENT = 8;
+const SECTION_EXPANSION_SCORE_DECAY = 0.98;
 
 const segmenter = useDefault(new Segment());
 
@@ -134,21 +150,23 @@ const extractRecallTerms = (query: string) => {
   );
 };
 
-const termWeight = (term: string) => {
-  if (/^[a-z][a-z0-9_./+-]+$/i.test(term)) return term.length >= 4 ? 1.2 : 1;
-  return term.length >= 3 ? 1.15 : 1;
-};
-
-const createTermWeightMap = (terms: string[]) => {
+const createWeightedTermMap = (
+  terms: string[],
+  termWeights: Map<string, number>,
+) => {
   const weights = new Map<string, number>();
   for (const term of terms) {
-    weights.set(term, Math.max(weights.get(term) ?? 0, termWeight(term)));
+    const weight = termWeights.get(term) ?? 1;
+    weights.set(term, Math.max(weights.get(term) ?? 0, weight));
   }
 
   return weights;
 };
 
-const createPhraseBonusWeightMap = (terms: string[]) => {
+const createPhraseBonusWeightMap = (
+  terms: string[],
+  termWeights: Map<string, number>,
+) => {
   const weights = new Map<string, number>();
   for (let index = 0; index < terms.length - 1; index += 1) {
     const left = terms[index];
@@ -165,7 +183,7 @@ const createPhraseBonusWeightMap = (terms: string[]) => {
       phrase,
       Math.max(
         weights.get(phrase) ?? 0,
-        Math.max(termWeight(left), termWeight(right)) * 0.6,
+        Math.max(termWeights.get(left) ?? 1, termWeights.get(right) ?? 1) * 0.6,
       ),
     );
   }
@@ -173,30 +191,45 @@ const createPhraseBonusWeightMap = (terms: string[]) => {
   return weights;
 };
 
-const calculateTermSimilarity = (queryTerms: string[], text: string) => {
-  if (!queryTerms.length) return 0;
+const createWeightedRecallQuery = (
+  queryTerms: string[],
+  termWeights: Map<string, number>,
+) => {
+  const terms = createWeightedTermMap(queryTerms, termWeights);
+
+  return {
+    terms,
+    phrases: createPhraseBonusWeightMap(queryTerms, termWeights),
+    totalTermWeight: [...terms.values()].reduce(
+      (total, weight) => total + weight,
+      0,
+    ),
+  };
+};
+
+const calculateTermSimilarity = (
+  queryWeights: WeightedRecallQuery,
+  text: string,
+) => {
+  if (!queryWeights.totalTermWeight) return 0;
 
   const normalizedText = normalizeRecallText(text);
   const textTerms = new Set(extractRecallTerms(normalizedText));
-  const queryWeights = createTermWeightMap(queryTerms);
-  const phraseBonusWeights = createPhraseBonusWeightMap(queryTerms);
-  let totalWeight = 0;
   let matchedWeight = 0;
 
-  for (const [term, weight] of queryWeights) {
-    totalWeight += weight;
+  for (const [term, weight] of queryWeights.terms) {
     if (textTerms.has(term) || normalizedText.includes(term)) {
       matchedWeight += weight;
     }
   }
 
-  for (const [term, weight] of phraseBonusWeights) {
+  for (const [term, weight] of queryWeights.phrases) {
     if (textTerms.has(term) || normalizedText.includes(term)) {
       matchedWeight += weight;
     }
   }
 
-  return totalWeight > 0 ? clampScore(matchedWeight / totalWeight) : 0;
+  return clampScore(matchedWeight / queryWeights.totalTermWeight);
 };
 
 const toTsQueryTerm = (value: string) =>
@@ -354,12 +387,11 @@ export class KnowledgeRecallService implements OnModuleInit {
 
   private async searchTextRecall(
     knowledgeId: number,
-    query: string,
+    queryTerms: string[],
     limit: number,
   ): Promise<RecallMatch[]> {
-    const terms = extractRecallTerms(query);
-    const tsQuery = createTsQuery(terms);
-    if (!terms.length || !tsQuery) return [];
+    const tsQuery = createTsQuery(queryTerms);
+    if (!queryTerms.length || !tsQuery) return [];
 
     const rows = await this.dataSource.query<TextRecallRow[]>(
       `
@@ -398,22 +430,68 @@ export class KnowledgeRecallService implements OnModuleInit {
         ORDER BY "score" DESC, chunk.id DESC
         LIMIT $4
       `,
-      [knowledgeId, tsQuery, terms.map((term) => term.toLowerCase()), limit],
+      [
+        knowledgeId,
+        tsQuery,
+        queryTerms.map((term) => term.toLowerCase()),
+        limit,
+      ],
     );
 
-    const maxScore = Math.max(...rows.map((row) => Number(row.score) || 0), 0);
+    return rows.map((row) => ({
+      chunkId: Number(row.chunkId),
+      score: 0,
+      source: "text",
+    }));
+  }
 
-    return rows.map((row) => {
-      const rawScore = Number(row.score) || 0;
-      const score = maxScore > 0 ? clampScore(rawScore / maxScore) : 0;
+  private async buildQueryTermIdfWeights(
+    knowledgeId: number,
+    queryTerms: string[],
+  ) {
+    if (!queryTerms.length) return new Map<string, number>();
 
-      return {
-        chunkId: Number(row.chunkId),
-        score,
-        source: "text",
-        textScore: score,
-      };
-    });
+    const rows = await this.dataSource.query<TextRecallTermFrequencyRow[]>(
+      `
+        WITH term_input AS (
+          SELECT DISTINCT LOWER(unnest($2::text[])) AS term
+        ),
+        corpus AS (
+          SELECT
+            chunk.id,
+            LOWER(COALESCE(chunk."searchText", '') || ' ' || COALESCE(chunk."text", '')) AS content
+          FROM "ai_knowledge_document_chunks" chunk
+          INNER JOIN "ai_knowledge_documents" document
+            ON document.id = chunk."documentId"
+          WHERE chunk."knowledgeId" = $1
+            AND chunk.enabled = true
+            AND document.enabled = true
+        ),
+        corpus_total AS (
+          SELECT COUNT(*) AS total FROM corpus
+        )
+        SELECT
+          term_input.term,
+          COUNT(corpus.id) AS "documentFrequency",
+          corpus_total.total AS total
+        FROM term_input
+        CROSS JOIN corpus_total
+        LEFT JOIN corpus
+          ON POSITION(term_input.term IN corpus.content) > 0
+        GROUP BY term_input.term, corpus_total.total
+      `,
+      [knowledgeId, queryTerms],
+    );
+
+    return new Map(
+      rows.map((row) => {
+        const total = Number(row.total) || 0;
+        const documentFrequency = Number(row.documentFrequency) || 0;
+        const weight = Math.log((total + 1) / (documentFrequency + 1)) + 1;
+
+        return [row.term, Number(weight.toFixed(4))] as const;
+      }),
+    );
   }
 
   private mergeRecallResultSets(resultSets: RecallMatch[][]): RecallMatch[] {
@@ -496,7 +574,7 @@ export class KnowledgeRecallService implements OnModuleInit {
   }
 
   private calculateCandidateTextScore(
-    queryTerms: string[],
+    queryWeights: WeightedRecallQuery,
     candidate: RecallCandidate,
   ) {
     let score = 0;
@@ -509,7 +587,7 @@ export class KnowledgeRecallService implements OnModuleInit {
 
       score = Math.max(
         score,
-        clampScore(calculateTermSimilarity(queryTerms, text) * item.boost),
+        clampScore(calculateTermSimilarity(queryWeights, text) * item.boost),
       );
     }
 
@@ -517,7 +595,7 @@ export class KnowledgeRecallService implements OnModuleInit {
   }
 
   private scoreCandidates(
-    queryTerms: string[],
+    queryWeights: WeightedRecallQuery,
     candidates: RecallCandidate[],
     strategy: KnowledgeRecallStrategy,
     vectorWeight: number,
@@ -527,10 +605,10 @@ export class KnowledgeRecallService implements OnModuleInit {
     return candidates
       .map((candidate) => {
         const vectorScore = clampScore(candidate.vectorScore ?? 0);
-        const textScore = Math.max(
-          clampScore(candidate.textScore ?? 0),
-          this.calculateCandidateTextScore(queryTerms, candidate),
-        );
+        const textScore =
+          strategy !== "vector" && queryWeights.totalTermWeight
+            ? this.calculateCandidateTextScore(queryWeights, candidate)
+            : clampScore(candidate.textScore ?? 0);
         const score =
           strategy === "vector"
             ? vectorScore
@@ -578,6 +656,105 @@ export class KnowledgeRecallService implements OnModuleInit {
     );
   }
 
+  private getChunkHeadingPath(chunk: KnowledgeDocumentChunk) {
+    const metadata = chunk.metadata as DocumentChunkMetadata;
+    const headingPath = metadata.sectionHeadingPath?.length
+      ? metadata.sectionHeadingPath
+      : metadata.headingPath;
+
+    return headingPath?.filter(Boolean) ?? [];
+  }
+
+  private createParentHeadingKey(documentId: number, headingPath: string[]) {
+    if (headingPath.length < 2) return undefined;
+
+    return JSON.stringify({
+      documentId,
+      parentHeadingPath: headingPath.slice(0, -1),
+    });
+  }
+
+  private async expandCandidatesBySiblingSections(
+    candidates: RecallCandidate[],
+    knowledgeId: number,
+    limit: number,
+  ) {
+    const parentAnchors = new Map<string, RecallCandidate>();
+    const anchorCandidates = candidates.slice(
+      0,
+      Math.max(limit, SECTION_EXPANSION_ANCHOR_LIMIT),
+    );
+
+    for (const candidate of anchorCandidates) {
+      const parentKey = this.createParentHeadingKey(
+        candidate.chunk.documentId,
+        this.getChunkHeadingPath(candidate.chunk),
+      );
+      if (!parentKey || parentAnchors.has(parentKey)) continue;
+
+      parentAnchors.set(parentKey, candidate);
+      if (parentAnchors.size >= SECTION_EXPANSION_PARENT_LIMIT) break;
+    }
+    if (!parentAnchors.size) return candidates;
+
+    const documentIds = [
+      ...new Set(
+        [...parentAnchors.values()].map(
+          (candidate) => candidate.chunk.documentId,
+        ),
+      ),
+    ];
+    const siblingChunks = await this.chunkRepository.find({
+      where: {
+        knowledgeId,
+        documentId: In(documentIds),
+        enabled: true,
+      },
+      relations: { document: true },
+      order: { chunkIndex: "ASC" },
+    });
+    const existingChunkIds = new Set(candidates.map((item) => item.chunk.id));
+    const siblingCounts = new Map<string, number>();
+    const expandedCandidates: RecallCandidate[] = [];
+
+    for (const chunk of siblingChunks) {
+      if (!chunk.document?.enabled || existingChunkIds.has(chunk.id)) continue;
+
+      const parentKey = this.createParentHeadingKey(
+        chunk.documentId,
+        this.getChunkHeadingPath(chunk),
+      );
+      if (!parentKey) continue;
+
+      const anchor = parentAnchors.get(parentKey);
+      if (!anchor) continue;
+
+      const siblingCount = siblingCounts.get(parentKey) ?? 0;
+      if (siblingCount >= SECTION_EXPANSION_MAX_SIBLINGS_PER_PARENT) continue;
+
+      siblingCounts.set(parentKey, siblingCount + 1);
+      expandedCandidates.push({
+        chunkId: chunk.id,
+        score: clampScore(
+          this.getCandidateRankScore(anchor) * SECTION_EXPANSION_SCORE_DECAY,
+        ),
+        source: anchor.source,
+        vectorScore: clampScore(
+          (anchor.vectorScore ?? 0) * SECTION_EXPANSION_SCORE_DECAY,
+        ),
+        textScore: clampScore(
+          (anchor.textScore ?? 0) * SECTION_EXPANSION_SCORE_DECAY,
+        ),
+        chunk,
+      });
+      existingChunkIds.add(chunk.id);
+    }
+
+    return [...candidates, ...expandedCandidates].sort((left, right) =>
+      this.compareCandidates(left, right),
+    );
+  }
+
   private compareCandidates(left: RecallCandidate, right: RecallCandidate) {
     const scoreDiff =
       this.getCandidateRankScore(right) - this.getCandidateRankScore(left);
@@ -621,7 +798,10 @@ export class KnowledgeRecallService implements OnModuleInit {
 
   private normalizeRecallSettings(settings: AppKnowledgeRecallSettings = {}) {
     const strategy = settings.strategy ?? "hybrid";
-    const limit = Math.min(20, Math.max(1, Math.floor(settings.limit ?? 5)));
+    const limit = Math.min(
+      20,
+      Math.max(1, Math.floor(settings.limit ?? DEFAULT_RECALL_LIMIT)),
+    );
     const minScore = Math.min(
       1,
       Math.max(0, settings.minScore ?? DEFAULT_MIN_SCORE),
@@ -671,6 +851,11 @@ export class KnowledgeRecallService implements OnModuleInit {
       this.normalizeRecallSettings(settings);
     const recallLimit =
       strategy === "vector" ? limit : Math.min(1024, Math.max(limit * 16, 64));
+    const queryTerms = extractRecallTerms(query);
+    const needsTermWeights = strategy !== "vector" && queryTerms.length > 0;
+    const termIdfWeightsTask = needsTermWeights
+      ? this.buildQueryTermIdfWeights(knowledgeId, queryTerms)
+      : Promise.resolve(new Map<string, number>());
     const recallTasks: Array<Promise<RecallMatch[]>> = [];
     let queryVector: number[] | undefined;
 
@@ -686,14 +871,19 @@ export class KnowledgeRecallService implements OnModuleInit {
     }
 
     if (strategy === "hybrid" || strategy === "text") {
-      recallTasks.push(this.searchTextRecall(knowledgeId, query, recallLimit));
+      recallTasks.push(
+        this.searchTextRecall(knowledgeId, queryTerms, recallLimit),
+      );
     }
 
-    const resultSets = await Promise.all(recallTasks);
+    const [resultSets, termIdfWeights] = await Promise.all([
+      Promise.all(recallTasks),
+      termIdfWeightsTask,
+    ]);
     const mergedMatches = this.mergeRecallResultSets(resultSets);
-    const queryTerms = extractRecallTerms(query);
+    const queryWeights = createWeightedRecallQuery(queryTerms, termIdfWeights);
     const candidates = this.scoreCandidates(
-      queryTerms,
+      queryWeights,
       await this.loadCandidates(mergedMatches, knowledgeId),
       strategy,
       vectorWeight,
@@ -703,7 +893,12 @@ export class KnowledgeRecallService implements OnModuleInit {
       this.selectCandidatesForRerank(candidates, minScore),
       limit,
     );
-    const items = this.dedupeCandidatesBySection(rerankedCandidates)
+    const expandedCandidates = await this.expandCandidatesBySiblingSections(
+      rerankedCandidates,
+      knowledgeId,
+      limit,
+    );
+    const items = this.dedupeCandidatesBySection(expandedCandidates)
       .slice(0, limit)
       .map((item) => ({
         chunkId: item.chunk.id,
