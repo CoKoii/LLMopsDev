@@ -55,7 +55,6 @@ const createDefaultDraftConfig = (): AiAppVersionConfig => ({
   capabilities: [],
   pluginIds: [],
   pluginSettings: {},
-  workflowIds: [],
   knowledge: {
     ids: [],
     settings: {},
@@ -240,8 +239,6 @@ export class AppService {
         next.pluginSettings === undefined
           ? current.pluginSettings
           : next.pluginSettings,
-      workflowIds:
-        next.workflowIds === undefined ? current.workflowIds : next.workflowIds,
       knowledge:
         next.knowledge === undefined
           ? current.knowledge

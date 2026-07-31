@@ -125,7 +125,6 @@ export interface AiAppVersionConfig {
   }>
   pluginIds?: number[]
   pluginSettings?: AppPluginSettings
-  workflowIds?: number[]
   knowledge?: {
     ids?: number[]
     settings?: AppKnowledgeRecallSettings
@@ -189,17 +188,6 @@ export interface PluginItem {
   headers?: PluginHeader[] | null
   status: boolean
   published: boolean
-  createdAt?: string
-  updatedAt?: string
-}
-
-export interface WorkflowItem {
-  id: number
-  icon?: string | null
-  name: string
-  englishName: string
-  description?: string | null
-  status: boolean
   createdAt?: string
   updatedAt?: string
 }
@@ -353,17 +341,6 @@ export interface CreatePluginPayload {
 }
 
 export type UpdatePluginPayload = Partial<CreatePluginPayload>
-
-export interface CreateWorkflowPayload {
-  icon?: string
-  iconFileId?: number
-  name: string
-  englishName: string
-  description?: string
-  status?: boolean
-}
-
-export type UpdateWorkflowPayload = Partial<CreateWorkflowPayload>
 
 export interface CreateKnowledgePayload {
   icon?: string
@@ -800,22 +777,6 @@ export const updatePluginApi = async (id: number, payload: UpdatePluginPayload) 
 
 export const deletePluginApi = async (id: number) => {
   return request.delete(`/ai/plugins/${id}`)
-}
-
-export const listWorkflowsApi = async (params?: PageParams): Promise<PageResult<WorkflowItem>> => {
-  return request.get('/ai/workflows', { params })
-}
-
-export const createWorkflowApi = async (payload: CreateWorkflowPayload) => {
-  return request.post('/ai/workflows', payload)
-}
-
-export const updateWorkflowApi = async (id: number, payload: UpdateWorkflowPayload) => {
-  return request.put(`/ai/workflows/${id}`, payload)
-}
-
-export const deleteWorkflowApi = async (id: number) => {
-  return request.delete(`/ai/workflows/${id}`)
 }
 
 export const listKnowledgeApi = async (params?: PageParams): Promise<PageResult<KnowledgeItem>> => {

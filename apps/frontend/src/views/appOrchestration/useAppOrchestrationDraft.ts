@@ -195,7 +195,6 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
       llmId: selectedLlmId.value,
       modelSettings: { ...settings },
       capabilities: capabilities.value.map((item) => ({ ...item })),
-      workflowIds: [],
       knowledge: {
         ids: selectedKnowledgeIds,
         settings: { ...knowledgeConfig.settings },

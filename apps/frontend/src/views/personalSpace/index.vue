@@ -21,7 +21,6 @@ const createKey = ref(0)
 const createTextMap: Record<string, string> = {
   'personal-space-apps': '创建AI应用',
   'personal-space-plugins': '创建插件',
-  'personal-space-workflows': '创建工作流',
   'personal-space-knowledge': '创建知识库',
 }
 

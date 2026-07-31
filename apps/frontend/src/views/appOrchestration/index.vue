@@ -38,7 +38,6 @@ import {
   Trash2,
   UsersRound,
   Wrench,
-  Workflow,
 } from '@lucide/vue'
 import { Prompts } from 'ant-design-x-vue'
 import type { BubbleListProps } from 'ant-design-x-vue'
@@ -150,7 +149,6 @@ const pluginCategoryIcons = [
   MessagesSquare,
   UsersRound,
   MessageCircle,
-  Workflow,
 ] as const
 const appId = computed(() => Number(route.params.appId))
 const {
@@ -328,7 +326,7 @@ function buildPluginCategoryOptions(categories: PluginCategoryItem[]): PluginCat
       key: category.key,
       name: category.name,
       sort: category.sort,
-      icon: pluginCategoryIcons[index % pluginCategoryIcons.length] ?? Workflow,
+      icon: pluginCategoryIcons[index % pluginCategoryIcons.length] ?? Wrench,
     })),
   ].sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name))
 }
@@ -860,21 +858,6 @@ onMounted(() => {
                   </div>
                 </article>
               </div>
-            </div>
-
-            <div class="config-section">
-              <div class="config-section__head">
-                <div>
-                  <ChevronDown :size="15" />
-                  <h3>工作流组件</h3>
-                </div>
-                <Button type="text" size="small"
-                  ><template #icon><Plus :size="16" /></template
-                ></Button>
-              </div>
-              <p class="config-section__description">
-                工作流支持通过可视化的方式，对插件、大语言模型、代码块等功能进行组合。
-              </p>
             </div>
 
             <div class="config-section">

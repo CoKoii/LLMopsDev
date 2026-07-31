@@ -44,15 +44,6 @@ export const mainRoutes: RouteRecordRaw[] = [
         component: () => import('../views/personalSpace/plugins/index.vue'),
       },
       {
-        path: 'workflows',
-        name: 'personal-space-workflows',
-        meta: {
-          title: '工作流',
-          pageTransition: 'workspace-fade',
-        },
-        component: () => import('../views/personalSpace/workflows/index.vue'),
-      },
-      {
         path: 'knowledge',
         name: 'personal-space-knowledge',
         meta: {

@@ -4,7 +4,6 @@ import { User } from '@lucide/vue'
 export const personalSpaceTabs: ListPageTab[] = [
   { key: 'apps', title: 'AI应用', to: { name: 'personal-space-apps' } },
   { key: 'plugins', title: '插件', to: { name: 'personal-space-plugins' } },
-  { key: 'workflows', title: '工作流', to: { name: 'personal-space-workflows' } },
   { key: 'knowledge', title: '知识库', to: { name: 'personal-space-knowledge' } },
 ]
 
