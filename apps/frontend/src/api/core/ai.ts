@@ -64,6 +64,8 @@ export interface AiAppItem {
   category?: AiAppCategoryItem | null
   model?: Pick<LlmItem, 'id' | 'modelName'> | null
   status: boolean
+  published?: boolean
+  publishedVersionId?: number | null
   createdAt?: string
   updatedAt?: string
 }
@@ -162,6 +164,60 @@ export interface AiAppVersionItem {
   plugins?: AppVersionPluginItem[]
   knowledges?: AppVersionKnowledgeItem[]
   publishedAt?: string | null
+  standaloneActive?: boolean
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface AiAppPublishConfig {
+  appId: number
+  published: boolean
+  hasVersion: boolean
+  version: AiAppVersionItem | null
+}
+
+export interface StandaloneAiAppMeta {
+  app: AiAppItem
+  version: {
+    id: number
+    version: string
+    publishedAt?: string | null
+  }
+  published: boolean
+  owner: boolean
+  openingStatement: {
+    content?: string
+    questions?: string[]
+  }
+  toggles: Record<string, boolean>
+}
+
+export interface StandaloneChatSessionItem {
+  id: number
+  appId: number
+  title: string
+  pinnedAt?: string | null
+  lastMessageAt?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface StandaloneChatMessageItem {
+  id: number
+  sessionId: number
+  role: 'user' | 'assistant'
+  content: string
+  status: 'completed' | 'streaming' | 'failed' | 'stopped'
+  elapsedMs?: number | null
+  tokens?: number | null
+  attachments?: Array<{
+    uid: string
+    fileId: number
+    name: string
+    contentType: string
+    size: number
+    url?: string
+  }>
   createdAt?: string
   updatedAt?: string
 }
@@ -452,6 +508,71 @@ export const getAiAppDraftApi = async (id: number): Promise<AiAppVersionItem> =>
   return request.get(`/ai/apps/${id}/draft`)
 }
 
+export const getAiAppPublishConfigApi = async (id: number): Promise<AiAppPublishConfig> => {
+  return request.get(`/ai/apps/${id}/publish-config`)
+}
+
+export const publishAiAppConfigApi = async (id: number): Promise<AiAppPublishConfig> => {
+  return request.post(`/ai/apps/${id}/publish-config/publish`)
+}
+
+export const unpublishAiAppConfigApi = async (id: number): Promise<AiAppPublishConfig> => {
+  return request.post(`/ai/apps/${id}/publish-config/unpublish`)
+}
+
+export const getStandaloneAiAppApi = async (
+  id: number,
+  options: { suppressErrorNotify?: boolean } = {},
+): Promise<StandaloneAiAppMeta> => {
+  return request.get(`/ai/apps/${id}/standalone`, {
+    suppressErrorNotify: options.suppressErrorNotify,
+  })
+}
+
+export const listStandaloneChatSessionsApi = async (
+  appId: number,
+  params: PageParams = {},
+): Promise<PageResult<StandaloneChatSessionItem>> => {
+  return request.get(`/ai/apps/${appId}/standalone/sessions`, { params })
+}
+
+export const listStandaloneChatMessagesApi = async (
+  appId: number,
+  sessionId: number,
+  params: PageParams = {},
+): Promise<PageResult<StandaloneChatMessageItem>> => {
+  return request.get(`/ai/apps/${appId}/standalone/sessions/${sessionId}/messages`, { params })
+}
+
+export const updateStandaloneChatSessionApi = async (
+  appId: number,
+  sessionId: number,
+  payload: { title: string },
+): Promise<StandaloneChatSessionItem> => {
+  return request.patch(`/ai/apps/${appId}/standalone/sessions/${sessionId}`, payload)
+}
+
+export const deleteStandaloneChatSessionApi = async (
+  appId: number,
+  sessionId: number,
+): Promise<{ id: number }> => {
+  return request.delete(`/ai/apps/${appId}/standalone/sessions/${sessionId}`)
+}
+
+export const pinStandaloneChatSessionApi = async (
+  appId: number,
+  sessionId: number,
+): Promise<StandaloneChatSessionItem> => {
+  return request.post(`/ai/apps/${appId}/standalone/sessions/${sessionId}/pin`)
+}
+
+export const unpinStandaloneChatSessionApi = async (
+  appId: number,
+  sessionId: number,
+): Promise<StandaloneChatSessionItem> => {
+  return request.post(`/ai/apps/${appId}/standalone/sessions/${sessionId}/unpin`)
+}
+
 export const updateAiAppDraftApi = async (
   id: number,
   payload: { config: AiAppVersionConfig },
@@ -588,6 +709,7 @@ type StreamAiAppDebugParams = {
   onSuggestions?: (items: string[]) => void
   onError?: (message: string) => void
   signal?: AbortSignal
+  endpoint?: string
 }
 
 export const streamAiAppDebugApi = async ({
@@ -608,10 +730,11 @@ export const streamAiAppDebugApi = async ({
   onSuggestions,
   onError,
   signal,
+  endpoint,
 }: StreamAiAppDebugParams) => {
   const baseURL = import.meta.env.VITE_API_BASE_URL || ''
   const token = getAccessToken()
-  const response = await fetch(`${baseURL}/ai/apps/${appId}/debug/stream`, {
+  const response = await fetch(`${baseURL}${endpoint ?? `/ai/apps/${appId}/debug/stream`}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -748,11 +871,27 @@ export const streamAiAppDebugApi = async ({
   }
 }
 
+export const streamStandaloneAiAppApi = async (
+  params: Omit<StreamAiAppDebugParams, 'endpoint'>,
+) => {
+  return streamAiAppDebugApi({
+    ...params,
+    endpoint: `/ai/apps/${params.appId}/standalone/stream`,
+  })
+}
+
 export const transcribeAiAppSpeechApi = async (
   appId: number,
   fileId: number,
 ): Promise<{ text: string }> => {
   return request.post(`/ai/apps/${appId}/speech/transcriptions`, { fileId })
+}
+
+export const transcribeStandaloneAiAppSpeechApi = async (
+  appId: number,
+  fileId: number,
+): Promise<{ text: string }> => {
+  return request.post(`/ai/apps/${appId}/standalone/speech/transcriptions`, { fileId })
 }
 
 export const listPluginsApi = async (params?: PageParams): Promise<PageResult<PluginItem>> => {

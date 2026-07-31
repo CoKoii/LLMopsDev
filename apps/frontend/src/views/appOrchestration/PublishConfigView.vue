@@ -1,104 +1,166 @@
 <script setup lang="ts">
-import { CircleCheck, CircleDot, CircleX, MessagesSquare, PanelTop, Send } from '@lucide/vue'
-import { Button, Input, Tag } from 'antdv-next'
-import type { Component } from 'vue'
+import {
+  getAiAppPublishConfigApi,
+  publishAiAppConfigApi,
+  unpublishAiAppConfigApi,
+  type AiAppPublishConfig,
+} from '@/api'
+import { CircleCheck, CircleX, Copy, ExternalLink, Globe2, LockKeyhole } from '@lucide/vue'
+import { Button, Input, Modal, Spin, Tag, message } from 'antdv-next'
+import { computed, onMounted, ref, watch } from 'vue'
 
-type PublishChannel = {
-  key: string
-  title: string
-  description: string
-  icon: Component
-  tone: string
-  status: 'configured' | 'unconfigured'
-  action: 'visit' | 'configure'
-  link?: string
+const props = defineProps<{
+  appId: number
+  refreshKey: number
+}>()
+
+const config = ref<AiAppPublishConfig>()
+const loading = ref(false)
+const updating = ref(false)
+const appUrl = computed(() => `${window.location.origin}/apps/chat/${props.appId}`)
+const currentVersionName = computed(() => config.value?.version?.version || '-')
+
+async function loadConfig() {
+  loading.value = true
+  try {
+    config.value = await getAiAppPublishConfigApi(props.appId)
+  } finally {
+    loading.value = false
+  }
 }
 
-const publishChannels: PublishChannel[] = [
-  {
-    key: 'web',
-    title: '网页版',
-    description: '可通过访问PC网页立即开始对话。',
-    icon: PanelTop,
-    tone: '#e0f2fe',
-    status: 'configured',
-    action: 'visit',
-    link: 'https://www.llmops-imooc.com/web-app/WNFEKnzu',
+async function doPublishApp() {
+  updating.value = true
+  try {
+    config.value = await publishAiAppConfigApi(props.appId)
+    message.success('独立对话页已发布')
+  } finally {
+    updating.value = false
+  }
+}
+
+async function doUnpublishApp() {
+  updating.value = true
+  try {
+    config.value = await unpublishAiAppConfigApi(props.appId)
+    message.success('独立对话页已取消发布')
+  } finally {
+    updating.value = false
+  }
+}
+
+function confirmPublishApp() {
+  Modal.confirm({
+    title: '发布独立对话页',
+    content: '发布后，其他登录用户也可以访问该独立对话页并发起对话。确定发布吗？',
+    okText: '发布',
+    cancelText: '取消',
+    centered: true,
+    onOk: doPublishApp,
+  })
+}
+
+function confirmUnpublishApp() {
+  Modal.confirm({
+    title: '取消发布独立对话页',
+    content: '取消发布后，其他用户将不能继续访问该独立对话页。确定取消发布吗？',
+    okText: '取消发布',
+    okType: 'danger',
+    cancelText: '取消',
+    centered: true,
+    onOk: doUnpublishApp,
+  })
+}
+
+async function copyUrl() {
+  await navigator.clipboard.writeText(appUrl.value)
+  message.success('访问地址已复制')
+}
+
+function visitApp() {
+  window.open(appUrl.value, '_blank', 'noopener,noreferrer')
+}
+
+watch(
+  [() => props.appId, () => props.refreshKey],
+  () => {
+    void loadConfig()
   },
-  {
-    key: 'wechat',
-    title: '微信公众号（订阅号、服务号）',
-    description: '接入微信公众号，自动回复用户消息，助力高效私域运营',
-    icon: MessagesSquare,
-    tone: '#dcfce7',
-    status: 'unconfigured',
-    action: 'configure',
-  },
-  {
-    key: 'feishu',
-    title: '飞书（Bot群聊机器人）',
-    description: '在飞书中直接 @Bot 对话，提高工作生产力',
-    icon: Send,
-    tone: '#e0f2fe',
-    status: 'unconfigured',
-    action: 'configure',
-  },
-]
+)
+
+onMounted(() => {
+  void loadConfig()
+})
 </script>
 
 <template>
   <main class="publish-config">
     <div class="publish-config__notice">
-      如应用访问链接或二维码意外泄露，请及时重新生成或进行停止分发，避免资源出现异常消耗
+      保存过版本后会生成独立对话页地址。未公开时仅创建者可访问，公开后其他登录用户也可访问。
     </div>
 
-    <div class="publish-config__table" role="table" aria-label="发布配置">
-      <div class="publish-config__head" role="row">
-        <span role="columnheader">发布渠道</span>
-        <span role="columnheader">状态</span>
-        <span role="columnheader">操作</span>
+    <Spin :spinning="loading">
+      <div class="publish-config__table" role="table" aria-label="发布配置">
+        <div class="publish-config__head" role="row">
+          <span role="columnheader">发布渠道</span>
+          <span role="columnheader">状态</span>
+          <span role="columnheader">操作</span>
+        </div>
+
+        <article class="publish-config__row" role="row">
+          <div class="publish-config__channel" role="cell">
+            <div class="publish-config__icon">
+              <Globe2 :size="18" />
+            </div>
+            <div>
+              <strong>网页版独立对话页</strong>
+              <span>当前对话版本：{{ currentVersionName }}</span>
+            </div>
+          </div>
+
+          <div class="publish-config__status" role="cell">
+            <Tag v-if="config?.published" color="processing">
+              <template #icon><CircleCheck :size="13" /></template>
+              已发布
+            </Tag>
+            <Tag v-else>
+              <template #icon><LockKeyhole :size="13" /></template>
+              未发布
+            </Tag>
+          </div>
+
+          <div class="publish-config__operation" role="cell">
+            <Input class="publish-config__link" :value="appUrl" readonly />
+            <Button :disabled="!config?.hasVersion" @click="copyUrl">
+              <template #icon><Copy :size="15" /></template>
+            </Button>
+            <Button :disabled="!config?.hasVersion" @click="visitApp">
+              <template #icon><ExternalLink :size="15" /></template>
+              访问
+            </Button>
+            <Button
+              v-if="config?.published"
+              :loading="updating"
+              :disabled="!config?.hasVersion"
+              @click="confirmUnpublishApp"
+            >
+              <template #icon><CircleX :size="15" /></template>
+              取消发布
+            </Button>
+            <Button
+              v-else
+              type="primary"
+              :loading="updating"
+              :disabled="!config?.hasVersion"
+              @click="confirmPublishApp"
+            >
+              <template #icon><CircleCheck :size="15" /></template>
+              发布
+            </Button>
+          </div>
+        </article>
       </div>
-
-      <article
-        v-for="channel in publishChannels"
-        :key="channel.key"
-        class="publish-config__row"
-        role="row"
-      >
-        <div class="publish-config__channel" role="cell">
-          <div class="publish-config__icon" :style="{ background: channel.tone }">
-            <component :is="channel.icon" :size="18" />
-          </div>
-          <div>
-            <strong>{{ channel.title }}</strong>
-            <span>{{ channel.description }}</span>
-          </div>
-        </div>
-
-        <div class="publish-config__status" role="cell">
-          <Tag v-if="channel.status === 'configured'" color="processing">
-            <template #icon><CircleCheck :size="13" /></template>
-            已发布
-          </Tag>
-          <Tag v-else>
-            <template #icon><CircleX :size="13" /></template>
-            未配置
-          </Tag>
-        </div>
-
-        <div class="publish-config__operation" role="cell">
-          <template v-if="channel.action === 'visit'">
-            <Input class="publish-config__link" :value="channel.link" readonly />
-            <Button type="primary">重新生成</Button>
-            <Button>立即访问</Button>
-          </template>
-          <Button v-else type="primary">
-            <template #icon><CircleDot :size="15" /></template>
-            立即配置
-          </Button>
-        </div>
-      </article>
-    </div>
+    </Spin>
   </main>
 </template>
 
@@ -135,7 +197,7 @@ const publishChannels: PublishChannel[] = [
 .publish-config__head,
 .publish-config__row {
   display: grid;
-  grid-template-columns: minmax(38.4rem, 46%) minmax(12.8rem, 12%) minmax(38.4rem, 1fr);
+  grid-template-columns: minmax(34rem, 40%) minmax(12rem, 12%) minmax(42rem, 1fr);
   align-items: center;
 }
 
@@ -152,7 +214,7 @@ const publishChannels: PublishChannel[] = [
 }
 
 .publish-config__row {
-  min-height: 6.4rem;
+  min-height: 7.2rem;
   border-bottom: 0.1rem solid var(--color-border-light);
 }
 
@@ -172,6 +234,7 @@ const publishChannels: PublishChannel[] = [
   flex: 0 0 auto;
   place-items: center;
   color: var(--color-primary);
+  background: #e0f2fe;
   border-radius: var(--radius-md);
 }
 
@@ -202,10 +265,11 @@ const publishChannels: PublishChannel[] = [
 }
 
 .publish-config__link {
-  min-width: 25.6rem;
+  min-width: 24rem;
+  max-width: 36rem;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 760px) {
   .publish-config__head {
     display: none;
   }

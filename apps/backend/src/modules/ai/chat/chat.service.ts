@@ -18,10 +18,17 @@ import {
 } from "../knowledge/knowledge.service";
 import { getAiMessageTokens } from "../knowledge/document-parser/document-multimodal-extraction.service";
 import {
+  AiAppVersion,
   type AiAppKnowledgeRecallSettings,
   type AiAppVersionConfig,
 } from "../app/entities/app-version.entity";
 import { FilesService } from "../../files/files.service";
+import {
+  createPageResult,
+  type PageQueryDto,
+  type PageResult,
+  resolvePageQuery,
+} from "../../../common/http/page-query.dto";
 import { LlmUsageType } from "../llm/entities/llm.entity";
 import { LlmService, type SpeechAudioChunk } from "../llm/llm.service";
 import { AiRuntimeService } from "./ai-runtime.service";
@@ -33,7 +40,10 @@ import {
   CHAT_MESSAGE_STATUS,
   ChatMessage,
 } from "./entities/chat-message.entity";
-import { ChatSession } from "./entities/chat-session.entity";
+import {
+  ChatSession,
+  type ChatSessionMode,
+} from "./entities/chat-session.entity";
 
 const SSE_DONE = "data: [DONE]\n\n";
 const PROMPT_OPTIMIZE_SYSTEM_PROMPT = [
@@ -142,6 +152,15 @@ type TokenUsageTracker = {
 type StructuredOutputWithRaw<T> = {
   parsed: T;
   raw: unknown;
+};
+type StandaloneSessionItem = {
+  id: number;
+  appId: number;
+  title: string;
+  pinnedAt?: Date | null;
+  lastMessageAt?: Date | null;
+  createdAt?: Date;
+  updatedAt?: Date;
 };
 
 class AsyncQueue<T> implements AsyncIterable<T> {
@@ -303,7 +322,27 @@ export class ChatService {
 
   async transcribeAppSpeech(appId: number, fileId: number, userId: number) {
     const draft = await this.aiRuntimeService.getDraft(appId, userId);
-    if (!draft.config.toggles?.voiceInput) {
+    return this.transcribeAppSpeechByConfig(draft.config, fileId, userId);
+  }
+
+  async transcribeStandaloneAppSpeech(
+    appId: number,
+    fileId: number,
+    userId: number,
+  ) {
+    const { version } = await this.aiRuntimeService.getStandaloneVersion(
+      appId,
+      userId,
+    );
+    return this.transcribeAppSpeechByConfig(version.config, fileId, userId);
+  }
+
+  private async transcribeAppSpeechByConfig(
+    config: AiAppVersionConfig,
+    fileId: number,
+    userId: number,
+  ) {
+    if (!config.toggles?.voiceInput) {
       throw new BadRequestException("应用未开启语音输入");
     }
 
@@ -774,18 +813,50 @@ export class ChatService {
     return this.compactText(message, 60) || "新会话";
   }
 
-  private async resolveDebugSession(params: {
+  private toStandaloneSessionItem(
+    session: ChatSession,
+  ): StandaloneSessionItem {
+    return {
+      id: session.id,
+      appId: session.appId,
+      title: session.title || "新对话",
+      pinnedAt: session.pinnedAt,
+      lastMessageAt: session.lastMessageAt,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+    };
+  }
+
+  private async ensureStandaloneSession(
+    appId: number,
+    sessionId: number,
+    userId: number,
+  ) {
+    await this.aiRuntimeService.getStandaloneVersion(appId, userId);
+    const session = await this.sessionRepository.findOne({
+      where: { id: sessionId, appId, userId, mode: "standalone" },
+    });
+    if (!session) throw new NotFoundException("对话会话不存在");
+    return session;
+  }
+
+  private async resolveChatSession(params: {
     appId: number;
     userId: number;
     sessionId?: number;
     message: string;
+    mode: ChatSessionMode;
   }) {
     if (params.sessionId) {
       const session = await this.sessionRepository.findOne({
         where: { id: params.sessionId },
       });
       if (!session) throw new NotFoundException("对话会话不存在");
-      if (session.userId !== params.userId || session.appId !== params.appId) {
+      if (
+        session.userId !== params.userId ||
+        session.appId !== params.appId ||
+        session.mode !== params.mode
+      ) {
         throw new ForbiddenException("无权访问该对话会话");
       }
       return session;
@@ -795,7 +866,7 @@ export class ChatService {
       this.sessionRepository.create({
         appId: params.appId,
         userId: params.userId,
-        mode: "debug",
+        mode: params.mode,
         title: this.createSessionTitle(params.message),
         lastMessageAt: new Date(),
         createdBy: params.userId,
@@ -934,17 +1005,186 @@ export class ChatService {
     attachmentFileIds: number[] = [],
   ): Readable {
     return Readable.from(
-      this.streamAppDebug(appId, message, userId, sessionId, attachmentFileIds),
+      this.streamAppChat({
+        appId,
+        message,
+        userId,
+        sessionId,
+        attachmentFileIds,
+        resolveRuntime: async () => ({
+          version: await this.aiRuntimeService.getDraft(appId, userId),
+          resourceUserId: userId,
+        }),
+        mode: "debug",
+      }),
     );
   }
 
-  private async *streamAppDebug(
+  createStandaloneAppSseStream(
     appId: number,
     message: string,
     userId: number,
     sessionId?: number,
     attachmentFileIds: number[] = [],
-  ): AsyncGenerator<string> {
+  ): Readable {
+    return Readable.from(
+      this.streamAppChat({
+        appId,
+        message,
+        userId,
+        sessionId,
+        attachmentFileIds,
+        resolveRuntime: async () => {
+          const runtime = await this.aiRuntimeService.getStandaloneVersion(
+            appId,
+            userId,
+          );
+          return {
+            version: runtime.version,
+            resourceUserId: runtime.resourceUserId,
+          };
+        },
+        mode: "standalone",
+      }),
+    );
+  }
+
+  async listStandaloneSessions(
+    appId: number,
+    userId: number,
+    query: PageQueryDto,
+  ): Promise<PageResult<StandaloneSessionItem>> {
+    await this.aiRuntimeService.getStandaloneVersion(appId, userId);
+    const { page, pageSize, skip } = resolvePageQuery(query);
+    const [sessions, total] = await this.sessionRepository
+      .createQueryBuilder("session")
+      .where("session.appId = :appId", { appId })
+      .andWhere("session.userId = :userId", { userId })
+      .andWhere("session.mode = :mode", { mode: "standalone" })
+      .orderBy("session.pinnedAt IS NULL", "ASC")
+      .addOrderBy("session.pinnedAt", "DESC")
+      .addOrderBy("session.lastMessageAt", "DESC")
+      .addOrderBy("session.updatedAt", "DESC")
+      .addOrderBy("session.id", "DESC")
+      .skip(skip)
+      .take(pageSize)
+      .getManyAndCount();
+
+    return createPageResult(
+      sessions.map((session) => this.toStandaloneSessionItem(session)),
+      total,
+      page,
+      pageSize,
+    );
+  }
+
+  async updateStandaloneSession(
+    appId: number,
+    sessionId: number,
+    userId: number,
+    payload: { title: string },
+  ) {
+    const session = await this.ensureStandaloneSession(appId, sessionId, userId);
+    session.title = this.compactText(payload.title, 120) || "新对话";
+    session.updatedBy = userId;
+    return this.toStandaloneSessionItem(
+      await this.sessionRepository.save(session),
+    );
+  }
+
+  async deleteStandaloneSession(
+    appId: number,
+    sessionId: number,
+    userId: number,
+  ) {
+    const session = await this.ensureStandaloneSession(appId, sessionId, userId);
+    await this.sessionRepository.delete(session.id);
+    return { id: session.id };
+  }
+
+  async setStandaloneSessionPinned(
+    appId: number,
+    sessionId: number,
+    userId: number,
+    pinned: boolean,
+  ) {
+    const session = await this.ensureStandaloneSession(appId, sessionId, userId);
+    session.pinnedAt = pinned ? new Date() : null;
+    session.updatedBy = userId;
+    return this.toStandaloneSessionItem(
+      await this.sessionRepository.save(session),
+    );
+  }
+
+  async listStandaloneSessionMessages(
+    appId: number,
+    sessionId: number,
+    userId: number,
+    query: PageQueryDto,
+  ) {
+    const session = await this.ensureStandaloneSession(
+      appId,
+      sessionId,
+      userId,
+    );
+    const { page, pageSize, skip } = resolvePageQuery(query);
+    const [messages, total] = await this.messageRepository.findAndCount({
+      where: { sessionId },
+      relations: { attachments: { file: true } },
+      order: { id: "DESC" },
+      skip,
+      take: pageSize,
+    });
+
+    return createPageResult(
+      messages.reverse().map((item) => ({
+        id: item.id,
+        sessionId: session.id,
+        role: item.role,
+        content: item.content,
+        status: item.status,
+        elapsedMs: item.elapsedMs,
+        tokens: item.tokens,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+        attachments: (item.attachments ?? [])
+          .sort((left, right) => left.displayOrder - right.displayOrder)
+          .map((attachment) => ({
+            uid: String(attachment.id),
+            fileId: attachment.fileId,
+            name: attachment.fileName,
+            contentType: attachment.contentType,
+            size: attachment.size,
+            url: this.filesService.createAccessibleUrl(attachment.file?.url),
+          })),
+      })),
+      total,
+      page,
+      pageSize,
+    );
+  }
+
+  private async *streamAppChat(params: {
+    appId: number;
+    message: string;
+    userId: number;
+    sessionId?: number;
+    attachmentFileIds?: number[];
+    resolveRuntime: () => Promise<{
+      version: AiAppVersion;
+      resourceUserId: number;
+    }>;
+    mode: ChatSessionMode;
+  }): AsyncGenerator<string> {
+    const {
+      appId,
+      message,
+      userId,
+      sessionId,
+      attachmentFileIds = [],
+      resolveRuntime,
+      mode,
+    } = params;
     const startedAt = Date.now();
     let output = "";
     let assistantMessage: ChatMessage | undefined;
@@ -956,9 +1196,9 @@ export class ChatService {
       if (!content) {
         throw new BadRequestException("消息内容不能为空");
       }
-      const draft = await this.aiRuntimeService.getDraft(appId, userId);
-      const model = await this.aiRuntimeService.createModel(draft.config);
-      const speechInput = draft.config.toggles?.voiceOutput
+      const { version, resourceUserId } = await resolveRuntime();
+      const model = await this.aiRuntimeService.createModel(version.config);
+      const speechInput = version.config.toggles?.voiceOutput
         ? new AsyncQueue<string>()
         : undefined;
       activeSpeechInput = speechInput;
@@ -998,11 +1238,12 @@ export class ChatService {
           yield service.sse({ message }, "audio-error");
         }
       };
-      const session = await this.resolveDebugSession({
+      const session = await this.resolveChatSession({
         appId,
         userId,
         sessionId,
         message: content,
+        mode,
       });
       const userMessage = await this.saveUserMessage({
         session,
@@ -1034,11 +1275,11 @@ export class ChatService {
       const history = await this.loadRecentHistory({
         sessionId: session.id,
         beforeMessageId: userMessage.id,
-        limit: this.resolveContextMessageLimit(draft.config),
+        limit: this.resolveContextMessageLimit(version.config),
       });
-      const knowledgeConfig = this.resolveKnowledgeConfig(draft.config);
+      const knowledgeConfig = this.resolveKnowledgeConfig(version.config);
       const longTermMemoryEnabled =
-        draft.config.toggles?.longTermMemory ?? false;
+        version.config.toggles?.longTermMemory ?? false;
       const [longTermMemoryContext, sessionSummaryContext] =
         longTermMemoryEnabled
           ? await Promise.all([
@@ -1101,7 +1342,7 @@ export class ChatService {
                     knowledgeIds: knowledgeConfig.ids,
                     settings: knowledgeConfig.settings,
                     query,
-                    userId,
+                    userId: resourceUserId,
                   });
                 tokenUsage.add(result.tokens);
 
@@ -1141,13 +1382,18 @@ export class ChatService {
       yield this.sse({ status: "生成回复中" }, "status");
 
       const { agent, tools, systemPrompt } =
-        await this.aiRuntimeService.createAgentFromDraft(draft, model, userId, {
-          longTermMemoryContext,
-          sessionSummaryContext,
-          knowledgeContext,
-          currentAttachmentContext: currentAttachmentContext.context,
-          recalledAttachmentContext: historicalAttachmentRecall.context,
-        });
+        await this.aiRuntimeService.createAgentFromDraft(
+          version,
+          model,
+          resourceUserId,
+          {
+            longTermMemoryContext,
+            sessionSummaryContext,
+            knowledgeContext,
+            currentAttachmentContext: currentAttachmentContext.context,
+            recalledAttachmentContext: historicalAttachmentRecall.context,
+          },
+        );
       const messages = this.createMessages(content, history);
 
       let resultMessages: BaseMessageLike[] = [];
@@ -1214,7 +1460,7 @@ export class ChatService {
       yield* finishSpeech();
       tokenUsage.add(this.getTotalTokens(resultMessages));
 
-      if (draft.config.toggles?.questionSuggestions) {
+      if (version.config.toggles?.questionSuggestions) {
         yield this.sse({ status: "生成追问建议中" }, "status");
         let suggestions: string[] = [];
         try {

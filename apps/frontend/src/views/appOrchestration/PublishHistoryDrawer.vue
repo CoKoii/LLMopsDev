@@ -46,7 +46,7 @@ const emit = defineEmits<{
         <div v-if="loading">正在加载历史版本...</div>
         <article
           v-else
-          v-for="(item, index) in versions"
+          v-for="item in versions"
           :key="item.id"
           class="publish-history__item"
         >
@@ -54,11 +54,11 @@ const emit = defineEmits<{
             <div>
               <strong>版本</strong>
               <Tag>{{ item.version }}</Tag>
-              <Tag v-if="index === 0">当前版本</Tag>
+              <Tag v-if="item.standaloneActive">独立页当前版本</Tag>
             </div>
             <span>发布时间: {{ formatDateTime(item.publishedAt || item.createdAt) }}</span>
           </div>
-          <Button size="small" :disabled="index === 0" @click="emit('restore', item.id)">
+          <Button size="small" :disabled="item.standaloneActive" @click="emit('restore', item.id)">
             <template #icon><RotateCcw :size="13" /></template>
             回退
           </Button>

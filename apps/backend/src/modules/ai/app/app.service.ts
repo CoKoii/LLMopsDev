@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, In, Repository, type FindOptionsRelations } from "typeorm";
 import { FilesService } from "../../files/files.service";
@@ -47,6 +51,13 @@ type AppVersionKnowledgeSummary = Pick<
 type AppVersionItem = AiAppVersion & {
   plugins: AppVersionPluginSummary[];
   knowledges: AppVersionKnowledgeSummary[];
+  standaloneActive?: boolean;
+};
+type AppPublishConfig = {
+  appId: number;
+  published: boolean;
+  hasVersion: boolean;
+  version: AppVersionItem | null;
 };
 
 const createDefaultDraftConfig = (): AiAppVersionConfig => ({
@@ -322,6 +333,43 @@ export class AppService {
     return `v${nextNumber}`;
   }
 
+  private async getLatestSavedVersion(appId: number) {
+    return this.appVersionRepository.findOne({
+      where: [
+        { appId, status: AiAppVersionStatus.PUBLISHED },
+        { appId, status: AiAppVersionStatus.ARCHIVED },
+      ],
+      order: { id: "DESC" },
+    });
+  }
+
+  private async getBoundPublishedVersion(app: AiApp) {
+    if (app.publishedVersionId) {
+      const version = await this.appVersionRepository.findOne({
+        where: { id: app.publishedVersionId, appId: app.id },
+      });
+      if (version && version.status !== AiAppVersionStatus.DRAFT) {
+        return version;
+      }
+    }
+
+    return this.getLatestSavedVersion(app.id);
+  }
+
+  private async buildPublishConfig(
+    app: AiApp,
+    userId: number,
+  ): Promise<AppPublishConfig> {
+    const version = await this.getBoundPublishedVersion(app);
+
+    return {
+      appId: app.id,
+      published: app.published,
+      hasVersion: Boolean(version),
+      version: version ? await this.withVersionRelations(version, userId) : null,
+    };
+  }
+
   // --------------------------------------------------------------------------------------------------
   // 创建AI应用
   async create(createAppDto: CreateAppDto, userId: number) {
@@ -360,13 +408,20 @@ export class AppService {
     const { page, pageSize, skip } = resolvePageQuery(query);
     const name = query.name?.trim();
     const categoryKey = query.categoryKey?.trim();
+    const scope = query.scope ?? "mine";
     const queryBuilder = this.appRepository
       .createQueryBuilder("app")
       .leftJoinAndSelect("app.category", "category")
-      .where("app.createdBy = :userId", { userId })
       .orderBy("app.id", "DESC")
       .skip(skip)
       .take(pageSize);
+
+    if (scope === "mine") {
+      queryBuilder.where("app.createdBy = :userId", { userId });
+    } else {
+      queryBuilder.where("app.published = :published", { published: true });
+      queryBuilder.andWhere("app.status = :status", { status: true });
+    }
 
     if (name) {
       queryBuilder.andWhere("app.name LIKE :name", {
@@ -381,21 +436,20 @@ export class AppService {
 
     const [items, total] = await queryBuilder.getManyAndCount();
     const appIds = items.map((item) => item.id);
-    const drafts = appIds.length
-      ? await this.appVersionRepository.find({
-          select: ["appId", "config"],
-          where: {
-            appId: In(appIds),
-            version: DRAFT_VERSION,
-            status: AiAppVersionStatus.DRAFT,
-          },
-        })
-      : [];
-    const draftByAppId = new Map(drafts.map((draft) => [draft.appId, draft]));
+    const publishedVersionIds = items
+      .map((item) => item.publishedVersionId)
+      .filter((id): id is number => typeof id === "number");
+    const appVersions =
+      scope === "mine"
+        ? await this.loadDraftVersionsForList(appIds)
+        : await this.loadPublishedVersionsForList(publishedVersionIds);
+    const versionByAppId = new Map(
+      appVersions.map((version) => [version.appId, version]),
+    );
     const llmIds = [
       ...new Set(
-        drafts
-          .map((draft) => draft.config.llmId)
+        appVersions
+          .map((version) => version.config.llmId)
           .filter((llmId): llmId is number => typeof llmId === "number"),
       ),
     ];
@@ -409,9 +463,9 @@ export class AppService {
 
     return createPageResult(
       items.map((item) => {
-        const draft = draftByAppId.get(item.id);
-        const llm = draft?.config.llmId
-          ? llmById.get(draft.config.llmId)
+        const version = versionByAppId.get(item.id);
+        const llm = version?.config.llmId
+          ? llmById.get(version.config.llmId)
           : undefined;
 
         return {
@@ -431,12 +485,98 @@ export class AppService {
   }
   // --------------------------------------------------------------------------------------------------
 
+  private async loadDraftVersionsForList(appIds: number[]) {
+    if (!appIds.length) return [];
+
+    return this.appVersionRepository.find({
+      select: ["id", "appId", "config"],
+      where: {
+        appId: In(appIds),
+        version: DRAFT_VERSION,
+        status: AiAppVersionStatus.DRAFT,
+      },
+    });
+  }
+
+  private async loadPublishedVersionsForList(versionIds: number[]) {
+    if (!versionIds.length) return [];
+
+    return this.appVersionRepository.find({
+      select: ["id", "appId", "config"],
+      where: { id: In(versionIds) },
+    });
+  }
+  // --------------------------------------------------------------------------------------------------
+
   // --------------------------------------------------------------------------------------------------
   // 获取AI应用详情
   async findOne(id: number, userId: number) {
     return this.withAccessibleImage(
       await this.ensureApp(id, userId, { category: true }),
     );
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 获取AI应用发布配置
+  async getPublishConfig(id: number, userId: number) {
+    return this.buildPublishConfig(await this.ensureApp(id, userId), userId);
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 公开AI应用独立对话页
+  async publishApp(id: number, userId: number) {
+    const app = await this.ensureApp(id, userId);
+    const version = await this.getBoundPublishedVersion(app);
+    if (!version) throw new NotFoundException("请先保存一个应用版本");
+
+    app.published = true;
+    app.publishedVersionId = version.id;
+    await this.appRepository.save(app);
+
+    return this.buildPublishConfig(app, userId);
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 取消公开AI应用独立对话页
+  async unpublishApp(id: number, userId: number) {
+    const app = await this.ensureApp(id, userId);
+    app.published = false;
+    await this.appRepository.save(app);
+
+    return this.buildPublishConfig(app, userId);
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 获取独立对话页元信息
+  async getStandaloneApp(id: number, userId: number) {
+    const app = await this.appRepository.findOne({ where: { id } });
+    if (!app) throw new NotFoundException("AI应用不存在");
+    if (app.createdBy !== userId && !app.published) {
+      throw new ForbiddenException("无权访问该应用");
+    }
+
+    const version = await this.getBoundPublishedVersion(app);
+    if (!version) throw new NotFoundException("应用尚未保存版本");
+
+    return {
+      app: this.withAccessibleImage(app),
+      version: {
+        id: version.id,
+        version: version.version,
+        publishedAt: version.publishedAt,
+      },
+      published: app.published,
+      owner: app.createdBy === userId,
+      openingStatement: version.config.openingStatement ?? {
+        content: "",
+        questions: [],
+      },
+      toggles: version.config.toggles ?? {},
+    };
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -466,7 +606,7 @@ export class AppService {
   // --------------------------------------------------------------------------------------------------
   // 获取AI应用历史版本
   async listVersions(id: number, userId: number) {
-    await this.ensureApp(id, userId);
+    const app = await this.ensureApp(id, userId);
     const versions = await this.appVersionRepository.find({
       where: [
         { appId: id, status: AiAppVersionStatus.PUBLISHED },
@@ -474,8 +614,12 @@ export class AppService {
       ],
       order: { id: "DESC" },
     });
+    const activeVersion = await this.getBoundPublishedVersion(app);
     return Promise.all(
-      versions.map((version) => this.withVersionRelations(version, userId)),
+      versions.map(async (version) => ({
+        ...(await this.withVersionRelations(version, userId)),
+        standaloneActive: version.id === activeVersion?.id,
+      })),
     );
   }
   // --------------------------------------------------------------------------------------------------
@@ -484,26 +628,34 @@ export class AppService {
   // 发布AI应用版本
   async publishVersion(id: number, userId: number) {
     const draft = await this.ensureDraftVersion(id, userId);
-    const publishedVersions = await this.listVersions(id, userId);
+    const publishedVersions = await this.appVersionRepository.find({
+      select: ["version"],
+      where: [
+        { appId: id, status: AiAppVersionStatus.PUBLISHED },
+        { appId: id, status: AiAppVersionStatus.ARCHIVED },
+      ],
+    });
     const version = this.getNextPublishedVersion(publishedVersions);
-
-    return this.withVersionRelations(
-      await this.appVersionRepository.save(
-        this.appVersionRepository.create({
-          appId: id,
-          version,
-          status: AiAppVersionStatus.PUBLISHED,
-          config: draft.config,
-          publishedAt: new Date(),
-        }),
-      ),
-      userId,
+    const savedVersion = await this.appVersionRepository.save(
+      this.appVersionRepository.create({
+        appId: id,
+        version,
+        status: AiAppVersionStatus.PUBLISHED,
+        config: draft.config,
+        publishedAt: new Date(),
+      }),
     );
+    await this.appRepository.update(
+      { id, createdBy: userId },
+      { publishedVersionId: savedVersion.id },
+    );
+
+    return this.withVersionRelations(savedVersion, userId);
   }
   // --------------------------------------------------------------------------------------------------
 
   // --------------------------------------------------------------------------------------------------
-  // 恢复历史版本到草稿
+  // 设置独立对话页使用的历史版本
   async restoreVersion(id: number, versionId: number, userId: number) {
     await this.ensureApp(id, userId);
     const target = await this.appVersionRepository.findOne({
@@ -513,12 +665,12 @@ export class AppService {
       throw new NotFoundException("历史版本不存在");
     }
 
-    const draft = await this.ensureDraftVersion(id, userId);
-    draft.config = target.config;
-    return this.withVersionRelations(
-      await this.appVersionRepository.save(draft),
-      userId,
+    await this.appRepository.update(
+      { id, createdBy: userId },
+      { publishedVersionId: target.id },
     );
+
+    return this.withVersionRelations(target, userId);
   }
   // --------------------------------------------------------------------------------------------------
 

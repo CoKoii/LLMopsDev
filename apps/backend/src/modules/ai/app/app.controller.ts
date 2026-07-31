@@ -57,6 +57,50 @@ export class AppController {
   // -------------------------
 
   // -------------------------
+  // 获取AI应用发布配置
+  @Get(":id/publish-config")
+  getPublishConfig(
+    @Param("id", ParseIntPipe) id: number,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.appService.getPublishConfig(id, user.userId);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 公开AI应用独立对话页
+  @Post(":id/publish-config/publish")
+  publishApp(
+    @Param("id", ParseIntPipe) id: number,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.appService.publishApp(id, user.userId);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 取消公开AI应用独立对话页
+  @Post(":id/publish-config/unpublish")
+  unpublishApp(
+    @Param("id", ParseIntPipe) id: number,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.appService.unpublishApp(id, user.userId);
+  }
+  // -------------------------
+
+  // -------------------------
+  // 获取AI应用独立对话页元信息
+  @Get(":id/standalone")
+  getStandaloneApp(
+    @Param("id", ParseIntPipe) id: number,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.appService.getStandaloneApp(id, user.userId);
+  }
+  // -------------------------
+
+  // -------------------------
   // 获取AI应用草稿版本
   @Get(":id/draft")
   getDraft(
@@ -102,7 +146,7 @@ export class AppController {
   // -------------------------
 
   // -------------------------
-  // 恢复历史版本到草稿
+  // 设置独立对话页使用的历史版本
   @Post(":id/versions/:versionId/restore")
   restoreVersion(
     @Param("id", ParseIntPipe) id: number,

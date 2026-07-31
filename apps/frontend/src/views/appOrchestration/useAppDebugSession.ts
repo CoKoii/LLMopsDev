@@ -8,12 +8,16 @@ import { useAppDebugStore, type AppDebugAttachment } from '@/stores/appDebug'
 import { message as notify } from 'antdv-next'
 import { nextTick, onBeforeUnmount, ref, type Ref } from 'vue'
 
-type ContextSettings = {
-  contextRounds: number
-}
+type AppChatStreamApi = (
+  params: Omit<Parameters<typeof streamAiAppDebugApi>[0], 'endpoint'>,
+) => ReturnType<typeof streamAiAppDebugApi>
 
-type VoiceOptions = {
+type SessionOptions = {
   voiceOutputEnabled?: () => boolean
+  streamApi?: AppChatStreamApi
+  transcribeApi?: typeof transcribeAiAppSpeechApi
+  storeKey?: Ref<number> | (() => number)
+  onSession?: (sessionId: number) => void
 }
 
 type AssistantResponseOptions = {
@@ -143,8 +147,7 @@ const toDebugAttachment = (file: UploadedFile, uid: string): DebugComposerAttach
 export function useAppDebugSession(
   appId: Ref<number>,
   saveDraftNow: () => Promise<void>,
-  settings: ContextSettings,
-  voiceOptions: VoiceOptions = {},
+  options: SessionOptions = {},
 ) {
   const debugStore = useAppDebugStore()
   const senderValue = ref('')
@@ -153,6 +156,13 @@ export function useAppDebugSession(
   const transcribingVoice = ref(false)
   let debugAbortController: AbortController | undefined
   let activeAudioSink: StreamingAudioSink | undefined
+  const streamApi = options.streamApi ?? streamAiAppDebugApi
+  const transcribeApi = options.transcribeApi ?? transcribeAiAppSpeechApi
+  const getStoreKey = () => {
+    const key = options.storeKey
+    if (typeof key === 'function') return key()
+    return key?.value ?? appId.value
+  }
 
   const hasUploadingAttachments = () =>
     attachments.value.some((item) => item.status === 'uploading')
@@ -196,15 +206,16 @@ export function useAppDebugSession(
   const runAssistantResponse = async (
     content: string,
     scrollToBottom: () => Promise<void>,
-    options: AssistantResponseOptions,
+    responseOptions: AssistantResponseOptions,
   ) => {
-    const { attachmentFileIds = [], key, userMessageKey } = options
+    const { attachmentFileIds = [], key, userMessageKey } = responseOptions
+    const storeKey = getStoreKey()
     const assistantKey = `a-${key}`
     const updateAssistant = (patch: Parameters<typeof debugStore.updateMessage>[2]) =>
-      debugStore.updateMessage(appId.value, assistantKey, patch)
-    const assistantAsAudio = Boolean(voiceOptions.voiceOutputEnabled?.())
-    debugStore.setSuggestions(appId.value, [])
-    debugStore.pushMessage(appId.value, {
+      debugStore.updateMessage(storeKey, assistantKey, patch)
+    const assistantAsAudio = Boolean(options.voiceOutputEnabled?.())
+    debugStore.setSuggestions(storeKey, [])
+    debugStore.pushMessage(storeKey, {
       key: assistantKey,
       role: 'assistant',
       content: '',
@@ -236,16 +247,17 @@ export function useAppDebugSession(
     try {
       await saveDraftNow()
       debugAbortController = new AbortController()
-      await streamAiAppDebugApi({
+      await streamApi({
         appId: appId.value,
-        sessionId: debugStore.getSessionId(appId.value),
+        sessionId: debugStore.getSessionId(storeKey),
         message: content,
         attachmentFileIds,
         signal: debugAbortController.signal,
         onSession: ({ sessionId, userMessageId, assistantMessageId }) => {
-          debugStore.setSessionId(appId.value, sessionId)
-          debugStore.updateMessage(appId.value, userMessageKey, { id: userMessageId })
+          debugStore.setSessionId(storeKey, sessionId)
+          debugStore.updateMessage(storeKey, userMessageKey, { id: userMessageId })
           updateAssistant({ id: assistantMessageId })
+          options.onSession?.(sessionId)
         },
         onContent: async (chunk) => {
           assistantContent += chunk
@@ -320,7 +332,7 @@ export function useAppDebugSession(
           })
         },
         onSuggestions: (items) => {
-          debugStore.setSuggestions(appId.value, items)
+          debugStore.setSuggestions(storeKey, items)
         },
         onError: (message) => {
           streamFailed = true
@@ -331,11 +343,11 @@ export function useAppDebugSession(
             pending: false,
             statusText: undefined,
           })
-          debugStore.setSuggestions(appId.value, [])
+          debugStore.setSuggestions(storeKey, [])
         },
       })
       const assistantMessage = debugStore
-        .getMessages(appId.value)
+        .getMessages(storeKey)
         .find((item) => item.key === assistantKey)
       const assistantText = assistantMessage?.content.trim() || assistantContent.trim()
       if (assistantAsAudio && assistantText && !assistantMessage?.content.trim()) {
@@ -353,7 +365,7 @@ export function useAppDebugSession(
         pending: false,
         statusText: undefined,
       })
-      debugStore.setSuggestions(appId.value, [])
+      debugStore.setSuggestions(storeKey, [])
     } finally {
       responding.value = false
       debugAbortController = undefined
@@ -371,9 +383,10 @@ export function useAppDebugSession(
     }
 
     const key = Date.now()
+    const storeKey = getStoreKey()
     const userMessageKey = `u-${key}`
     const readyAttachments = attachments.value.filter((item) => item.status === 'done')
-    debugStore.pushMessage(appId.value, {
+    debugStore.pushMessage(storeKey, {
       key: userMessageKey,
       role: 'user',
       content,
@@ -392,9 +405,10 @@ export function useAppDebugSession(
     if (responding.value || transcribingVoice.value) return
 
     const key = Date.now()
+    const storeKey = getStoreKey()
     const userMessageKey = `u-${key}`
     const audioUrl = URL.createObjectURL(file)
-    debugStore.pushMessage(appId.value, {
+    debugStore.pushMessage(storeKey, {
       key: userMessageKey,
       role: 'user',
       content: '',
@@ -408,21 +422,21 @@ export function useAppDebugSession(
     transcribingVoice.value = true
     try {
       const uploaded = await uploadFileApi(file, { suppressErrorNotify: true })
-      const result = await transcribeAiAppSpeechApi(appId.value, uploaded.id)
+      const result = await transcribeApi(appId.value, uploaded.id)
       const text = result.text.trim()
       if (!text) {
-        debugStore.updateMessage(appId.value, userMessageKey, { audioTranscribing: false })
+        debugStore.updateMessage(storeKey, userMessageKey, { audioTranscribing: false })
         notify.warning('未识别到语音内容')
         return
       }
-      debugStore.updateMessage(appId.value, userMessageKey, {
+      debugStore.updateMessage(storeKey, userMessageKey, {
         content: text,
         audioTranscribing: false,
       })
       await runAssistantResponse(text, scrollToBottom, { key, userMessageKey })
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '语音识别失败'
-      debugStore.updateMessage(appId.value, userMessageKey, {
+      debugStore.updateMessage(storeKey, userMessageKey, {
         audioTranscribing: false,
         content: errorMessage,
         audioTextVisible: true,
@@ -438,9 +452,10 @@ export function useAppDebugSession(
     activeAudioSink?.fail()
     activeAudioSink = undefined
     responding.value = false
-    const last = [...debugStore.getMessages(appId.value)].reverse().find((item) => item.pending)
+    const storeKey = getStoreKey()
+    const last = [...debugStore.getMessages(storeKey)].reverse().find((item) => item.pending)
     if (last) {
-      debugStore.updateMessage(appId.value, last.key, {
+      debugStore.updateMessage(storeKey, last.key, {
         pending: false,
         content: last.content || '已停止响应',
         audioGenerating: false,
@@ -450,7 +465,7 @@ export function useAppDebugSession(
   }
 
   const clearChat = async () => {
-    debugStore.clearMessages(appId.value)
+    debugStore.clearMessages(getStoreKey())
     attachments.value = []
     await nextTick()
   }

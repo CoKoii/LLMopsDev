@@ -1,6 +1,10 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { createAgent } from "langchain";
-import { Injectable, NotFoundException } from "@nestjs/common";
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import {
@@ -48,6 +52,35 @@ export class AiRuntimeService {
     if (!draft) throw new NotFoundException("AI应用草稿不存在");
 
     return draft;
+  }
+
+  async getStandaloneVersion(
+    appId: number,
+    userId: number,
+  ): Promise<{ app: AiApp; version: AiAppVersion; resourceUserId: number }> {
+    const app = await this.appRepository.findOne({ where: { id: appId } });
+    if (!app) throw new NotFoundException("AI应用不存在");
+    if (app.createdBy !== userId && !app.published) {
+      throw new ForbiddenException("无权访问该应用");
+    }
+
+    const version = app.publishedVersionId
+      ? await this.appVersionRepository.findOne({
+          where: { id: app.publishedVersionId, appId },
+        })
+      : await this.appVersionRepository.findOne({
+          where: [
+            { appId, status: AiAppVersionStatus.PUBLISHED },
+            { appId, status: AiAppVersionStatus.ARCHIVED },
+          ],
+          order: { id: "DESC" },
+        });
+
+    if (!version || version.status === AiAppVersionStatus.DRAFT) {
+      throw new NotFoundException("应用尚未保存版本");
+    }
+
+    return { app, version, resourceUserId: app.createdBy ?? userId };
   }
 
   async createModel(config: AiAppVersionConfig): Promise<ChatOpenAI> {

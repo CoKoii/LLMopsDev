@@ -155,6 +155,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
   const savingDraft = ref(false)
   const optimizingPrompt = ref(false)
   const lastSavedAt = ref<string>()
+  const publishConfigRefreshKey = ref(0)
   const draftReady = ref(false)
   let autoSaveTimer: ReturnType<typeof window.setTimeout> | undefined
 
@@ -317,6 +318,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
     try {
       await saveDraftNow()
       await publishAiAppVersionApi(appId.value)
+      publishConfigRefreshKey.value += 1
       await loadPublishedVersions()
       message.success('版本已保存')
     } finally {
@@ -325,12 +327,10 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
   }
 
   const restoreVersion = async (versionId: number) => {
-    const restored = await restoreAiAppVersionApi(appId.value, versionId)
-    draftReady.value = false
-    hydrateDraft(restored)
-    await nextTick()
-    draftReady.value = true
-    message.success('已回退到草稿')
+    await restoreAiAppVersionApi(appId.value, versionId)
+    publishConfigRefreshKey.value += 1
+    await loadPublishedVersions()
+    message.success('独立对话页版本已回退')
   }
 
   const optimizePrompt = async (
@@ -388,6 +388,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
     publishing,
     publishedVersionsLoading,
     optimizingPrompt,
+    publishConfigRefreshKey,
     lastSavedAt,
     modelOptions,
     selectedModelLabel,

@@ -169,6 +169,7 @@ const {
   publishing,
   publishedVersionsLoading,
   optimizingPrompt,
+  publishConfigRefreshKey,
   lastSavedAt,
   modelOptions,
   selectedModelLabel,
@@ -192,7 +193,7 @@ const {
   submitVoiceMessage,
   stopResponse,
   clearChat,
-} = useAppDebugSession(appId, saveDraftNow, settings, {
+} = useAppDebugSession(appId, saveDraftNow, {
   voiceOutputEnabled: () => toggleSettings.voiceOutput,
 })
 const isPageTab = (page: unknown): page is PageTab => {
@@ -983,7 +984,12 @@ onMounted(() => {
         />
       </main>
 
-      <PublishConfigView v-else-if="activePage === 'publish'" key="publish" />
+      <PublishConfigView
+        v-else-if="activePage === 'publish'"
+        key="publish"
+        :app-id="appId"
+        :refresh-key="publishConfigRefreshKey"
+      />
 
       <StatsAnalysisView v-else key="stats" />
     </Transition>

@@ -167,6 +167,15 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/login/index.vue'),
   },
   {
+    path: '/apps/chat/:appId',
+    name: 'standalone-app-chat',
+    meta: {
+      title: '应用对话',
+      appTransition: 'app-shell',
+    },
+    component: () => import('../views/appChat/StandaloneAppChatView.vue'),
+  },
+  {
     path: '/apps/orchestration/:appId',
     redirect: (to) => ({
       name: 'app-orchestration',

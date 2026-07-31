@@ -85,6 +85,8 @@ const senderHeaderStyles = {
 }
 
 const props = defineProps<{
+  title?: string
+  composerPlaceholder?: string
   appName: string
   appAvatar: string
   userName: string
@@ -95,9 +97,12 @@ const props = defineProps<{
   senderValue: string
   attachments: DebugComposerAttachment[]
   responding: boolean
+  showClearButton?: boolean
   showMemoryButton: boolean
   voiceInputEnabled: boolean
   transcribingVoice: boolean
+  historyLoading?: boolean
+  hasMoreHistory?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -111,8 +116,10 @@ const emit = defineEmits<{
   submitVoice: [file: File]
   toggleAudioText: [key: string]
   stopResponse: []
+  loadMoreHistory: []
 }>()
 
+const panelRef = ref<HTMLElement>()
 const chatListRef = ref<HTMLElement>()
 const attachmentsRef = ref<InstanceType<typeof Attachments> | null>(null)
 const senderRef = ref<InstanceType<typeof Sender> | null>(null)
@@ -572,21 +579,54 @@ watch(
   },
 )
 
+function getScrollElement() {
+  const panel = panelRef.value
+  if (panel && panel.scrollHeight > panel.clientHeight) return panel
+  return chatListRef.value
+}
+
 function scrollToBottom() {
-  if (chatListRef.value) {
-    chatListRef.value.scrollTop = chatListRef.value.scrollHeight
+  const element = getScrollElement()
+  if (element) {
+    element.scrollTop = element.scrollHeight
   }
 }
 
-defineExpose({ scrollToBottom })
+function getScrollState() {
+  const element = getScrollElement()
+  if (!element) return { scrollTop: 0, scrollHeight: 0 }
+  return {
+    scrollTop: element.scrollTop,
+    scrollHeight: element.scrollHeight,
+  }
+}
+
+function restoreScrollFromTop(previous: { scrollTop: number; scrollHeight: number }) {
+  const element = getScrollElement()
+  if (!element) return
+  element.scrollTop = element.scrollHeight - previous.scrollHeight + previous.scrollTop
+}
+
+function handleChatScroll(event?: Event) {
+  const target = event?.currentTarget
+  const element = target instanceof HTMLElement ? target : getScrollElement()
+  if (!element || !props.hasMoreHistory || props.historyLoading) return
+  if (element.scrollTop <= 24) emit('loadMoreHistory')
+}
+
+defineExpose({ scrollToBottom, getScrollState, restoreScrollFromTop })
 </script>
 
 <template>
-  <section class="app-orchestration__preview orchestration-workspace-panel">
+  <section
+    ref="panelRef"
+    class="app-orchestration__preview orchestration-workspace-panel"
+    @scroll="handleChatScroll"
+  >
     <div class="orchestration-panel__header preview-header">
-      <h2>预览与调试</h2>
+      <h2>{{ title || '预览与调试' }}</h2>
       <div class="preview-header__actions">
-        <Button type="text" size="small" @click="emit('clearChat')">
+        <Button v-if="showClearButton !== false" type="text" size="small" @click="emit('clearChat')">
           <template #icon><Trash2 :size="15" /></template>
           清空对话
         </Button>
@@ -597,7 +637,8 @@ defineExpose({ scrollToBottom })
       </div>
     </div>
 
-    <div ref="chatListRef" class="chat-preview">
+    <div ref="chatListRef" class="chat-preview" @scroll="handleChatScroll">
+      <div v-if="historyLoading" class="chat-preview__history-loading">正在加载历史消息...</div>
       <div v-if="messages.length === 0" class="chat-preview__empty">
         <div class="chat-preview__empty-avatar" :class="{ 'has-image': appAvatar }">
           <img v-if="appAvatar" :src="appAvatar" alt="" />
@@ -825,17 +866,17 @@ defineExpose({ scrollToBottom })
       </div>
     </div>
 
-    <Button v-if="responding" class="stop-button" @click="emit('stopResponse')">
-      <template #icon><CircleStop :size="14" /></template>
-      停止响应
-    </Button>
-
     <footer class="chat-composer">
+      <Button v-if="responding" class="stop-button" @click="emit('stopResponse')">
+        <template #icon><CircleStop :size="14" /></template>
+        停止响应
+      </Button>
+
       <div class="composer-row">
         <Sender
           ref="senderRef"
           v-model:value="senderModel"
-          :placeholder="responding ? '正在生成回复...' : '输入调试消息...'"
+          :placeholder="responding ? '正在生成回复...' : composerPlaceholder || '输入调试消息...'"
           :auto-size="{ minRows: 1, maxRows: 4 }"
           :send-disabled="responding || hasUploadingAttachments"
           class="app-chat-composer"
@@ -970,6 +1011,14 @@ defineExpose({ scrollToBottom })
   background: var(--color-bg-panel);
 }
 
+.chat-preview__history-loading {
+  align-self: center;
+  margin-bottom: 1.2rem;
+  color: var(--color-text-muted);
+  font-size: 1.2rem;
+  line-height: 1.8rem;
+}
+
 .chat-preview__empty {
   display: grid;
   flex: 1;
@@ -1051,11 +1100,15 @@ defineExpose({ scrollToBottom })
 }
 
 .stop-button {
+  position: absolute;
+  top: -4.6rem;
+  left: 50%;
+  z-index: 3;
   display: flex;
-  align-self: center;
-  margin: 0.6rem auto 0.8rem;
+  margin: 0;
   color: var(--color-primary);
   border-color: var(--color-primary);
+  transform: translateX(-50%);
 }
 
 .stop-button:hover,
@@ -1069,6 +1122,7 @@ defineExpose({ scrollToBottom })
 }
 
 .chat-composer {
+  position: relative;
   padding: 0 6.4rem 2rem;
 }
 

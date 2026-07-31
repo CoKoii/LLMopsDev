@@ -13,6 +13,8 @@ import { User } from "../../../iam/users/user.entity";
 import { AiApp } from "../../app/entities/app.entity";
 import { ChatMessage } from "./chat-message.entity";
 
+export type ChatSessionMode = "debug" | "standalone";
+
 @Entity({ name: "ai_chat_sessions", comment: "AI对话会话" })
 @Index(["appId", "userId", "updatedAt"])
 export class ChatSession extends AuditableEntity {
@@ -39,13 +41,16 @@ export class ChatSession extends AuditableEntity {
     length: 20,
     default: "debug",
   })
-  mode!: "debug";
+  mode!: ChatSessionMode;
 
   @Column({ comment: "标题", type: "varchar", length: 120, nullable: true })
   title?: string | null;
 
   @Column({ comment: "最后消息时间", type: "timestamp", nullable: true })
   lastMessageAt?: Date | null;
+
+  @Column({ comment: "置顶时间", type: "timestamp", nullable: true })
+  pinnedAt?: Date | null;
 
   @OneToMany(() => ChatMessage, (message) => message.session)
   messages!: Relation<ChatMessage[]>;
