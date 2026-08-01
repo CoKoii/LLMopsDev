@@ -136,12 +136,16 @@ export class AppService {
 
   private async loadVersionPlugins(
     config: AiAppVersionConfig,
+    userId: number,
   ): Promise<AppVersionPluginSummary[]> {
     const pluginIds = [...new Set(config.pluginIds ?? [])];
     if (!pluginIds.length) return [];
 
     const plugins = await this.pluginRepository.find({
-      where: { id: In(pluginIds) },
+      where: [
+        { id: In(pluginIds), status: true, published: true },
+        { id: In(pluginIds), status: true, createdBy: userId },
+      ],
       relations: { category: true },
     });
     const pluginMap = new Map(
@@ -189,7 +193,7 @@ export class AppService {
   ): Promise<AppVersionItem> {
     return {
       ...version,
-      plugins: await this.loadVersionPlugins(version.config),
+      plugins: await this.loadVersionPlugins(version.config, userId),
       knowledges: await this.loadVersionKnowledges(version.config, userId),
     };
   }
@@ -284,6 +288,52 @@ export class AppService {
     }
   }
 
+  private async filterSelectablePluginIds(
+    pluginIds: number[] | undefined,
+    userId: number,
+  ) {
+    const ids = [...new Set(pluginIds ?? [])].filter((id) =>
+      Number.isInteger(id),
+    );
+    if (!ids.length) return [];
+
+    const plugins = await this.pluginRepository.find({
+      select: ["id"],
+      where: [
+        { id: In(ids), status: true, published: true },
+        { id: In(ids), status: true, createdBy: userId },
+      ],
+    });
+    const selectableIds = new Set(plugins.map((plugin) => plugin.id));
+
+    return ids.filter((id) => selectableIds.has(id));
+  }
+
+  private prunePluginSettings(
+    settings: AiAppVersionConfig["pluginSettings"],
+    pluginIds: number[] | undefined,
+  ) {
+    if (!settings) return settings;
+
+    const selectableIds = new Set((pluginIds ?? []).map(String));
+    return Object.fromEntries(
+      Object.entries(settings).filter(([pluginId]) => selectableIds.has(pluginId)),
+    );
+  }
+
+  private async sanitizeSelectableResources(
+    config: AiAppVersionConfig,
+    userId: number,
+  ): Promise<AiAppVersionConfig> {
+    const pluginIds = await this.filterSelectablePluginIds(config.pluginIds, userId);
+
+    return {
+      ...config,
+      pluginIds,
+      pluginSettings: this.prunePluginSettings(config.pluginSettings, pluginIds),
+    };
+  }
+
   private async ensureApp(
     id: number,
     userId: number,
@@ -374,7 +424,7 @@ export class AppService {
   // 创建AI应用
   async create(createAppDto: CreateAppDto, userId: number) {
     const payload = await this.buildAppPayload(createAppDto, userId);
-    await this.dataSource.transaction(async (manager) => {
+    const app = await this.dataSource.transaction(async (manager) => {
       const app = await manager.save(AiApp, manager.create(AiApp, payload));
       await manager.save(
         AiAppVersion,
@@ -385,8 +435,9 @@ export class AppService {
           config: createDefaultDraftConfig(),
         }),
       );
+      return app;
     });
-    return { success: true };
+    return { success: true, app: this.withAccessibleImage(app) };
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -594,8 +645,22 @@ export class AppService {
   // 自动保存AI应用草稿版本
   async updateDraft(id: number, dto: UpdateAppDraftDto, userId: number) {
     const draft = await this.ensureDraftVersion(id, userId);
-    await this.ensureSelectableChatModel(dto.config?.llmId);
-    draft.config = this.mergeConfig(draft.config, dto.config);
+    const nextConfig = dto.config ? { ...dto.config } : undefined;
+    await this.ensureSelectableChatModel(nextConfig?.llmId);
+    if (nextConfig?.pluginIds !== undefined) {
+      nextConfig.pluginIds = await this.filterSelectablePluginIds(
+        nextConfig.pluginIds,
+        userId,
+      );
+      nextConfig.pluginSettings = this.prunePluginSettings(
+        nextConfig.pluginSettings,
+        nextConfig.pluginIds,
+      );
+    }
+    draft.config = await this.sanitizeSelectableResources(
+      this.mergeConfig(draft.config, nextConfig),
+      userId,
+    );
     return this.withVersionRelations(
       await this.appVersionRepository.save(draft),
       userId,
@@ -628,6 +693,8 @@ export class AppService {
   // 发布AI应用版本
   async publishVersion(id: number, userId: number) {
     const draft = await this.ensureDraftVersion(id, userId);
+    draft.config = await this.sanitizeSelectableResources(draft.config, userId);
+    await this.appVersionRepository.save(draft);
     const publishedVersions = await this.appVersionRepository.find({
       select: ["version"],
       where: [

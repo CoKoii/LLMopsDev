@@ -41,6 +41,50 @@ type StreamingAudioSink = {
   fail: () => void
 }
 
+type ApiErrorLike = {
+  message?: unknown
+  response?: {
+    data?: {
+      message?: unknown
+    }
+  }
+}
+
+const emptyTranscriptionPatterns = [
+  '未识别',
+  '未返回识别文本',
+  '返回内容为空',
+  'no speech',
+  'no transcription',
+  'empty transcription',
+  'silent audio',
+  'audio is silent',
+  'asr_response_have_no_words',
+  'have_no_words',
+  'no_words',
+  'no words',
+]
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (typeof error === 'string') return error
+  if (!error || typeof error !== 'object') return fallback
+
+  const apiError = error as ApiErrorLike
+  const responseMessage = apiError.response?.data?.message
+  if (typeof responseMessage === 'string' && responseMessage.trim()) {
+    return responseMessage
+  }
+  if (typeof apiError.message === 'string' && apiError.message.trim()) {
+    return apiError.message
+  }
+  return fallback
+}
+
+const isEmptyTranscriptionError = (error: unknown) => {
+  const message = getErrorMessage(error, '').toLowerCase()
+  return emptyTranscriptionPatterns.some((pattern) => message.includes(pattern.toLowerCase()))
+}
+
 const base64ToUint8Array = (value: string): Uint8Array<ArrayBuffer> => {
   const binary = window.atob(value)
   const bytes = new Uint8Array(new ArrayBuffer(binary.length))
@@ -441,7 +485,14 @@ export function useAppDebugSession(
       })
       await runAssistantResponse(text, scrollToBottom, { key, userMessageKey })
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : '语音识别失败'
+      if (isEmptyTranscriptionError(error)) {
+        debugStore.updateMessage(storeKey, userMessageKey, {
+          audioTranscribing: false,
+        })
+        notify.warning('未识别到语音内容')
+        return
+      }
+      const errorMessage = getErrorMessage(error, '语音识别失败')
       debugStore.updateMessage(storeKey, userMessageKey, {
         audioTranscribing: false,
         content: errorMessage,

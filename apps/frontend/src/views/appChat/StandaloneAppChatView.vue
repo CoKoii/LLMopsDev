@@ -18,6 +18,7 @@ import { useAuthStore } from '@/stores/auth'
 import {
   Bot,
   Copy,
+  Menu,
   MessageSquarePlus,
   MoreHorizontal,
   Pencil,
@@ -27,9 +28,9 @@ import {
 } from '@lucide/vue'
 import { Prompts } from 'ant-design-x-vue'
 import type { BubbleListProps } from 'ant-design-x-vue'
-import { Button, Dropdown, Input, Modal, Result, Spin, message } from 'antdv-next'
+import { Button, Drawer, Dropdown, Input, Modal, Result, Spin, message } from 'antdv-next'
 import type { MenuProps } from 'antdv-next'
-import { computed, h, nextTick, onMounted, ref } from 'vue'
+import { computed, defineComponent, h, nextTick, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import DebugPreviewPanel, {
   type DebugChatMessage,
@@ -57,6 +58,7 @@ const renameModalOpen = ref(false)
 const renaming = ref(false)
 const renameTarget = ref<StandaloneChatSessionItem>()
 const renameTitleDraft = ref('')
+const mobileSidebarOpen = ref(false)
 const chatPreviewRef = ref<InstanceType<typeof DebugPreviewPanel>>()
 const appName = computed(() => meta.value?.app.name || '聊天机器人')
 const appAvatar = computed(() => meta.value?.app.image || '')
@@ -147,6 +149,115 @@ const chatTitle = computed(() => {
   return activeSession?.title || '新对话'
 })
 
+const SessionDirectory = defineComponent({
+  name: 'StandaloneChatSessionDirectory',
+  props: {
+    rootClass: {
+      type: String,
+      required: true,
+    },
+  },
+  setup(props) {
+    return () =>
+      h('div', { class: props.rootClass }, [
+        h('div', { class: 'standalone-chat__brand' }, [
+          h('div', { class: ['standalone-chat__app-icon', { 'has-image': Boolean(appAvatar.value) }] }, [
+            appAvatar.value ? h('img', { src: appAvatar.value, alt: '' }) : h(Bot, { size: 18 }),
+          ]),
+          h('strong', appName.value),
+        ]),
+        h(
+          Button,
+          {
+            type: 'primary',
+            block: true,
+            class: 'standalone-chat__new',
+            disabled: responding.value,
+            onClick: startNewChat,
+          },
+          {
+            icon: () => h(MessageSquarePlus, { size: 15 }),
+            default: () => '新建对话',
+          },
+        ),
+        h(
+          'section',
+          {
+            class: 'standalone-chat__menu standalone-chat__menu--grow',
+            onScroll: handleSessionListScroll,
+          },
+          createSessionDirectoryContent(),
+        ),
+      ])
+  },
+})
+
+function createSessionDirectoryContent() {
+  if (sessionsLoading.value && !conversationSessions.value.length) {
+    return [h('div', { class: 'standalone-chat__empty-list' }, '正在加载对话...')]
+  }
+  if (!conversationSessions.value.length) {
+    return [h('div', { class: 'standalone-chat__empty-list' }, '暂无对话')]
+  }
+
+  const nodes = sessionGroups.value.flatMap((group) => [
+    h('span', { key: `${group.key}-title` }, group.title),
+    ...group.sessions.map((session) =>
+      h(
+        'div',
+        {
+          key: session.id,
+          class: [
+            'standalone-chat__session',
+            { 'is-active': activeSessionId.value === session.id },
+          ],
+        },
+        [
+          h(
+            'button',
+            {
+              type: 'button',
+              class: 'standalone-chat__session-main',
+              onClick: () => openSession(session.id),
+            },
+            [h('strong', session.title)],
+          ),
+          h(
+            Dropdown,
+            {
+              trigger: ['click'],
+              menu: { items: getSessionMenuItems(session) },
+              onClick: (event: Event) => event.stopPropagation(),
+              onMenuClick: (event: { key: string | number }) =>
+                handleSessionMenuClick(event, session),
+            },
+            {
+              default: () =>
+                h(
+                  Button,
+                  {
+                    type: 'text',
+                    shape: 'circle',
+                    size: 'small',
+                    class: 'standalone-chat__session-action',
+                    title: '更多操作',
+                    'aria-label': '更多操作',
+                  },
+                  { icon: () => h(MoreHorizontal, { size: 14 }) },
+                ),
+            },
+          ),
+        ],
+      ),
+    ),
+  ])
+
+  if (sessionsLoadingMore.value) {
+    nodes.push(h('div', { class: 'standalone-chat__empty-list' }, '加载更多对话...'))
+  }
+  return nodes
+}
+
 function createAssistantFooter(text: string, suggestions: string[] = []) {
   return h('div', { class: 'chat-message-footer' }, [
     h('div', { class: 'chat-message-footer__meta' }, [
@@ -230,6 +341,7 @@ function startNewChat() {
   sessionStore.clearMessages(storeKey.value)
   resetComposerState()
   resetMessagePaging()
+  mobileSidebarOpen.value = false
 }
 
 function resetComposerState() {
@@ -405,6 +517,7 @@ async function openSession(sessionId: number) {
     messagePage.value = result.page
     messagePages.value = result.pages || 1
     resetComposerState()
+    mobileSidebarOpen.value = false
     await scrollChatToBottom()
   } finally {
     historyLoading.value = false
@@ -474,78 +587,35 @@ onMounted(async () => {
         sub-title="请确认应用已公开，或使用创建者账号访问。"
       />
       <main v-else class="standalone-chat__shell">
-        <aside class="standalone-chat__sidebar">
-          <div class="standalone-chat__brand">
-            <div class="standalone-chat__app-icon" :class="{ 'has-image': appAvatar }">
-              <img v-if="appAvatar" :src="appAvatar" alt="" />
-              <Bot v-else :size="18" />
-            </div>
-            <strong>{{ appName }}</strong>
-          </div>
+        <SessionDirectory root-class="standalone-chat__sidebar" />
 
+        <header class="standalone-chat__mobile-topbar">
           <Button
-            type="primary"
-            block
-            class="standalone-chat__new"
+            type="text"
+            shape="circle"
+            class="standalone-chat__mobile-menu"
+            title="打开目录"
+            aria-label="打开目录"
+            @click="mobileSidebarOpen = true"
+          >
+            <template #icon><Menu :size="18" /></template>
+          </Button>
+          <div class="standalone-chat__mobile-title">
+            <span>{{ appName }}</span>
+            <strong>{{ chatTitle }}</strong>
+          </div>
+          <Button
+            type="text"
+            shape="circle"
+            class="standalone-chat__mobile-new"
             :disabled="responding"
+            title="新建对话"
+            aria-label="新建对话"
             @click="startNewChat"
           >
-            <template #icon><MessageSquarePlus :size="15" /></template>
-            新建对话
+            <template #icon><MessageSquarePlus :size="18" /></template>
           </Button>
-
-          <section
-            class="standalone-chat__menu standalone-chat__menu--grow"
-            @scroll="handleSessionListScroll"
-          >
-            <div
-              v-if="sessionsLoading && !conversationSessions.length"
-              class="standalone-chat__empty-list"
-            >
-              正在加载对话...
-            </div>
-            <div v-else-if="!conversationSessions.length" class="standalone-chat__empty-list">
-              暂无对话
-            </div>
-            <template v-else>
-              <template v-for="group in sessionGroups" :key="group.key">
-                <span>{{ group.title }}</span>
-                <div
-                  v-for="session in group.sessions"
-                  :key="session.id"
-                  class="standalone-chat__session"
-                  :class="{ 'is-active': activeSessionId === session.id }"
-                >
-                  <button
-                    type="button"
-                    class="standalone-chat__session-main"
-                    @click="openSession(session.id)"
-                  >
-                    <strong>{{ session.title }}</strong>
-                  </button>
-                  <Dropdown
-                    :trigger="['click']"
-                    :menu="{ items: getSessionMenuItems(session) }"
-                    @click.stop
-                    @menu-click="(event) => handleSessionMenuClick(event, session)"
-                  >
-                    <Button
-                      type="text"
-                      shape="circle"
-                      size="small"
-                      class="standalone-chat__session-action"
-                      title="更多操作"
-                      aria-label="更多操作"
-                    >
-                      <template #icon><MoreHorizontal :size="14" /></template>
-                    </Button>
-                  </Dropdown>
-                </div>
-              </template>
-            </template>
-            <div v-if="sessionsLoadingMore" class="standalone-chat__empty-list">加载更多对话...</div>
-          </section>
-        </aside>
+        </header>
 
         <DebugPreviewPanel
           ref="chatPreviewRef"
@@ -577,6 +647,17 @@ onMounted(async () => {
           @load-more-history="loadMoreHistory"
         />
       </main>
+
+      <Drawer
+        v-model:open="mobileSidebarOpen"
+        title="对话目录"
+        placement="left"
+        :size="320"
+        :closable="{ placement: 'end' }"
+        class="standalone-chat__drawer"
+      >
+        <SessionDirectory root-class="standalone-chat__drawer-body" />
+      </Drawer>
 
       <AppModal
         v-model:open="renameModalOpen"
@@ -661,7 +742,48 @@ onMounted(async () => {
   border-right: 0.1rem solid var(--border-color);
 }
 
-.standalone-chat__brand {
+.standalone-chat__mobile-topbar {
+  display: none;
+}
+
+.standalone-chat__mobile-title {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 0.2rem;
+  text-align: center;
+}
+
+.standalone-chat__mobile-title span,
+.standalone-chat__mobile-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.standalone-chat__mobile-title span {
+  color: var(--font-light-color);
+  font-size: 1.1rem;
+  line-height: 1.4rem;
+}
+
+.standalone-chat__mobile-title strong {
+  color: var(--font-active-color);
+  font-size: 1.4rem;
+  line-height: 1.8rem;
+}
+
+.standalone-chat__drawer-body {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  gap: 1.6rem;
+}
+
+.standalone-chat__sidebar :deep(.standalone-chat__brand),
+.standalone-chat__drawer-body :deep(.standalone-chat__brand) {
   display: flex;
   align-items: center;
   min-width: 0;
@@ -669,15 +791,18 @@ onMounted(async () => {
   font-size: 1.5rem;
 }
 
-.standalone-chat__brand strong,
-.standalone-chat__menu strong {
+.standalone-chat__sidebar :deep(.standalone-chat__brand strong),
+.standalone-chat__sidebar :deep(.standalone-chat__menu strong),
+.standalone-chat__drawer-body :deep(.standalone-chat__brand strong),
+.standalone-chat__drawer-body :deep(.standalone-chat__menu strong) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.standalone-chat__app-icon {
+.standalone-chat__sidebar :deep(.standalone-chat__app-icon),
+.standalone-chat__drawer-body :deep(.standalone-chat__app-icon) {
   display: grid;
   width: 3.2rem;
   height: 3.2rem;
@@ -689,44 +814,52 @@ onMounted(async () => {
   border-radius: 0.8rem;
 }
 
-.standalone-chat__app-icon.has-image {
+.standalone-chat__sidebar :deep(.standalone-chat__app-icon.has-image),
+.standalone-chat__drawer-body :deep(.standalone-chat__app-icon.has-image) {
   background: var(--background-hover-color);
 }
 
-.standalone-chat__app-icon img {
+.standalone-chat__sidebar :deep(.standalone-chat__app-icon img),
+.standalone-chat__drawer-body :deep(.standalone-chat__app-icon img) {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.standalone-chat__new {
+.standalone-chat__sidebar :deep(.standalone-chat__new),
+.standalone-chat__drawer-body :deep(.standalone-chat__new) {
   min-height: 3.6rem;
 }
 
-.standalone-chat__menu {
+.standalone-chat__sidebar :deep(.standalone-chat__menu),
+.standalone-chat__drawer-body :deep(.standalone-chat__menu) {
   display: grid;
   gap: 0.8rem;
 }
 
-.standalone-chat__menu--grow {
+.standalone-chat__sidebar :deep(.standalone-chat__menu--grow),
+.standalone-chat__drawer-body :deep(.standalone-chat__menu--grow) {
   min-height: 0;
   overflow-y: auto;
 }
 
-.standalone-chat__menu > span {
+.standalone-chat__sidebar :deep(.standalone-chat__menu > span),
+.standalone-chat__drawer-body :deep(.standalone-chat__menu > span) {
   color: var(--font-light-color);
   font-size: 1.3rem;
   line-height: 1.8rem;
 }
 
-.standalone-chat__empty-list {
+.standalone-chat__sidebar :deep(.standalone-chat__empty-list),
+.standalone-chat__drawer-body :deep(.standalone-chat__empty-list) {
   padding: 0.6rem 0.9rem;
   color: var(--font-light-color);
   font-size: 1.3rem;
   line-height: 1.8rem;
 }
 
-.standalone-chat__session {
+.standalone-chat__sidebar :deep(.standalone-chat__session),
+.standalone-chat__drawer-body :deep(.standalone-chat__session) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 2.8rem;
   align-items: center;
@@ -735,7 +868,8 @@ onMounted(async () => {
   border-radius: 0.6rem;
 }
 
-.standalone-chat__session-main {
+.standalone-chat__sidebar :deep(.standalone-chat__session-main),
+.standalone-chat__drawer-body :deep(.standalone-chat__session-main) {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: center;
@@ -751,23 +885,34 @@ onMounted(async () => {
   cursor: pointer;
 }
 
-.standalone-chat__session-action {
+.standalone-chat__sidebar :deep(.standalone-chat__session-action),
+.standalone-chat__drawer-body :deep(.standalone-chat__session-action) {
   opacity: 0;
 }
 
-.standalone-chat__session.is-active,
-.standalone-chat__session:hover {
+.standalone-chat__sidebar :deep(.standalone-chat__session.is-active),
+.standalone-chat__sidebar :deep(.standalone-chat__session:hover),
+.standalone-chat__drawer-body :deep(.standalone-chat__session.is-active),
+.standalone-chat__drawer-body :deep(.standalone-chat__session:hover) {
   color: var(--primary-color);
   background: var(--background-hover-color);
 }
 
-.standalone-chat__session.is-active .standalone-chat__session-main,
-.standalone-chat__session:hover .standalone-chat__session-main {
+.standalone-chat__sidebar :deep(.standalone-chat__session.is-active .standalone-chat__session-main),
+.standalone-chat__sidebar :deep(.standalone-chat__session:hover .standalone-chat__session-main),
+.standalone-chat__drawer-body :deep(.standalone-chat__session.is-active .standalone-chat__session-main),
+.standalone-chat__drawer-body :deep(.standalone-chat__session:hover .standalone-chat__session-main) {
   color: var(--primary-color);
 }
 
-.standalone-chat__session:hover .standalone-chat__session-action,
-.standalone-chat__session.is-active .standalone-chat__session-action {
+.standalone-chat__sidebar :deep(.standalone-chat__session:hover .standalone-chat__session-action),
+.standalone-chat__sidebar :deep(.standalone-chat__session.is-active .standalone-chat__session-action),
+.standalone-chat__drawer-body :deep(.standalone-chat__session:hover .standalone-chat__session-action),
+.standalone-chat__drawer-body :deep(.standalone-chat__session.is-active .standalone-chat__session-action) {
+  opacity: 1;
+}
+
+.standalone-chat__drawer-body :deep(.standalone-chat__session-action) {
   opacity: 1;
 }
 
@@ -827,15 +972,57 @@ onMounted(async () => {
 @media (max-width: 760px) {
   .standalone-chat__shell {
     grid-template-columns: 1fr;
+    grid-template-rows: 5.6rem minmax(0, 1fr);
   }
 
   .standalone-chat__sidebar {
     display: none;
   }
 
+  .standalone-chat__mobile-topbar {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    height: 5.6rem;
+    gap: 0.8rem;
+    padding: 0.8rem 1.2rem;
+    background: var(--color-bg-panel);
+    border-bottom: 0.1rem solid var(--color-border-light);
+  }
+
+  .standalone-chat__mobile-menu,
+  .standalone-chat__mobile-new {
+    flex: 0 0 auto;
+  }
+
+  .standalone-chat :deep(.app-orchestration__preview) {
+    height: calc(100dvh - 5.6rem);
+  }
+
+  .standalone-chat :deep(.orchestration-panel__header) {
+    display: none;
+  }
+
+  .standalone-chat :deep(.chat-preview) {
+    min-height: max(42rem, calc(100dvh - 18rem));
+    padding-top: 2rem;
+    padding-bottom: 1rem;
+  }
+
+  .standalone-chat :deep(.chat-preview__empty) {
+    min-height: min(48rem, calc(100dvh - 22rem));
+  }
+
   .standalone-chat :deep(.chat-composer) {
     padding-right: 1.6rem;
+    padding-bottom: max(0.6rem, env(safe-area-inset-bottom));
     padding-left: 1.6rem;
+  }
+
+  .standalone-chat :deep(.chat-composer p) {
+    margin-top: 0.6rem;
+    font-size: 1.1rem;
+    line-height: 1.6rem;
   }
 }
 </style>

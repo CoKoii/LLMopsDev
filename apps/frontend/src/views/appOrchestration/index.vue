@@ -26,8 +26,6 @@ import {
   Copy,
   Calculator,
   Database,
-  Globe2,
-  Image,
   Info,
   MessageCircle,
   MessagesSquare,
@@ -59,7 +57,6 @@ import {
   knowledgeLimit,
   openingQuestionLimit,
   useAppOrchestrationDraft,
-  type CapabilityItem,
 } from './useAppOrchestrationDraft'
 import { useAppDebugSession } from './useAppDebugSession'
 import AppOrchestrationTopbar from './AppOrchestrationTopbar.vue'
@@ -158,7 +155,6 @@ const {
   publishedVersions,
   promptContent,
   selectedLlmId,
-  capabilities,
   pluginIds,
   pluginSettings,
   knowledgeConfig,
@@ -474,16 +470,6 @@ function createUserAvatar() {
   }
 
   return h('span', { class: 'chat-avatar chat-avatar--user' }, userInitial.value)
-}
-
-function getCapabilityIcon(item: CapabilityItem) {
-  if (item.icon === 'image') return Image
-  if (item.icon === 'globe') return Globe2
-  return Bot
-}
-
-function removeCapability(key: string) {
-  capabilities.value = capabilities.value.filter((item) => item.key !== key)
 }
 
 function updateModelSettings(nextSettings: typeof settings) {
@@ -837,25 +823,6 @@ onMounted(() => {
                       <template #icon><Settings :size="14" /></template>
                     </Button>
                     <Button type="text" size="small" @click="removeSelectedPlugin(item.id)">
-                      <template #icon><Trash2 :size="14" /></template>
-                    </Button>
-                  </div>
-                </article>
-              </div>
-              <div class="capability-list">
-                <article v-for="item in capabilities" :key="item.key" class="capability-item">
-                  <div class="capability-item__icon" :style="{ background: item.tone }">
-                    <component :is="getCapabilityIcon(item)" :size="18" />
-                  </div>
-                  <div>
-                    <h4>{{ item.title }}</h4>
-                    <p>{{ item.description }}</p>
-                  </div>
-                  <div class="capability-item__actions">
-                    <Button type="text" size="small"
-                      ><template #icon><Settings :size="14" /></template
-                    ></Button>
-                    <Button type="text" size="small" @click="removeCapability(item.key)">
                       <template #icon><Trash2 :size="14" /></template>
                     </Button>
                   </div>

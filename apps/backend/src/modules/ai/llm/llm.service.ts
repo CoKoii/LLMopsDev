@@ -76,6 +76,14 @@ const QWEN_AUDIO_TTS_FLASH_VOICES = new Set([
   "loongeva_v3.6",
   "loongjohn",
 ]);
+const EMPTY_ASR_RESPONSE_MARKERS = [
+  "ASR_RESPONSE_HAVE_NO_WORDS",
+  "HAVE_NO_WORDS",
+  "NO_WORDS",
+  "NO_SPEECH",
+  "EMPTY_TRANSCRIPTION",
+  "SILENT_AUDIO",
+];
 
 type WebSocketEventMessage = {
   header?: {
@@ -165,6 +173,13 @@ const extractAsrText = (payload: DashScopeAsrResponse) => {
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return "";
+};
+
+const isEmptyAsrResponse = (value: string) => {
+  const normalized = value.toUpperCase();
+  return EMPTY_ASR_RESPONSE_MARKERS.some((marker) =>
+    normalized.includes(marker),
+  );
 };
 
 const parseLlmRemarkOptions = (remark?: string | null) => {
@@ -572,6 +587,7 @@ export class LlmService {
 
     const responseText = await response.text();
     if (!response.ok) {
+      if (isEmptyAsrResponse(responseText)) return { text: "" };
       throw new BadGatewayException(
         `语音识别调用失败：${response.status} ${responseText}`,
       );
@@ -586,7 +602,7 @@ export class LlmService {
       if (text) return { text };
     }
 
-    throw new BadGatewayException("语音识别调用失败：返回内容为空");
+    return { text: "" };
   }
 
   private async transcribeAudioByDashScope(
@@ -632,6 +648,7 @@ export class LlmService {
 
     const responseText = await response.text();
     if (!response.ok) {
+      if (isEmptyAsrResponse(responseText)) return { text: "" };
       throw new BadGatewayException(
         `语音识别调用失败：${response.status} ${responseText}`,
       );
@@ -646,7 +663,7 @@ export class LlmService {
       if (text) return { text };
     }
 
-    throw new BadGatewayException("语音识别调用失败：返回内容为空");
+    return { text: "" };
   }
 
   async synthesizeSpeech(text: string, voice?: string) {
@@ -745,7 +762,7 @@ export class LlmService {
         }
         const text = texts.join("").trim();
         if (!text) {
-          reject(new BadGatewayException("语音识别调用失败：未返回识别文本"));
+          resolve({ text: "" });
           return;
         }
         resolve({ text });
@@ -810,11 +827,16 @@ export class LlmService {
         }
 
         if (event === "task-failed") {
+          const errorText = `${message?.header?.error_code ?? ""} ${
+            message?.header?.error_message ?? ""
+          }`;
+          if (isEmptyAsrResponse(errorText)) {
+            finish();
+            return;
+          }
           finish(
             new BadGatewayException(
-              `语音识别调用失败：${message?.header?.error_code ?? ""} ${
-                message?.header?.error_message ?? ""
-              }`.trim(),
+              `语音识别调用失败：${errorText}`.trim(),
             ),
           );
         }

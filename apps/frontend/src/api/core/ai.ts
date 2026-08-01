@@ -498,6 +498,52 @@ export interface RecallTestResult {
   items: RecallTestResultItem[]
 }
 
+export interface HomeBuilderHistoryMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface HomeBuilderAppPlan {
+  name: string
+  description: string
+  categoryId?: number
+  llmId?: number | null
+  prompt: string
+  modelSettings: NonNullable<AiAppVersionConfig['modelSettings']>
+  pluginIds: number[]
+  knowledgeIds: number[]
+  toggles: Record<string, boolean>
+  openingStatement: NonNullable<AiAppVersionConfig['openingStatement']>
+  capabilities: NonNullable<AiAppVersionConfig['capabilities']>
+}
+
+export interface HomeBuilderPluginPlan {
+  name: string
+  description: string
+  categoryId?: number
+  openapiSchema: string
+  headers: PluginHeader[]
+  published: boolean
+  needsMoreInfo: boolean
+}
+
+export interface HomeBuilderPlan {
+  intent: 'create_app' | 'create_plugin' | 'answer' | 'clarify'
+  action: 'draft' | 'create' | 'answer' | 'clarify'
+  reply: string
+  reasoning: string[]
+  app?: HomeBuilderAppPlan
+  plugin?: HomeBuilderPluginPlan
+  nextQuestions: string[]
+  context: {
+    appCategories: AiAppCategoryItem[]
+    pluginCategories: PluginCategoryItem[]
+    chatModels: Array<Pick<LlmItem, 'id' | 'modelName' | 'isDefault'>>
+    selectedPlugins: PluginItem[]
+    selectedKnowledge: KnowledgeItem[]
+  }
+}
+
 export interface UpdateKnowledgeDocumentPayload {
   name?: string
   enabled?: boolean
@@ -531,7 +577,9 @@ export const listAiAppCategoriesApi = async (): Promise<AiAppCategoryItem[]> => 
   return request.get('/ai/apps/categories')
 }
 
-export const createAiAppApi = async (payload: CreateAiAppPayload) => {
+export const createAiAppApi = async (
+  payload: CreateAiAppPayload,
+): Promise<{ success: boolean; app?: AiAppItem }> => {
   return request.post('/ai/apps', payload)
 }
 
@@ -927,14 +975,22 @@ export const transcribeAiAppSpeechApi = async (
   appId: number,
   fileId: number,
 ): Promise<{ text: string }> => {
-  return request.post(`/ai/apps/${appId}/speech/transcriptions`, { fileId })
+  return request.post(
+    `/ai/apps/${appId}/speech/transcriptions`,
+    { fileId },
+    { suppressErrorNotify: true },
+  )
 }
 
 export const transcribeStandaloneAiAppSpeechApi = async (
   appId: number,
   fileId: number,
 ): Promise<{ text: string }> => {
-  return request.post(`/ai/apps/${appId}/standalone/speech/transcriptions`, { fileId })
+  return request.post(
+    `/ai/apps/${appId}/standalone/speech/transcriptions`,
+    { fileId },
+    { suppressErrorNotify: true },
+  )
 }
 
 export const listPluginsApi = async (params?: PageParams): Promise<PageResult<PluginItem>> => {
@@ -1066,4 +1122,97 @@ export const updateKnowledgeDocumentApi = async (
 
 export const deleteKnowledgeDocumentApi = async (knowledgeId: number, documentId: number) => {
   return request.delete(`/ai/knowledge/${knowledgeId}/documents/${documentId}`)
+}
+
+type StreamHomeBuilderPlanParams = {
+  message: string
+  history?: HomeBuilderHistoryMessage[]
+  pendingPlan?: HomeBuilderPlan
+  onContent: (content: string) => void
+  onStatus?: (status: string) => void
+  onPlan?: (plan: HomeBuilderPlan) => void
+  onError?: (message: string) => void
+  signal?: AbortSignal
+}
+
+export const streamHomeBuilderPlanApi = async ({
+  message,
+  history,
+  pendingPlan,
+  onContent,
+  onStatus,
+  onPlan,
+  onError,
+  signal,
+}: StreamHomeBuilderPlanParams) => {
+  const baseURL = import.meta.env.VITE_API_BASE_URL || ''
+  const token = getAccessToken()
+  const response = await fetch(`${baseURL}/ai/home-builder/plans/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ message, history, pendingPlan }),
+    signal,
+  })
+
+  if (!response.ok || !response.body) {
+    throw new Error('构建接口请求失败')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  const consumeEvent = (rawEvent: string) => {
+    const lines = rawEvent.split('\n')
+    const eventName =
+      lines
+        .find((line) => line.startsWith('event:'))
+        ?.slice(6)
+        .trim() || 'message'
+    const data = lines
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trim())
+      .join('\n')
+
+    if (!data || data === '[DONE]') return
+
+    const payload = JSON.parse(data) as {
+      content?: string
+      status?: string
+      plan?: HomeBuilderPlan
+      message?: string
+    }
+    if (eventName === 'error') {
+      onError?.(payload.message || '构建接口请求失败')
+      return
+    }
+    if (eventName === 'status') {
+      if (payload.status?.trim()) onStatus?.(payload.status.trim())
+      return
+    }
+    if (eventName === 'plan') {
+      if (payload.plan) onPlan?.(payload.plan)
+      return
+    }
+    if (payload.content) {
+      onContent(payload.content)
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+    events.forEach(consumeEvent)
+  }
+
+  if (buffer) {
+    consumeEvent(buffer)
+  }
 }

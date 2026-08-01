@@ -17,16 +17,16 @@ import {
 import { message } from 'antdv-next'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch, type Ref } from 'vue'
 
-export type CapabilityItem = {
+export const openingQuestionLimit = 3
+export const knowledgeLimit = 5
+
+type CapabilityItem = {
   key: string
   title: string
   description: string
   icon: string
   tone: string
 }
-
-export const openingQuestionLimit = 3
-export const knowledgeLimit = 5
 
 type AppKnowledgeConfig = {
   ids: number[]
@@ -141,7 +141,6 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
   const llms = ref<LlmItem[]>([])
   const promptContent = ref('')
   const selectedLlmId = ref<number | null>(null)
-  const capabilities = ref<CapabilityItem[]>(createInitialCapabilities())
   const pluginIds = ref<number[]>([])
   const pluginSettings = ref<AppPluginSettings>({})
   const knowledgeConfig = reactive<AppKnowledgeConfig>({
@@ -195,7 +194,7 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
       prompt: promptContent.value,
       llmId: selectedLlmId.value,
       modelSettings: { ...settings },
-      capabilities: capabilities.value.map((item) => ({ ...item })),
+      capabilities: [],
       knowledge: {
         ids: selectedKnowledgeIds,
         settings: { ...knowledgeConfig.settings },
@@ -225,16 +224,10 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
       frequencyPenalty: config.modelSettings?.frequencyPenalty ?? 0.1,
       contextRounds: config.modelSettings?.contextRounds ?? 10,
     })
-    capabilities.value = config.capabilities?.length
-      ? config.capabilities.map((item) => ({
-          key: item.key,
-          title: item.title,
-          description: item.description || '插件能力',
-          icon: item.icon || 'globe',
-          tone: item.tone || '#eff6ff',
-        }))
-      : []
-    pluginIds.value = config.pluginIds?.length ? [...new Set(config.pluginIds)] : []
+    const hydratedPluginIds = version.plugins?.length
+      ? version.plugins.map((item) => item.id)
+      : (config.pluginIds ?? [])
+    pluginIds.value = hydratedPluginIds.length ? [...new Set(hydratedPluginIds)] : []
     pluginSettings.value = normalizePluginSettings(config.pluginSettings ?? {}, pluginIds.value)
     const nextKnowledgeIds = configKnowledge.ids ?? []
     knowledgeConfig.ids = nextKnowledgeIds.length
@@ -376,7 +369,6 @@ export function useAppOrchestrationDraft(appId: Ref<number>) {
     publishedVersions,
     promptContent,
     selectedLlmId,
-    capabilities,
     pluginIds,
     pluginSettings,
     knowledgeConfig,
