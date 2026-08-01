@@ -585,11 +585,14 @@ function getScrollElement() {
   return chatListRef.value
 }
 
-function scrollToBottom() {
+function isNearBottom(element: HTMLElement) {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= 48
+}
+
+function scrollToBottom(force = true) {
   const element = getScrollElement()
-  if (element) {
-    element.scrollTop = element.scrollHeight
-  }
+  if (!element || (!force && !isNearBottom(element))) return
+  element.scrollTop = element.scrollHeight
 }
 
 function getScrollState() {
@@ -610,7 +613,8 @@ function restoreScrollFromTop(previous: { scrollTop: number; scrollHeight: numbe
 function handleChatScroll(event?: Event) {
   const target = event?.currentTarget
   const element = target instanceof HTMLElement ? target : getScrollElement()
-  if (!element || !props.hasMoreHistory || props.historyLoading) return
+  if (!element) return
+  if (!props.hasMoreHistory || props.historyLoading) return
   if (element.scrollTop <= 24) emit('loadMoreHistory')
 }
 

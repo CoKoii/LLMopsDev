@@ -216,9 +216,9 @@ function formatMessageMeta(elapsedMs: number, tokens?: number) {
   return parts.join(' · ')
 }
 
-async function scrollChatToBottom() {
+async function scrollChatToBottom(force = true) {
   await nextTick()
-  chatPreviewRef.value?.scrollToBottom()
+  chatPreviewRef.value?.scrollToBottom(force)
 }
 
 function submitSuggestedPrompt(content: string) {

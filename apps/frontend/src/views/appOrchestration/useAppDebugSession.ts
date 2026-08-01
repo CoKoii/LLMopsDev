@@ -205,7 +205,7 @@ export function useAppDebugSession(
 
   const runAssistantResponse = async (
     content: string,
-    scrollToBottom: () => Promise<void>,
+    scrollToBottom: (force?: boolean) => Promise<void>,
     responseOptions: AssistantResponseOptions,
   ) => {
     const { attachmentFileIds = [], key, userMessageKey } = responseOptions
@@ -242,7 +242,7 @@ export function useAppDebugSession(
       activeAudioSink = audioSink
       return audioSink
     }
-    await scrollToBottom()
+    await scrollToBottom(true)
 
     try {
       await saveDraftNow()
@@ -265,7 +265,7 @@ export function useAppDebugSession(
             content: assistantContent,
             ...(!assistantAsAudio ? { statusText: undefined } : {}),
           })
-          if (!assistantAsAudio) await scrollToBottom()
+          if (!assistantAsAudio) await scrollToBottom(false)
         },
         onAudioStart: ({ contentType }) => {
           if (!assistantAsAudio) return
@@ -284,7 +284,7 @@ export function useAppDebugSession(
             audioMessage: true,
             statusText: undefined,
           })
-          await scrollToBottom()
+          await scrollToBottom(false)
         },
         onAudioEnd: () => {
           audioSink?.finish()
@@ -315,7 +315,7 @@ export function useAppDebugSession(
         onStatus: async (status) => {
           if (!assistantAsAudio && assistantContent.trim()) return
           updateAssistant({ statusText: status })
-          await scrollToBottom()
+          await scrollToBottom(false)
         },
         onKnowledge: ({ query, items }) => {
           updateAssistant({
@@ -370,11 +370,14 @@ export function useAppDebugSession(
       responding.value = false
       debugAbortController = undefined
       activeAudioSink = undefined
-      await scrollToBottom()
+      await scrollToBottom(false)
     }
   }
 
-  const submitMessage = async (value: string, scrollToBottom: () => Promise<void>) => {
+  const submitMessage = async (
+    value: string,
+    scrollToBottom: (force?: boolean) => Promise<void>,
+  ) => {
     const content = value.trim()
     if (!content || responding.value) return
     if (hasUploadingAttachments()) {
@@ -401,7 +404,10 @@ export function useAppDebugSession(
     })
   }
 
-  const submitVoiceMessage = async (file: File, scrollToBottom: () => Promise<void>) => {
+  const submitVoiceMessage = async (
+    file: File,
+    scrollToBottom: (force?: boolean) => Promise<void>,
+  ) => {
     if (responding.value || transcribingVoice.value) return
 
     const key = Date.now()
@@ -417,7 +423,7 @@ export function useAppDebugSession(
       audioTranscribing: true,
       audioUrl,
     })
-    await scrollToBottom()
+    await scrollToBottom(true)
 
     transcribingVoice.value = true
     try {

@@ -1124,6 +1124,11 @@ export class LlmService {
         usageType: query.usageType,
       });
     }
+    if (query.enabled !== undefined) {
+      queryBuilder.andWhere("llm.enabled = :enabled", {
+        enabled: query.enabled,
+      });
+    }
 
     const total = await queryBuilder.getCount();
     const { entities, raw } = await queryBuilder

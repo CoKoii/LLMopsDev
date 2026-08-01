@@ -101,12 +101,6 @@ export function useColumns(): VxeTableGridColumns {
       title: 'Base URL',
     },
     {
-      field: 'apiKeyConfigured',
-      slots: { default: 'apiKeyConfigured' },
-      title: 'API Key',
-      width: 100,
-    },
-    {
       field: 'enabled',
       slots: { default: 'enabled' },
       title: '状态',
@@ -126,14 +120,9 @@ export function useColumns(): VxeTableGridColumns {
     },
     {
       align: 'left',
-      field: 'lastTestMessage',
+      field: 'remark',
       minWidth: 180,
-      title: '测试记录',
-    },
-    {
-      field: 'updatedBy',
-      title: '更新人',
-      width: 90,
+      title: '备注',
     },
     {
       field: 'updatedAt',

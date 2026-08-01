@@ -769,9 +769,9 @@ async function applyOptimizedPrompt() {
   message.success('已应用优化版本')
 }
 
-async function scrollChatToBottom() {
+async function scrollChatToBottom(force = true) {
   await nextTick()
-  chatPreviewRef.value?.scrollToBottom()
+  chatPreviewRef.value?.scrollToBottom(force)
 }
 
 onMounted(() => {

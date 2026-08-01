@@ -167,12 +167,6 @@ function removeModel(row: AiModelApi.ModelConfig) {
         </Button>
       </template>
 
-      <template #apiKeyConfigured="{ row }">
-        <Tag :color="row.apiKeyConfigured ? 'success' : 'warning'">
-          {{ row.apiKeyConfigured ? '已配置' : '未配置' }}
-        </Tag>
-      </template>
-
       <template #enabled="{ row }">
         <Tag :color="row.enabled ? 'success' : 'default'">
           {{ row.enabled ? '启用' : '停用' }}

@@ -14,6 +14,7 @@ export interface PageParams {
   pageSize?: number
   name?: string
   usageType?: LlmUsageType
+  enabled?: boolean
   scope?: 'mine' | 'available'
   categoryKey?: string
 }
