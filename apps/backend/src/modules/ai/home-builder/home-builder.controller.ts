@@ -17,18 +17,11 @@ import { HomeBuilderService } from "./home-builder.service";
 export class HomeBuilderController {
   constructor(private readonly homeBuilderService: HomeBuilderService) {}
 
-  @Post("plans")
-  createPlan(
-    @Body() dto: CreateHomeBuilderPlanDto,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.homeBuilderService.createPlan(dto, user.userId);
-  }
-
   @Post("plans/stream")
   @HttpCode(HttpStatus.OK)
   @Header("Cache-Control", "no-cache, no-transform")
   @Header("Connection", "keep-alive")
+  @Header("X-Accel-Buffering", "no")
   @SkipResponseWrap()
   createPlanStream(
     @Body() dto: CreateHomeBuilderPlanDto,

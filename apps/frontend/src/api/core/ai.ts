@@ -503,46 +503,9 @@ export interface HomeBuilderHistoryMessage {
   content: string
 }
 
-export interface HomeBuilderAppPlan {
-  name: string
-  description: string
-  categoryId?: number
-  llmId?: number | null
-  prompt: string
-  modelSettings: NonNullable<AiAppVersionConfig['modelSettings']>
-  pluginIds: number[]
-  knowledgeIds: number[]
-  toggles: Record<string, boolean>
-  openingStatement: NonNullable<AiAppVersionConfig['openingStatement']>
-  capabilities: NonNullable<AiAppVersionConfig['capabilities']>
-}
-
-export interface HomeBuilderPluginPlan {
-  name: string
-  description: string
-  categoryId?: number
-  openapiSchema: string
-  headers: PluginHeader[]
-  published: boolean
-  needsMoreInfo: boolean
-}
-
-export interface HomeBuilderPlan {
-  intent: 'create_app' | 'create_plugin' | 'answer' | 'clarify'
-  action: 'draft' | 'create' | 'answer' | 'clarify'
-  reply: string
-  reasoning: string[]
-  app?: HomeBuilderAppPlan
-  plugin?: HomeBuilderPluginPlan
-  nextQuestions: string[]
-  context: {
-    appCategories: AiAppCategoryItem[]
-    pluginCategories: PluginCategoryItem[]
-    chatModels: Array<Pick<LlmItem, 'id' | 'modelName' | 'isDefault'>>
-    selectedPlugins: PluginItem[]
-    selectedKnowledge: KnowledgeItem[]
-  }
-}
+export type HomeBuilderCreatedResource =
+  | { type: 'app'; id: number; name: string }
+  | { type: 'plugin'; name: string }
 
 export interface UpdateKnowledgeDocumentPayload {
   name?: string
@@ -1124,27 +1087,25 @@ export const deleteKnowledgeDocumentApi = async (knowledgeId: number, documentId
   return request.delete(`/ai/knowledge/${knowledgeId}/documents/${documentId}`)
 }
 
-type StreamHomeBuilderPlanParams = {
+type StreamHomeBuilderParams = {
   message: string
   history?: HomeBuilderHistoryMessage[]
-  pendingPlan?: HomeBuilderPlan
   onContent: (content: string) => void
   onStatus?: (status: string) => void
-  onPlan?: (plan: HomeBuilderPlan) => void
+  onCreated?: (created: HomeBuilderCreatedResource) => void
   onError?: (message: string) => void
   signal?: AbortSignal
 }
 
-export const streamHomeBuilderPlanApi = async ({
+export const streamHomeBuilderApi = async ({
   message,
   history,
-  pendingPlan,
   onContent,
   onStatus,
-  onPlan,
+  onCreated,
   onError,
   signal,
-}: StreamHomeBuilderPlanParams) => {
+}: StreamHomeBuilderParams) => {
   const baseURL = import.meta.env.VITE_API_BASE_URL || ''
   const token = getAccessToken()
   const response = await fetch(`${baseURL}/ai/home-builder/plans/stream`, {
@@ -1153,7 +1114,7 @@ export const streamHomeBuilderPlanApi = async ({
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ message, history, pendingPlan }),
+    body: JSON.stringify({ message, history }),
     signal,
   })
 
@@ -1182,7 +1143,7 @@ export const streamHomeBuilderPlanApi = async ({
     const payload = JSON.parse(data) as {
       content?: string
       status?: string
-      plan?: HomeBuilderPlan
+      created?: HomeBuilderCreatedResource
       message?: string
     }
     if (eventName === 'error') {
@@ -1193,8 +1154,8 @@ export const streamHomeBuilderPlanApi = async ({
       if (payload.status?.trim()) onStatus?.(payload.status.trim())
       return
     }
-    if (eventName === 'plan') {
-      if (payload.plan) onPlan?.(payload.plan)
+    if (eventName === 'created') {
+      if (payload.created) onCreated?.(payload.created)
       return
     }
     if (payload.content) {
@@ -1212,6 +1173,7 @@ export const streamHomeBuilderPlanApi = async ({
     events.forEach(consumeEvent)
   }
 
+  buffer += decoder.decode()
   if (buffer) {
     consumeEvent(buffer)
   }

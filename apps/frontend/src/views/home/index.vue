@@ -5,14 +5,12 @@ import { useAuthStore } from '@/stores/auth'
 import { Bot } from '@lucide/vue'
 import type { BubbleListProps } from 'ant-design-x-vue'
 import { computed, h, nextTick, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import DebugPreviewPanel, { type DebugChatMessage } from '../appOrchestration/DebugPreviewPanel.vue'
 import { useHomeBuilder } from './useHomeBuilder'
 
-const router = useRouter()
 const authStore = useAuthStore()
 const previewRef = ref<InstanceType<typeof DebugPreviewPanel>>()
-const { input, loading, messages, sendMessage, stopResponse } = useHomeBuilder(router)
+const { input, loading, messages, sendMessage, stopResponse } = useHomeBuilder()
 
 const appName = 'AI 应用构建器'
 const appAvatar = logoUrl

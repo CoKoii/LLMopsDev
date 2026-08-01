@@ -309,6 +309,24 @@ export class AppService {
     return ids.filter((id) => selectableIds.has(id));
   }
 
+  private async filterSelectableKnowledgeIds(
+    knowledgeIds: number[] | undefined,
+    userId: number,
+  ) {
+    const ids = [...new Set(knowledgeIds ?? [])].filter((id) =>
+      Number.isInteger(id),
+    );
+    if (!ids.length) return [];
+
+    const knowledges = await this.knowledgeRepository.find({
+      select: ["id"],
+      where: { id: In(ids), createdBy: userId, status: true },
+    });
+    const selectableIds = new Set(knowledges.map((knowledge) => knowledge.id));
+
+    return ids.filter((id) => selectableIds.has(id));
+  }
+
   private prunePluginSettings(
     settings: AiAppVersionConfig["pluginSettings"],
     pluginIds: number[] | undefined,
@@ -317,7 +335,9 @@ export class AppService {
 
     const selectableIds = new Set((pluginIds ?? []).map(String));
     return Object.fromEntries(
-      Object.entries(settings).filter(([pluginId]) => selectableIds.has(pluginId)),
+      Object.entries(settings).filter(([pluginId]) =>
+        selectableIds.has(pluginId),
+      ),
     );
   }
 
@@ -325,12 +345,21 @@ export class AppService {
     config: AiAppVersionConfig,
     userId: number,
   ): Promise<AiAppVersionConfig> {
-    const pluginIds = await this.filterSelectablePluginIds(config.pluginIds, userId);
+    const [pluginIds, knowledgeIds] = await Promise.all([
+      this.filterSelectablePluginIds(config.pluginIds, userId),
+      this.filterSelectableKnowledgeIds(config.knowledge?.ids, userId),
+    ]);
 
     return {
       ...config,
       pluginIds,
-      pluginSettings: this.prunePluginSettings(config.pluginSettings, pluginIds),
+      pluginSettings: this.prunePluginSettings(
+        config.pluginSettings,
+        pluginIds,
+      ),
+      knowledge: config.knowledge
+        ? { ...config.knowledge, ids: knowledgeIds }
+        : config.knowledge,
     };
   }
 
@@ -416,14 +445,24 @@ export class AppService {
       appId: app.id,
       published: app.published,
       hasVersion: Boolean(version),
-      version: version ? await this.withVersionRelations(version, userId) : null,
+      version: version
+        ? await this.withVersionRelations(version, userId)
+        : null,
     };
   }
 
   // --------------------------------------------------------------------------------------------------
   // 创建AI应用
-  async create(createAppDto: CreateAppDto, userId: number) {
-    const payload = await this.buildAppPayload(createAppDto, userId);
+  private async createWithDraftConfig(
+    createAppDto: CreateAppDto,
+    draftConfig: AiAppVersionConfig,
+    userId: number,
+  ) {
+    const payload = {
+      ...(await this.buildAppPayload(createAppDto, userId)),
+      createdBy: userId,
+      updatedBy: userId,
+    };
     const app = await this.dataSource.transaction(async (manager) => {
       const app = await manager.save(AiApp, manager.create(AiApp, payload));
       await manager.save(
@@ -432,12 +471,36 @@ export class AppService {
           appId: app.id,
           version: DRAFT_VERSION,
           status: AiAppVersionStatus.DRAFT,
-          config: createDefaultDraftConfig(),
+          config: draftConfig,
+          createdBy: userId,
+          updatedBy: userId,
         }),
       );
       return app;
     });
     return { success: true, app: this.withAccessibleImage(app) };
+  }
+
+  async create(createAppDto: CreateAppDto, userId: number) {
+    return this.createWithDraftConfig(
+      createAppDto,
+      createDefaultDraftConfig(),
+      userId,
+    );
+  }
+
+  async createWithConfig(
+    createAppDto: CreateAppDto,
+    config: AiAppVersionConfig,
+    userId: number,
+  ) {
+    await this.ensureSelectableChatModel(config.llmId);
+    const draftConfig = await this.sanitizeSelectableResources(
+      this.mergeConfig(createDefaultDraftConfig(), config),
+      userId,
+    );
+
+    return this.createWithDraftConfig(createAppDto, draftConfig, userId);
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -507,7 +570,11 @@ export class AppService {
     const llms = llmIds.length
       ? await this.llmRepository.find({
           select: ["id", "modelName"],
-          where: { id: In(llmIds), usageType: LlmUsageType.CHAT, enabled: true },
+          where: {
+            id: In(llmIds),
+            usageType: LlmUsageType.CHAT,
+            enabled: true,
+          },
         })
       : [];
     const llmById = new Map(llms.map((llm) => [llm.id, llm]));

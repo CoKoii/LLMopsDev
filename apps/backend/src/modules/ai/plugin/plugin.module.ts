@@ -11,6 +11,6 @@ import { PluginToolService } from "./plugin-tool.service";
   imports: [TypeOrmModule.forFeature([Plugin, PluginCategory]), FilesModule],
   controllers: [PluginController],
   providers: [PluginService, PluginToolService],
-  exports: [PluginToolService],
+  exports: [PluginService, PluginToolService],
 })
 export class PluginModule {}

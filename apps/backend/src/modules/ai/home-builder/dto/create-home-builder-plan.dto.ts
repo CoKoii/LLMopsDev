@@ -1,6 +1,5 @@
 import {
   IsArray,
-  IsObject,
   IsOptional,
   IsString,
   MaxLength,
@@ -27,8 +26,4 @@ export class CreateHomeBuilderPlanDto {
   @ValidateNested({ each: true })
   @Type(() => HomeBuilderHistoryMessageDto)
   history?: HomeBuilderHistoryMessageDto[];
-
-  @IsOptional()
-  @IsObject({ message: "待确认方案必须为对象" })
-  pendingPlan?: Record<string, unknown>;
 }

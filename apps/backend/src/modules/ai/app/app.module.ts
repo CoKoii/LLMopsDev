@@ -24,5 +24,6 @@ import { AiApp } from "./entities/app.entity";
   ],
   controllers: [AppController],
   providers: [AppService],
+  exports: [AppService],
 })
 export class AppModule {}

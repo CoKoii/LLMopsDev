@@ -117,11 +117,11 @@ export class PluginService {
     if (createPluginDto.categoryId === undefined) {
       throw new BadRequestException("创建插件时必须选择分类");
     }
-    await this.pluginRepository.save(
-      this.pluginRepository.create(
-        await this.buildPluginPayload(createPluginDto, userId),
-      ),
-    );
+    const payload = await this.buildPluginPayload(createPluginDto, userId);
+    payload.createdBy = userId;
+    payload.updatedBy = userId;
+
+    await this.pluginRepository.save(this.pluginRepository.create(payload));
     return { success: true };
   }
   // --------------------------------------------------------------------------------------------------
