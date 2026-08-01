@@ -104,20 +104,14 @@ type HomeBuilderSseEvent =
   | { message: string };
 
 const SSE_DONE = "data: [DONE]\n\n";
-
 const HOME_BUILDER_SYSTEM_PROMPT = [
-  "你是产品首页的对话式创建入口，帮助用户把一个想法落成 AI 应用或插件。",
-  "像产品顾问一样工作：理解用户想达成的结果、使用场景、对象水平和关键约束，然后自己完成配置设计。",
-  "不要询问用户是否开启某个具体配置、插件、知识库、长期记忆或能力开关；这些由你根据目标和资源目录判断。",
-  "只有当用户目标不清楚时才澄清，问题应围绕想要的结果、适用人群、技术方向、输出形式或边界条件。",
-  "当用户已经给出足够方向时，直接形成或更新方案；例如用户补充编程语言、行业、角色或任务范围后，不要继续追问功能开关。",
-  "AI 应用方案应包含名称、描述、提示词、模型配置、开场白、建议问题，以及必要的知识库、插件、长期记忆选择。",
-  "reply 是前端唯一展示给用户的内容，必须是一条完整、简洁、可直接发送的回复；不要只写“以下是配置”这类引导语。",
-  "当 action=draft 时，在 reply 里概括核心结果和你的关键设计取舍，然后请用户确认或直接说要调整的目标；不要夹带配置开关式追问。",
-  "插件方案只基于用户提供的真实接口信息生成；接口信息不足时继续追问。",
-  "根据资源目录选择模型、插件和知识库，只能使用真实存在的 id；没有合适资源就留空。",
-  "首次形成方案先让用户确认或修改；已有待确认方案时，根据用户回复判断创建、修改或继续澄清。",
-  "创建动作由系统执行，回复里不要说已经创建完成。",
+  "你是产品首页的对话式创建 agent，负责把用户想法落成可创建的 AI 应用或插件。",
+  "先理解用户想达成的结果、使用场景、适用人群和边界；目标足够清楚时直接设计方案，不要追问配置开关。",
+  "应用方案需要包含名称、描述、提示词、模型配置、开场白、建议问题，以及你判断必要的知识库、插件和长期记忆。",
+  "插件方案只能基于用户提供的真实接口信息；接口信息不足时追问接口地址、方法、鉴权、参数和响应示例。",
+  "模型、插件、知识库只能使用资源目录里的真实 id；没有合适资源就留空。",
+  "reply 是用户唯一看到的回复，必须完整、简洁、可直接发送；draft 时概括方案和关键取舍，并让用户确认或说明调整目标。",
+  "确认创建前方案只存在于对话上下文；当你判断应创建时，主动发起创建工具调用，不要在工具成功前声称已经创建完成。",
 ].join("\n");
 
 const compact = (value?: string | null, limit = 220) => {
@@ -196,7 +190,7 @@ export class HomeBuilderService {
     return this.normalizePlan(
       BuilderPlanSchema.parse(plan),
       context,
-      Boolean(pendingPlan),
+      pendingPlan,
     );
   }
 
@@ -205,6 +199,7 @@ export class HomeBuilderService {
     userId: number,
   ): AsyncGenerator<string> {
     try {
+      yield ": connected\n\n";
       const plan = await this.createPlanResult(dto, userId);
 
       for await (const chunk of this.streamTextChunks(plan.reply)) {
@@ -330,8 +325,9 @@ export class HomeBuilderService {
   private normalizePlan(
     plan: BuilderPlan,
     context: CatalogContext,
-    hasPendingPlan: boolean,
+    pendingPlan: BuilderPlan | undefined,
   ): NormalizedBuilderPlan {
+    const hasPendingPlan = Boolean(pendingPlan);
     const defaultAppCategory = context.appCategories[0];
     const defaultPluginCategory = context.pluginCategories[0];
     const defaultModel =
@@ -345,6 +341,15 @@ export class HomeBuilderService {
 
     if (!hasPendingPlan && plan.action === "create") {
       plan.action = "draft";
+    }
+
+    if (pendingPlan && plan.action !== "answer") {
+      plan.app ??= pendingPlan.app;
+      plan.plugin ??= pendingPlan.plugin;
+      if (plan.intent === "clarify" && (plan.app || plan.plugin)) {
+        plan.intent = plan.app ? "create_app" : "create_plugin";
+        plan.action = "draft";
+      }
     }
 
     if (plan.intent === "answer") {

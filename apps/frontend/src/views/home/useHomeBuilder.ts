@@ -27,6 +27,9 @@ const loading = ref(false)
 const messages = ref<HomeBuilderMessage[]>([])
 const pendingPlan = ref<HomeBuilderPlan>()
 let abortController: AbortController | undefined
+let timeoutTimer: ReturnType<typeof window.setTimeout> | undefined
+let abortReason: 'timeout' | 'stop' | undefined
+const requestTimeoutMs = 60000
 
 function toHistory(messages: HomeBuilderMessage[]): HomeBuilderHistoryMessage[] {
   return messages
@@ -120,12 +123,15 @@ export function useHomeBuilder(router: Router) {
       role: 'assistant',
       content: '',
       pending: true,
-      statusText: '准备构建',
     })
     await scrollToBottom(scroll)
 
     loading.value = true
     abortController = new AbortController()
+    timeoutTimer = window.setTimeout(() => {
+      abortReason = 'timeout'
+      abortController?.abort()
+    }, requestTimeoutMs)
     let streamFailed = false
     let assistantContent = ''
     let plan: HomeBuilderPlan | undefined
@@ -170,14 +176,16 @@ export function useHomeBuilder(router: Router) {
           return
         }
 
-        pendingPlan.value = shouldKeepPendingPlan(plan) ? plan : undefined
+        pendingPlan.value = shouldKeepPendingPlan(plan) ? plan : currentPendingPlan
       }
       updateMessage(pendingId, { pending: false, statusText: undefined })
     } catch (error) {
       pendingPlan.value = undefined
       if (error instanceof DOMException && error.name === 'AbortError') {
         updateMessage(pendingId, {
-          content: assistantContent || '已停止响应',
+          content:
+            assistantContent ||
+            (abortReason === 'timeout' ? '这次构建响应超时了，请稍后重试。' : '已停止响应'),
           pending: false,
           statusText: undefined,
         })
@@ -190,8 +198,13 @@ export function useHomeBuilder(router: Router) {
         statusText: undefined,
       })
     } finally {
+      if (timeoutTimer) {
+        window.clearTimeout(timeoutTimer)
+        timeoutTimer = undefined
+      }
       loading.value = false
       abortController = undefined
+      abortReason = undefined
       await scrollToBottom(scroll, false)
     }
   }
@@ -293,10 +306,19 @@ export function useHomeBuilder(router: Router) {
   }
 
   function stopResponse() {
+    if (timeoutTimer) {
+      window.clearTimeout(timeoutTimer)
+      timeoutTimer = undefined
+    }
+    abortReason = 'stop'
     abortController?.abort()
   }
 
   onBeforeUnmount(() => {
+    if (timeoutTimer) {
+      window.clearTimeout(timeoutTimer)
+      timeoutTimer = undefined
+    }
     abortController?.abort()
   })
 
