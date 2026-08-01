@@ -21,6 +21,7 @@ import { ChatService } from "./chat.service";
 import { ChatMemoryService } from "./chat-memory.service";
 import { DebugAppChatDto } from "./dto/debug-app-chat.dto";
 import { OptimizeAppPromptDto } from "./dto/optimize-app-prompt.dto";
+import { QueryAppStatsDto } from "./dto/query-app-stats.dto";
 import { QueryStandaloneChatDto } from "./dto/query-standalone-chat.dto";
 import { TranscribeAppAudioDto } from "./dto/transcribe-app-audio.dto";
 import { UpdateChatMemoryDto } from "./dto/update-chat-memory.dto";
@@ -32,6 +33,18 @@ export class ChatController {
     private readonly chatService: ChatService,
     private readonly chatMemoryService: ChatMemoryService,
   ) {}
+
+  // -------------------------
+  // 获取AI应用统计分析
+  @Get(":id/stats")
+  getAppStats(
+    @Param("id", ParseIntPipe) id: number,
+    @Query() query: QueryAppStatsDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.chatService.getAppStats(id, user.userId, query.days);
+  }
+  // -------------------------
 
   // -------------------------
   // 流式调试AI应用草稿

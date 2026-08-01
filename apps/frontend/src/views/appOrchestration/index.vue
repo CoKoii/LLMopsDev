@@ -993,7 +993,7 @@ onMounted(() => {
         :refresh-key="publishConfigRefreshKey"
       />
 
-      <StatsAnalysisView v-else key="stats" />
+      <StatsAnalysisView v-else key="stats" :app-id="appId" />
     </Transition>
 
     <ResourceSelectionModals

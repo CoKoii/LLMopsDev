@@ -231,6 +231,39 @@ export interface AppChatMemory {
   updatedAt?: string
 }
 
+export interface AiAppStatsDailyItem {
+  date: string
+  sessions: number
+  activeUsers: number
+  tokens: number
+  tokensPerSecond?: number
+}
+
+export interface AiAppStatsRecentMessage {
+  id: number
+  mode: 'debug' | 'standalone'
+  title: string
+  tokens: number
+  tokensPerSecond?: number
+  createdAt?: string
+}
+
+export interface AiAppStats {
+  range: {
+    days: 7 | 30
+    start: string
+    end: string
+  }
+  overview: {
+    sessions: number
+    activeUsers: number
+    tokens: number
+    tokensPerSecond?: number
+  }
+  daily: AiAppStatsDailyItem[]
+  recentMessages: AiAppStatsRecentMessage[]
+}
+
 export interface PluginHeader {
   key: string
   value: string
@@ -617,6 +650,10 @@ export const updateAiAppMemoryApi = async (
   payload: { content: string },
 ): Promise<AppChatMemory> => {
   return request.put(`/ai/apps/${appId}/memory`, payload)
+}
+
+export const getAiAppStatsApi = async (appId: number, days: 7 | 30 = 7): Promise<AiAppStats> => {
+  return request.get(`/ai/apps/${appId}/stats`, { params: { days } })
 }
 
 type StreamAiAppPromptOptimizeParams = {

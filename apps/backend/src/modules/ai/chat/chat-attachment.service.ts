@@ -42,7 +42,7 @@ type AttachmentRecallItem = {
 type AttachmentContext = {
   context: string;
   items: AttachmentRecallItem[];
-  tokens: number;
+  tokens?: number;
 };
 type AttachmentDisplayInfo = {
   attachmentIndex: number;
@@ -109,7 +109,7 @@ export class ChatAttachmentService {
     const uniqueFileIds = [...new Set(params.fileIds)].filter(Number.isFinite);
     const contexts: string[] = [];
     const items: AttachmentRecallItem[] = [];
-    let tokens = 0;
+    let tokens: number | undefined;
     const displayInfo: AttachmentDisplayInfo = {
       attachmentIndex: 0,
       imageIndex: 0,
@@ -125,7 +125,9 @@ export class ChatAttachmentService {
       });
       contexts.push(context.context);
       items.push(...context.items);
-      tokens += context.tokens;
+      if (context.tokens !== undefined) {
+        tokens = (tokens ?? 0) + context.tokens;
+      }
     }
 
     return {
@@ -146,7 +148,7 @@ export class ChatAttachmentService {
   ): Promise<AttachmentContext> {
     const queryText = query.trim();
     if (!queryText) {
-      return { context: "", items: [] as AttachmentRecallItem[], tokens: 0 };
+      return { context: "", items: [] as AttachmentRecallItem[] };
     }
 
     const embeddingResult = await this.documentEmbeddingService.embed([
@@ -216,7 +218,6 @@ export class ChatAttachmentService {
     return {
       context: contextParts.join("\n\n"),
       items,
-      tokens: 0,
     };
   }
 
@@ -324,7 +325,10 @@ export class ChatAttachmentService {
         session: params.session,
         message: params.message,
         duplicateOfLabel: duplicatedContent?.label,
-        tokens: (document.metadata.tokens ?? 0) + indexTokens,
+        tokens:
+          document.metadata.tokens !== undefined
+            ? document.metadata.tokens + (indexTokens ?? 0)
+            : undefined,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -399,7 +403,7 @@ export class ChatAttachmentService {
     userId: number;
     duplicateOfLabel?: string;
     reusedFromAttachmentId?: number;
-  }): Promise<number> {
+  }): Promise<number | undefined> {
     const cleaned = this.documentCleanerService.clean(params.document).document;
     const chunks = this.documentChunkerService.createChunks({
       knowledgeId: 0,
@@ -504,7 +508,7 @@ export class ChatAttachmentService {
       updatedBy: params.userId,
     });
 
-    return 0;
+    return undefined;
   }
 
   private async createCurrentAttachmentContext(params: {
@@ -512,7 +516,7 @@ export class ChatAttachmentService {
     session: ChatSession;
     message: ChatMessage;
     duplicateOfLabel?: string;
-    tokens: number;
+    tokens?: number;
   }): Promise<AttachmentContext> {
     const chunks = await this.chunkRepository.find({
       where: {

@@ -162,6 +162,21 @@ type StandaloneSessionItem = {
   createdAt?: Date;
   updatedAt?: Date;
 };
+type AppStatsDailyItem = {
+  date: string;
+  sessions: number;
+  activeUsers: number;
+  tokens: number;
+  tokensPerSecond?: number;
+};
+type AppStatsRecentMessage = {
+  id: number;
+  mode: ChatSessionMode;
+  title: string;
+  tokens: number;
+  elapsedMs?: number | null;
+  createdAt?: Date;
+};
 
 class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly items: T[] = [];
@@ -610,10 +625,6 @@ export class ChatService {
     return response.prompt.trim();
   }
 
-  private getTotalTokens(messages: BaseMessageLike[]) {
-    return getAiMessageTokens(messages) || undefined;
-  }
-
   private getMessageText(content: unknown): string {
     if (typeof content === "string") return content;
     if (!Array.isArray(content)) return "";
@@ -697,6 +708,7 @@ export class ChatService {
     tools: StructuredToolInterface[];
     systemPrompt: string;
     messages: BaseMessageLike[];
+    tokenUsage: TokenUsageTracker;
   }): AsyncGenerator<AgentToolRunEvent> {
     const toolMap = new Map(params.tools.map((item) => [item.name, item]));
     const messages: BaseMessageLike[] = [
@@ -709,6 +721,7 @@ export class ChatService {
 
     for (let round = 1; round <= maxToolRounds; round += 1) {
       const aiMessage = await modelWithTools.invoke(messages);
+      params.tokenUsage.add(getAiMessageTokens(aiMessage));
       const toolCalls = this.getToolCalls(aiMessage);
 
       if (!toolCalls.length) {
@@ -773,39 +786,37 @@ export class ChatService {
   private async *streamModelAnswerChunks(params: {
     model: ChatOpenAI;
     messages: BaseMessageLike[];
-  }): AsyncGenerator<string, BaseMessageLike[]> {
-    const chunks: string[] = [];
+    tokenUsage: TokenUsageTracker;
+  }): AsyncGenerator<string> {
     const stream = await params.model.stream(params.messages);
 
     for await (const chunk of stream) {
+      params.tokenUsage.add(getAiMessageTokens(chunk));
       const content = this.getMessageText(chunk.content);
       if (!content) continue;
-      chunks.push(content);
       yield content;
     }
-
-    return [...params.messages, ["ai", chunks.join("")]] as BaseMessageLike[];
   }
 
-  private async *streamTextChunks(
-    text: string,
-  ): AsyncGenerator<string, BaseMessageLike[]> {
+  private async *streamTextChunks(text: string): AsyncGenerator<string> {
     const chunkSize = 12;
     for (let index = 0; index < text.length; index += chunkSize) {
       yield text.slice(index, index + chunkSize);
       await new Promise((resolve) => setTimeout(resolve, 12));
     }
-    return [["ai", text]] as BaseMessageLike[];
   }
 
   private createTokenUsageTracker(): TokenUsageTracker {
     let total = 0;
+    let hasUsage = false;
 
     return {
       add: (value) => {
-        if (value && Number.isFinite(value)) total += value;
+        if (value === undefined || !Number.isFinite(value) || value < 0) return;
+        total += value;
+        hasUsage = true;
       },
-      total: () => total || undefined,
+      total: () => (hasUsage ? total : undefined),
     };
   }
 
@@ -822,6 +833,215 @@ export class ChatService {
       lastMessageAt: session.lastMessageAt,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
+    };
+  }
+
+  private createStatsDateKey(date: Date) {
+    const year = date.getFullYear();
+    const month = `${date.getMonth() + 1}`.padStart(2, "0");
+    const day = `${date.getDate()}`.padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  private normalizeStatsDateKey(value: string | Date) {
+    return value instanceof Date
+      ? this.createStatsDateKey(value)
+      : value.slice(0, 10);
+  }
+
+  private createStatsRange(days = 7) {
+    const normalizedDays = days === 30 ? 30 : 7;
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - normalizedDays + 1);
+    const dateKeys = Array.from({ length: normalizedDays }, (_, index) => {
+      const date = new Date(start);
+      date.setDate(start.getDate() + index);
+      return this.createStatsDateKey(date);
+    });
+
+    return { days: normalizedDays, start, dateKeys };
+  }
+
+  private getStatsDateExpression(alias: string) {
+    return `DATE(${this.getStatsColumn(alias, "createdAt")})`;
+  }
+
+  private getStatsColumn(alias: string, column: string) {
+    const type = this.messageRepository.manager.connection.options.type;
+    if (type === "postgres") return `"${alias}"."${column}"`;
+    return `\`${alias}\`.\`${column}\``;
+  }
+
+  private toNumber(value: unknown) {
+    const numberValue = Number(value ?? 0);
+    return Number.isFinite(numberValue) ? numberValue : 0;
+  }
+
+  private calculateTokensPerSecond(tokens: number, elapsedMs?: number | null) {
+    const numericElapsedMs = Number(elapsedMs);
+    if (!Number.isFinite(numericElapsedMs) || numericElapsedMs <= 0) {
+      return undefined;
+    }
+    return Number((tokens / (numericElapsedMs / 1000)).toFixed(2));
+  }
+
+  async getAppStats(appId: number, userId: number, days = 7) {
+    const app = await this.aiRuntimeService.getDraft(appId, userId);
+    const { days: rangeDays, start, dateKeys } = this.createStatsRange(days);
+    const dailyMap = new Map<string, AppStatsDailyItem>(
+      dateKeys.map((date) => [
+        date,
+        {
+          date,
+          sessions: 0,
+          activeUsers: 0,
+          tokens: 0,
+        },
+      ]),
+    );
+    const sessionDate = this.getStatsDateExpression("session");
+    const messageDate = this.getStatsDateExpression("message");
+    const messageRole = this.getStatsColumn("message", "role");
+    const messageTokens = this.getStatsColumn("message", "tokens");
+    const messageElapsedMs = this.getStatsColumn("message", "elapsedMs");
+    const sessionUserId = this.getStatsColumn("session", "userId");
+    const speedCondition = `${messageRole} = :assistantRole AND ${messageTokens} IS NOT NULL AND ${messageElapsedMs} IS NOT NULL AND ${messageElapsedMs} > 0`;
+
+    const sessionRows = await this.sessionRepository
+      .createQueryBuilder("session")
+      .select(sessionDate, "date")
+      .addSelect("COUNT(session.id)", "sessions")
+      .where("session.appId = :appId", { appId: app.appId })
+      .andWhere("session.createdAt >= :start", { start })
+      .groupBy(sessionDate)
+      .getRawMany<{ date: string | Date; sessions: string }>();
+    for (const row of sessionRows) {
+      const key = this.normalizeStatsDateKey(row.date);
+      const item = dailyMap.get(key);
+      if (item) item.sessions = this.toNumber(row.sessions);
+    }
+
+    const messageRows = await this.messageRepository
+      .createQueryBuilder("message")
+      .innerJoin("message.session", "session")
+      .select(messageDate, "date")
+      .addSelect(`COUNT(DISTINCT ${sessionUserId})`, "activeUsers")
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN ${messageRole} = :assistantRole AND ${messageTokens} IS NOT NULL THEN ${messageTokens} ELSE 0 END), 0)`,
+        "tokens",
+      )
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN ${speedCondition} THEN ${messageTokens} ELSE 0 END), 0)`,
+        "speedTokens",
+      )
+      .addSelect(
+        `COALESCE(SUM(CASE WHEN ${speedCondition} THEN ${messageElapsedMs} ELSE 0 END), 0)`,
+        "speedElapsedMs",
+      )
+      .where("session.appId = :appId", { appId: app.appId })
+      .andWhere("message.createdAt >= :start", { start })
+      .setParameters({
+        assistantRole: CHAT_MESSAGE_ROLE.ASSISTANT,
+      })
+      .groupBy(messageDate)
+      .getRawMany<{
+        date: string | Date;
+        activeUsers: string;
+        tokens: string;
+        speedTokens: string;
+        speedElapsedMs: string;
+      }>();
+    let totalSpeedTokens = 0;
+    let totalSpeedElapsedMs = 0;
+    for (const row of messageRows) {
+      const key = this.normalizeStatsDateKey(row.date);
+      const item = dailyMap.get(key);
+      if (!item) continue;
+      item.activeUsers = this.toNumber(row.activeUsers);
+      item.tokens = this.toNumber(row.tokens);
+      const speedTokens = this.toNumber(row.speedTokens);
+      const speedElapsedMs = this.toNumber(row.speedElapsedMs);
+      totalSpeedTokens += speedTokens;
+      totalSpeedElapsedMs += speedElapsedMs;
+      if (speedElapsedMs > 0) {
+        item.tokensPerSecond = this.calculateTokensPerSecond(
+          speedTokens,
+          speedElapsedMs,
+        );
+      }
+    }
+
+    const daily = [...dailyMap.values()];
+    const totals = daily.reduce(
+      (summary, item) => ({
+        sessions: summary.sessions + item.sessions,
+        tokens: summary.tokens + item.tokens,
+      }),
+      {
+        sessions: 0,
+        tokens: 0,
+      },
+    );
+    const activeUsers = new Set<number>(
+      (
+        await this.messageRepository
+          .createQueryBuilder("message")
+          .innerJoin("message.session", "session")
+          .select(sessionUserId, "userId")
+          .where("session.appId = :appId", { appId: app.appId })
+          .andWhere("message.createdAt >= :start", { start })
+          .groupBy(sessionUserId)
+          .getRawMany<{ userId: number | string }>()
+      ).map((row) => Number(row.userId)),
+    ).size;
+    const recentMessageRows = await this.messageRepository
+      .createQueryBuilder("message")
+      .innerJoin("message.session", "session")
+      .select("message.id", "id")
+      .addSelect("message.tokens", "tokens")
+      .addSelect("message.elapsedMs", "elapsedMs")
+      .addSelect("message.createdAt", "createdAt")
+      .addSelect("session.mode", "mode")
+      .addSelect("session.title", "title")
+      .where("session.appId = :appId", { appId: app.appId })
+      .andWhere("message.createdAt >= :start", { start })
+      .andWhere("message.role = :assistantRole", {
+        assistantRole: CHAT_MESSAGE_ROLE.ASSISTANT,
+      })
+      .andWhere("message.tokens IS NOT NULL")
+      .orderBy("message.createdAt", "DESC")
+      .limit(10)
+      .getRawMany<AppStatsRecentMessage>();
+    const recentMessages = recentMessageRows.map((item) => {
+      const tokens = Number(item.tokens);
+      return {
+        id: Number(item.id),
+        mode: item.mode,
+        title: item.title || "新对话",
+        tokens,
+        tokensPerSecond: this.calculateTokensPerSecond(tokens, item.elapsedMs),
+        createdAt: item.createdAt,
+      };
+    });
+
+    return {
+      range: {
+        days: rangeDays,
+        start: this.createStatsDateKey(start),
+        end: this.createStatsDateKey(new Date()),
+      },
+      overview: {
+        sessions: totals.sessions,
+        activeUsers,
+        tokens: totals.tokens,
+        tokensPerSecond:
+          totalSpeedElapsedMs > 0
+            ? this.calculateTokensPerSecond(totalSpeedTokens, totalSpeedElapsedMs)
+            : undefined,
+      },
+      daily,
+      recentMessages,
     };
   }
 
@@ -1334,15 +1554,17 @@ export class ChatService {
                 .filter(Boolean)
                 .join("\n\n"),
               items: results.flatMap((result) => result.items),
-              tokens: results.reduce(
-                (total, result) => total + (result.tokens ?? 0),
-                0,
-              ),
+              tokens: results.some((result) => result.tokens !== undefined)
+                ? results.reduce(
+                    (total, result) => total + (result.tokens ?? 0),
+                    0,
+                  )
+                : undefined,
             }))
           : Promise.resolve({
               context: "",
               items: [],
-              tokens: 0,
+              tokens: undefined,
             }),
         knowledgeConfig.ids.length
           ? Promise.all(
@@ -1406,7 +1628,6 @@ export class ChatService {
         );
       const messages = this.createMessages(content, history);
 
-      let resultMessages: BaseMessageLike[] = [];
       if (tools.length) {
         let result: AgentToolRunResult | undefined;
         let pluginStatusSent = false;
@@ -1415,6 +1636,7 @@ export class ChatService {
           tools,
           systemPrompt,
           messages,
+          tokenUsage,
         });
         for await (const event of toolRun) {
           if (event.type === "tool-call") {
@@ -1433,10 +1655,7 @@ export class ChatService {
           const answerStream = this.streamTextChunks(result.answer);
           while (true) {
             const chunk = await answerStream.next();
-            if (chunk.done) {
-              resultMessages = [...result.messages, ...chunk.value];
-              break;
-            }
+            if (chunk.done) break;
             yield* emitContent(chunk.value);
           }
         } else {
@@ -1446,13 +1665,11 @@ export class ChatService {
           const answerStream = this.streamModelAnswerChunks({
             model,
             messages: result.messages,
+            tokenUsage,
           });
           while (true) {
             const chunk = await answerStream.next();
-            if (chunk.done) {
-              resultMessages = chunk.value;
-              break;
-            }
+            if (chunk.done) break;
             yield* emitContent(chunk.value);
           }
         }
@@ -1465,10 +1682,9 @@ export class ChatService {
           }
         }
         const result = await run.output;
-        resultMessages = result.messages;
+        tokenUsage.add(getAiMessageTokens(result.messages));
       }
       yield* finishSpeech();
-      tokenUsage.add(this.getTotalTokens(resultMessages));
 
       if (version.config.toggles?.questionSuggestions) {
         yield this.sse({ status: "生成追问建议中" }, "status");

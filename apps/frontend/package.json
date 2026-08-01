@@ -23,6 +23,7 @@
     "antdv-next": "^1.4.5",
     "axios": "^1.18.1",
     "dompurify": "^3.4.12",
+    "echarts": "^6.1.0",
     "markdown-it": "^14.3.0",
     "normalize.css": "^8.0.1",
     "pinia": "^3.0.4",

@@ -21,7 +21,7 @@ export class DocxDocumentParser implements DocumentFormatParser {
 
   async parse(input: DocumentParserInput) {
     const imageBlocks: ParsedDocumentBlock[] = [];
-    let imageTokens = 0;
+    let imageTokens: number | undefined;
     let imageCount = 0;
     const result = await mammoth.convertToHtml(
       { buffer: input.buffer },
@@ -35,7 +35,9 @@ export class DocxDocumentParser implements DocumentFormatParser {
             contentType: image.contentType,
             buffer: await image.readAsBuffer(),
           });
-          imageTokens += imageResult.tokens;
+          if (imageResult.tokens !== undefined) {
+            imageTokens = (imageTokens ?? 0) + imageResult.tokens;
+          }
           imageBlocks.push({
             id: `embedded-image-${imageCount}`,
             type: "paragraph",

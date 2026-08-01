@@ -1,4 +1,3 @@
-import { AIMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { Injectable } from "@nestjs/common";
 import { LlmUsageType } from "../../llm/entities/llm.entity";
@@ -18,12 +17,12 @@ type MultimodalExtractionOptions = {
 
 type MultimodalExtractionResult = {
   text: string;
-  tokens: number;
+  tokens?: number;
   model: string;
 };
 
-const getMessageText = (message: AIMessage) => {
-  const content = message.content;
+const getMessageText = (message: unknown) => {
+  const content = isRecord(message) ? message.content : undefined;
   if (typeof content === "string") return content.trim();
   if (!Array.isArray(content)) return "";
 
@@ -44,18 +43,62 @@ const getMessageText = (message: AIMessage) => {
     .trim();
 };
 
-export const getAiMessageTokens = (value: unknown): number => {
-  if (!value) return 0;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const getNumber = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+
+const getUsageTotal = (value: unknown) => {
+  if (!isRecord(value)) return undefined;
+  const usage =
+    (isRecord(value.usage_metadata) && value.usage_metadata) ||
+    (isRecord(value.usage) && value.usage) ||
+    (isRecord(value.response_metadata) &&
+      isRecord(value.response_metadata.usage) &&
+      value.response_metadata.usage);
+  if (!usage) return undefined;
+
+  const total =
+    getNumber(usage.total_tokens) ??
+    getNumber(usage.totalTokens);
+  if (total !== undefined) return total;
+
+  const input =
+    getNumber(usage.input_tokens) ??
+    getNumber(usage.prompt_tokens);
+  const output =
+    getNumber(usage.output_tokens) ??
+    getNumber(usage.completion_tokens);
+  return input !== undefined && output !== undefined
+    ? input + output
+    : undefined;
+};
+
+export const getAiMessageTokens = (value: unknown): number | undefined => {
+  if (!value) return undefined;
+  const ownUsage = getUsageTotal(value);
+  if (ownUsage !== undefined) return ownUsage;
   if (Array.isArray(value)) {
-    return value.reduce((total, item) => total + getAiMessageTokens(item), 0);
+    let total = 0;
+    let hasUsage = false;
+    for (const item of value) {
+      const tokens = getAiMessageTokens(item);
+      if (tokens === undefined) continue;
+      total += tokens;
+      hasUsage = true;
+    }
+    return hasUsage ? total : undefined;
   }
-  if (AIMessage.isInstance(value)) {
-    return value.usage_metadata?.total_tokens ?? 0;
+  if (isRecord(value) && "messages" in value) {
+    return getAiMessageTokens(value.messages);
   }
-  if (typeof value === "object" && "messages" in value) {
-    return getAiMessageTokens((value as { messages?: unknown }).messages);
+  if (isRecord(value) && "raw" in value) {
+    return getAiMessageTokens(value.raw);
   }
-  return 0;
+  return undefined;
 };
 
 @Injectable()
@@ -80,7 +123,7 @@ export class DocumentMultimodalExtractionService {
 
     return {
       text: getMessageText(response),
-      tokens: getAiMessageTokens(response),
+      tokens: getAiMessageTokens(response) ?? 0,
       model: modelName,
     };
   }

@@ -300,10 +300,10 @@ export class KnowledgeRecallService implements OnModuleInit {
     settings?: AppKnowledgeRecallSettings;
     query: string;
     userId: number;
-  }): Promise<{ items: AppKnowledgeRecallItem[]; tokens: number }> {
+  }): Promise<{ items: AppKnowledgeRecallItem[]; tokens?: number }> {
     const query = params.query.trim();
     if (!query || !params.knowledgeIds.length) {
-      return { items: [], tokens: 0 };
+      return { items: [] };
     }
 
     const knowledgeIds = [...new Set(params.knowledgeIds)].slice(0, 5);
@@ -352,7 +352,6 @@ export class KnowledgeRecallService implements OnModuleInit {
       items: results
         .sort((left, right) => right.score - left.score)
         .slice(0, limit),
-      tokens: 0,
     };
   }
 
