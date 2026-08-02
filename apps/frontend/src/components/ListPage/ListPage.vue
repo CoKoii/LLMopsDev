@@ -41,7 +41,10 @@ const mergedSearchProps = computed(() => ({
           <div class="img">
             <component :is="pageIcon" v-if="pageIcon" />
           </div>
-          <div class="title">{{ pageTitle }}</div>
+          <div class="heading">
+            <div class="title">{{ pageTitle }}</div>
+            <div v-if="props.description" class="description">{{ props.description }}</div>
+          </div>
         </div>
         <div class="btn" v-if="props.createText">
           <Button type="primary" class="create-btn" size="large" @click="emit('create')">
@@ -129,6 +132,17 @@ const mergedSearchProps = computed(() => ({
         .title {
           font-size: 2rem;
           font-weight: 500;
+        }
+        .heading {
+          display: flex;
+          min-width: 0;
+          align-items: baseline;
+          gap: 1.2rem;
+        }
+        .description {
+          color: var(--font-light-color);
+          font-size: 1.3rem;
+          line-height: 2rem;
         }
       }
     }

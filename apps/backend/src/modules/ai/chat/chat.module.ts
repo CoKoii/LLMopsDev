@@ -46,5 +46,6 @@ import { ChatUserMemory } from "./entities/chat-user-memory.entity";
     ChatMemoryQueueService,
     ChatMemoryProcessor,
   ],
+  exports: [ChatService],
 })
 export class ChatModule {}

@@ -83,6 +83,29 @@ export class AiRuntimeService {
     return { app, version, resourceUserId: app.createdBy ?? userId };
   }
 
+  async getOpenApiVersion(
+    appId: number,
+    userId: number,
+  ): Promise<{ app: AiApp; version: AiAppVersion; resourceUserId: number }> {
+    const app = await this.appRepository.findOne({
+      where: { id: appId, createdBy: userId },
+    });
+    if (!app) throw new ForbiddenException("无权通过API调用该应用");
+    if (!app.status) throw new ForbiddenException("AI应用已停用");
+    if (!app.publishedVersionId) {
+      throw new NotFoundException("AI应用尚未保存正式版本");
+    }
+
+    const version = await this.appVersionRepository.findOne({
+      where: { id: app.publishedVersionId, appId },
+    });
+    if (!version || version.status === AiAppVersionStatus.DRAFT) {
+      throw new NotFoundException("AI应用正式版本不存在");
+    }
+
+    return { app, version, resourceUserId: userId };
+  }
+
   async createModel(config: AiAppVersionConfig): Promise<ChatOpenAI> {
     if (!config.llmId) {
       throw new NotFoundException("请先选择模型");

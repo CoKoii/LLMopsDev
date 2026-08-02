@@ -9,6 +9,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
+import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { Repository } from "typeorm";
 import { z } from "zod";
@@ -46,6 +47,7 @@ import {
 } from "./entities/chat-session.entity";
 
 const SSE_DONE = "data: [DONE]\n\n";
+const OPEN_API_MEMORY_PREFIX = "openapi:";
 const PROMPT_OPTIMIZE_SYSTEM_PROMPT = [
   "润色用户提供的人设与回复逻辑，使表达更清晰、通顺、自然。",
   "只调整措辞和逻辑顺序，保留原意、角色、约束和信息量。",
@@ -104,12 +106,30 @@ type SseEvent =
   | { contentType: string; data: string }
   | { message: string }
   | { status: string }
-  | { sessionId: number; userMessageId: number; assistantMessageId: number }
+  | {
+      sessionId: number;
+      conversationId?: string | null;
+      userMessageId: number;
+      assistantMessageId: number;
+    }
   | { elapsedMs: number; tokens?: number }
   | { items: string[] }
   | Record<string, never>
   | KnowledgeCitationEvent
   | AttachmentCitationEvent;
+
+type OpenApiChatParams = {
+  appId: number;
+  message: string;
+  userId: number;
+  endUserId: string;
+  conversationId?: string;
+};
+
+type ParsedSseChunk = {
+  event: string;
+  data: Record<string, unknown>;
+};
 
 type KnowledgeCitation = {
   id: number;
@@ -1045,7 +1065,10 @@ export class ChatService {
         tokens: totals.tokens,
         tokensPerSecond:
           totalSpeedElapsedMs > 0
-            ? this.calculateTokensPerSecond(totalSpeedTokens, totalSpeedElapsedMs)
+            ? this.calculateTokensPerSecond(
+                totalSpeedTokens,
+                totalSpeedElapsedMs,
+              )
             : undefined,
       },
       daily,
@@ -1070,18 +1093,24 @@ export class ChatService {
     appId: number;
     userId: number;
     sessionId?: number;
+    conversationId?: string;
+    externalUserId?: string;
     message: string;
     mode: ChatSessionMode;
   }) {
-    if (params.sessionId) {
+    if (params.sessionId || params.conversationId) {
       const session = await this.sessionRepository.findOne({
-        where: { id: params.sessionId },
+        where: params.conversationId
+          ? { publicId: params.conversationId }
+          : { id: params.sessionId },
       });
       if (!session) throw new NotFoundException("对话会话不存在");
       if (
         session.userId !== params.userId ||
         session.appId !== params.appId ||
-        session.mode !== params.mode
+        session.mode !== params.mode ||
+        (params.mode === "openapi" &&
+          session.externalUserId !== params.externalUserId)
       ) {
         throw new ForbiddenException("无权访问该对话会话");
       }
@@ -1093,6 +1122,9 @@ export class ChatService {
         appId: params.appId,
         userId: params.userId,
         mode: params.mode,
+        publicId: params.mode === "openapi" ? randomUUID() : null,
+        externalUserId:
+          params.mode === "openapi" ? params.externalUserId : null,
         title: this.createSessionTitle(params.message),
         lastMessageAt: new Date(),
         createdBy: params.userId,
@@ -1275,6 +1307,142 @@ export class ChatService {
     );
   }
 
+  createOpenApiSseStream(params: OpenApiChatParams): Readable {
+    return Readable.from(this.streamOpenApiSse(params));
+  }
+
+  private async *streamOpenApiSse(params: OpenApiChatParams) {
+    for await (const chunk of this.createOpenApiChatGenerator(params)) {
+      const parsed = this.parseSseChunk(chunk);
+      yield parsed ? this.serializeOpenApiSse(parsed) : chunk;
+    }
+  }
+
+  async runOpenApiChat(params: OpenApiChatParams) {
+    const startedAt = Date.now();
+    let conversationId = "";
+    let messageId = "";
+    let answer = "";
+    let elapsedMs: number | undefined;
+    let tokens: number | undefined;
+    let citations: unknown[] = [];
+
+    for await (const chunk of this.createOpenApiChatGenerator(params, true)) {
+      const parsed = this.parseSseChunk(chunk);
+      if (!parsed) continue;
+      const { event, data } = parsed;
+
+      if (event === "session") {
+        conversationId = this.toOpenApiText(data.conversationId);
+        messageId = this.toOpenApiText(data.assistantMessageId);
+      } else if (event === "message") {
+        answer += typeof data.content === "string" ? data.content : "";
+      } else if (event === "knowledge") {
+        citations = Array.isArray(data.items) ? data.items : [];
+      } else if (event === "meta") {
+        elapsedMs =
+          typeof data.elapsedMs === "number" ? data.elapsedMs : undefined;
+        tokens = typeof data.tokens === "number" ? data.tokens : undefined;
+      }
+    }
+
+    const completedAt = Date.now();
+    return {
+      data: {
+        id: messageId,
+        conversation_id: conversationId,
+        app_id: params.appId,
+        end_user_id: params.endUserId,
+        answer,
+        status: "completed",
+        created_at: Math.floor(startedAt / 1000),
+        completed_at: Math.floor(completedAt / 1000),
+        bot_id: String(params.appId),
+        usage: {
+          elapsed_ms: elapsedMs ?? completedAt - startedAt,
+          total_tokens: tokens ?? null,
+        },
+        citations,
+      },
+    };
+  }
+
+  private parseSseChunk(chunk: string): ParsedSseChunk | undefined {
+    if (chunk === SSE_DONE) return undefined;
+
+    const dataLine = chunk.match(/^data: (.+)$/m)?.[1];
+    if (!dataLine || dataLine === "[DONE]") return undefined;
+
+    try {
+      return {
+        event: chunk.match(/^event: ([^\n]+)/m)?.[1] ?? "message",
+        data: JSON.parse(dataLine) as Record<string, unknown>,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private toOpenApiText(value: unknown) {
+    return typeof value === "string" || typeof value === "number"
+      ? String(value)
+      : "";
+  }
+
+  private serializeOpenApiSse({ event, data }: ParsedSseChunk) {
+    if (event === "session") {
+      return this.serializeSseData(
+        {
+          conversation_id: data.conversationId,
+          id: data.assistantMessageId,
+          user_message_id: data.userMessageId,
+        },
+        "session",
+      );
+    }
+    if (event === "meta") {
+      return this.serializeSseData(
+        {
+          elapsed_ms: data.elapsedMs,
+          total_tokens: data.tokens ?? null,
+        },
+        "meta",
+      );
+    }
+    const prefix = event === "message" ? "" : `event: ${event}\n`;
+    return `${prefix}data: ${JSON.stringify(data)}\n\n`;
+  }
+
+  private serializeSseData(data: Record<string, unknown>, event?: string) {
+    const prefix = event ? `event: ${event}\n` : "";
+    return `${prefix}data: ${JSON.stringify(data)}\n\n`;
+  }
+
+  private createOpenApiChatGenerator(
+    params: OpenApiChatParams,
+    throwErrors = false,
+  ) {
+    return this.streamAppChat({
+      appId: params.appId,
+      message: params.message,
+      userId: params.userId,
+      conversationId: params.conversationId,
+      externalUserId: params.endUserId,
+      resolveRuntime: async () => {
+        const runtime = await this.aiRuntimeService.getOpenApiVersion(
+          params.appId,
+          params.userId,
+        );
+        return {
+          version: runtime.version,
+          resourceUserId: runtime.resourceUserId,
+        };
+      },
+      mode: "openapi",
+      throwErrors,
+    });
+  }
+
   async listStandaloneSessions(
     appId: number,
     userId: number,
@@ -1407,21 +1575,27 @@ export class ChatService {
     message: string;
     userId: number;
     sessionId?: number;
+    conversationId?: string;
+    externalUserId?: string;
     attachmentFileIds?: number[];
     resolveRuntime: () => Promise<{
       version: AiAppVersion;
       resourceUserId: number;
     }>;
     mode: ChatSessionMode;
+    throwErrors?: boolean;
   }): AsyncGenerator<string> {
     const {
       appId,
       message,
       userId,
       sessionId,
+      conversationId,
+      externalUserId,
       attachmentFileIds = [],
       resolveRuntime,
       mode,
+      throwErrors = false,
     } = params;
     const startedAt = Date.now();
     let output = "";
@@ -1436,9 +1610,10 @@ export class ChatService {
       }
       const { version, resourceUserId } = await resolveRuntime();
       const model = await this.aiRuntimeService.createModel(version.config);
-      const speechInput = version.config.toggles?.voiceOutput
-        ? new AsyncQueue<string>()
-        : undefined;
+      const speechInput =
+        mode !== "openapi" && version.config.toggles?.voiceOutput
+          ? new AsyncQueue<string>()
+          : undefined;
       activeSpeechInput = speechInput;
       const speechOutput = speechInput
         ? this.startSpeechAudioStream(speechInput)
@@ -1480,6 +1655,8 @@ export class ChatService {
         appId,
         userId,
         sessionId,
+        conversationId,
+        externalUserId,
         message: content,
         mode,
       });
@@ -1493,6 +1670,7 @@ export class ChatService {
       yield this.sse(
         {
           sessionId: session.id,
+          conversationId: session.publicId,
           userMessageId: userMessage.id,
           assistantMessageId: assistantMessage.id,
         },
@@ -1518,10 +1696,17 @@ export class ChatService {
       const knowledgeConfig = this.resolveKnowledgeConfig(version.config);
       const longTermMemoryEnabled =
         version.config.toggles?.longTermMemory ?? false;
+      const memoryKey = externalUserId
+        ? `${OPEN_API_MEMORY_PREFIX}${externalUserId}`
+        : undefined;
       const [longTermMemoryContext, sessionSummaryContext] =
         longTermMemoryEnabled
           ? await Promise.all([
-              this.chatMemoryService.createLongTermMemoryContext(appId, userId),
+              this.chatMemoryService.createLongTermMemoryContext(
+                appId,
+                userId,
+                memoryKey,
+              ),
               this.chatMemoryService.createSessionSummaryContext(session.id),
             ])
           : ["", ""];
@@ -1738,6 +1923,8 @@ export class ChatService {
           appId,
           userId,
           sessionId: session.id,
+          memoryKey,
+          contextRounds: version.config.modelSettings?.contextRounds,
         });
       }
 
@@ -1755,6 +1942,7 @@ export class ChatService {
           updatedBy: userId,
         });
       }
+      if (throwErrors) throw error;
       yield this.sse({ message }, "error");
     }
   }

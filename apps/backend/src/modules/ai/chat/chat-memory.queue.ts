@@ -10,6 +10,8 @@ export interface ChatMemoryRefreshJobData {
   appId: number;
   userId: number;
   sessionId: number;
+  memoryKey?: string;
+  contextRounds?: number;
 }
 
 export const createChatMemoryRedisOptions = (

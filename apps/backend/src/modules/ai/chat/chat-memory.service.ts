@@ -19,6 +19,7 @@ import { ChatSession } from "./entities/chat-session.entity";
 import { ChatUserMemory } from "./entities/chat-user-memory.entity";
 
 const DRAFT_VERSION = "draft";
+const PLATFORM_MEMORY_KEY = "platform";
 const SUMMARY_BATCH_LIMIT = 120;
 const MEMORY_MAX_CONTEXT_MESSAGES = 80;
 const SESSION_SUMMARY_PROMPT = [
@@ -95,9 +96,13 @@ export class ChatMemoryService {
     return this.getMemory(appId, userId);
   }
 
-  async createLongTermMemoryContext(appId: number, userId: number) {
+  async createLongTermMemoryContext(
+    appId: number,
+    userId: number,
+    memoryKey = PLATFORM_MEMORY_KEY,
+  ) {
     const memory = await this.memoryRepository.findOne({
-      where: { appId, userId },
+      where: { appId, userId, memoryKey },
     });
     if (!memory) return "";
 
@@ -115,15 +120,22 @@ export class ChatMemoryService {
     appId: number;
     userId: number;
     sessionId: number;
+    memoryKey?: string;
+    contextRounds?: number;
   }) {
-    const draft = await this.appVersionRepository.findOne({
-      where: {
-        appId: params.appId,
-        version: DRAFT_VERSION,
-        status: AiAppVersionStatus.DRAFT,
-      },
-    });
-    if (!draft?.config.toggles?.longTermMemory) return;
+    let contextRounds = params.contextRounds;
+    if (contextRounds === undefined && params.memoryKey === undefined) {
+      const draft = await this.appVersionRepository.findOne({
+        where: {
+          appId: params.appId,
+          version: DRAFT_VERSION,
+          status: AiAppVersionStatus.DRAFT,
+        },
+      });
+      if (!draft?.config.toggles?.longTermMemory) return;
+      contextRounds = draft.config.modelSettings?.contextRounds;
+    }
+    const memoryKey = params.memoryKey ?? PLATFORM_MEMORY_KEY;
 
     const session = await this.sessionRepository.findOne({
       where: {
@@ -139,9 +151,7 @@ export class ChatMemoryService {
       params.sessionId,
       summary.coveredMessageId,
     );
-    const threshold = this.resolveSummaryThresholdMessages(
-      draft.config.modelSettings?.contextRounds,
-    );
+    const threshold = this.resolveSummaryThresholdMessages(contextRounds);
     if (messages.length < threshold) return;
 
     const nextSummary = await this.generateSessionSummary(
@@ -162,14 +172,22 @@ export class ChatMemoryService {
       existingMemory:
         (
           await this.memoryRepository.findOne({
-            where: { appId: params.appId, userId: params.userId },
+            where: {
+              appId: params.appId,
+              userId: params.userId,
+              memoryKey,
+            },
           })
         )?.content ?? "",
       sessionSummary: nextSummary,
     });
     if (nextLongTermMemory === undefined) return;
 
-    const memory = await this.findOrCreateMemory(params.appId, params.userId);
+    const memory = await this.findOrCreateMemory(
+      params.appId,
+      params.userId,
+      memoryKey,
+    );
     memory.content = nextLongTermMemory;
     memory.sourceSessionId = params.sessionId;
     memory.generatedAt = new Date();
@@ -184,9 +202,13 @@ export class ChatMemoryService {
     if (!app) throw new ForbiddenException("无权访问该AI应用");
   }
 
-  private async findOrCreateMemory(appId: number, userId: number) {
+  private async findOrCreateMemory(
+    appId: number,
+    userId: number,
+    memoryKey = PLATFORM_MEMORY_KEY,
+  ) {
     const existing = await this.memoryRepository.findOne({
-      where: { appId, userId },
+      where: { appId, userId, memoryKey },
     });
     if (existing) return existing;
 
@@ -194,6 +216,7 @@ export class ChatMemoryService {
       this.memoryRepository.create({
         appId,
         userId,
+        memoryKey,
         content: "",
         createdBy: userId,
         updatedBy: userId,
@@ -256,11 +279,12 @@ export class ChatMemoryService {
     previousSummary: string,
     messages: ChatMessage[],
   ) {
-    const structuredModel =
-      (await this.createStructuredOutputModel()).withStructuredOutput(
-        SessionSummarySchema,
-        { name: "SessionSummary", includeRaw: true },
-      );
+    const structuredModel = (
+      await this.createStructuredOutputModel()
+    ).withStructuredOutput(SessionSummarySchema, {
+      name: "SessionSummary",
+      includeRaw: true,
+    });
     const conversation = messages
       .slice(-MEMORY_MAX_CONTEXT_MESSAGES)
       .map((message) => {
@@ -287,11 +311,12 @@ export class ChatMemoryService {
     existingMemory: string;
     sessionSummary: string;
   }) {
-    const structuredModel =
-      (await this.createStructuredOutputModel()).withStructuredOutput(
-        LongTermMemorySchema,
-        { name: "LongTermMemory", includeRaw: true },
-      );
+    const structuredModel = (
+      await this.createStructuredOutputModel()
+    ).withStructuredOutput(LongTermMemorySchema, {
+      name: "LongTermMemory",
+      includeRaw: true,
+    });
     const response = (await structuredModel.invoke([
       ["system", LONG_TERM_MEMORY_PROMPT],
       [

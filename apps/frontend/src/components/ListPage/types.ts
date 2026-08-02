@@ -9,6 +9,7 @@ export interface ListPageTab {
 
 export interface ListPageProps {
   title?: string
+  description?: string
   icon?: Component
   createText?: string
   tabs?: ListPageTab[]

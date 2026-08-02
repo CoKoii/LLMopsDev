@@ -13,10 +13,12 @@ import { User } from "../../../iam/users/user.entity";
 import { AiApp } from "../../app/entities/app.entity";
 import { ChatMessage } from "./chat-message.entity";
 
-export type ChatSessionMode = "debug" | "standalone";
+export type ChatSessionMode = "debug" | "standalone" | "openapi";
 
 @Entity({ name: "ai_chat_sessions", comment: "AI对话会话" })
 @Index(["appId", "userId", "updatedAt"])
+@Index(["publicId"], { unique: true })
+@Index(["appId", "userId", "externalUserId", "updatedAt"])
 export class ChatSession extends AuditableEntity {
   @PrimaryGeneratedColumn({ comment: "会话ID" })
   id!: number;
@@ -34,6 +36,22 @@ export class ChatSession extends AuditableEntity {
   @ManyToOne(() => User, { nullable: false, onDelete: "CASCADE" })
   @JoinColumn({ name: "userId" })
   user!: Relation<User>;
+
+  @Column({
+    comment: "公开会话ID",
+    type: "varchar",
+    length: 64,
+    nullable: true,
+  })
+  publicId?: string | null;
+
+  @Column({
+    comment: "开放API终端用户ID",
+    type: "varchar",
+    length: 128,
+    nullable: true,
+  })
+  externalUserId?: string | null;
 
   @Column({
     comment: "会话类型",
