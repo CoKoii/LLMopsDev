@@ -134,6 +134,10 @@ export class AiRuntimeService {
           options.recalledAttachmentContext,
         ].join("\n")
       : "";
+    const toolInstruction = [
+      "工具和插件仅在系统内部运行，用户看不到调用过程和原始返回内容。",
+      "调用工具后，最终回复必须完整转述与用户请求相关的结果，不要引用未在回复中展示的工具内容，也不要假设用户已经看到工具输出。",
+    ].join("\n");
 
     return [
       config.prompt?.trim(),
@@ -142,6 +146,7 @@ export class AiRuntimeService {
       knowledgeInstruction,
       currentAttachmentInstruction,
       recalledAttachmentInstruction,
+      toolInstruction,
     ]
       .filter(Boolean)
       .join("\n\n");
