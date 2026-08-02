@@ -54,9 +54,9 @@ const PROMPT_OPTIMIZE_SYSTEM_PROMPT = [
   "保留原有 Markdown 结构；无结构时不要强行添加复杂结构。",
 ].join("\n");
 const QUESTION_SUGGESTION_SYSTEM_PROMPT = [
-  "生成聊天输入框下方的快捷提问按钮。",
-  "内容要像用户下一步会直接发送的话。",
-  "优先生成具体、可点击的短命令。",
+  "根据当前对话生成 3 条用户下一步可能直接发送的快捷提问。",
+  "必须使用用户最新消息的主要语言；用户使用中文时，建议只能使用中文。",
+  "建议要具体、简短、互不重复，不要解释或回答问题。",
 ].join("\n");
 const KNOWLEDGE_QUERY_REWRITE_SYSTEM_PROMPT = [
   "你负责将用户问题改写成用于知识库检索的问题。",
@@ -76,7 +76,15 @@ const KNOWLEDGE_QUERY_REWRITE_SYSTEM_PROMPT = [
 ].join("\n");
 const QuestionSuggestionsSchema = z
   .object({
-    suggestions: z.array(z.string().min(1)).length(3),
+    suggestions: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .describe("与用户最新消息语言一致、可直接发送的简短问题"),
+      )
+      .length(3)
+      .describe("三条语言一致且互不重复的后续提问"),
   })
   .strict();
 const KnowledgeQueryRewriteSchema = z
