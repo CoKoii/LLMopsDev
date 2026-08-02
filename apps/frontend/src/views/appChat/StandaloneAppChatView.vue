@@ -60,6 +60,7 @@ const renaming = ref(false)
 const renameTarget = ref<StandaloneChatSessionItem>()
 const renameTitleDraft = ref('')
 const mobileSidebarOpen = ref(false)
+let sessionTransitioning = false
 const appName = computed(() => meta.value?.app.name || '聊天机器人')
 const appAvatar = computed(() => meta.value?.app.image || '')
 const userName = computed(
@@ -159,7 +160,7 @@ const SessionDirectory = defineComponent({
   },
   setup(props) {
     return () =>
-      h('div', { class: props.rootClass }, [
+      h('div', { class: ['standalone-chat__directory', props.rootClass] }, [
         h('div', { class: 'standalone-chat__brand' }, [
           h(
             'div',
@@ -222,7 +223,7 @@ function createSessionDirectoryContent() {
               class: 'standalone-chat__session-main',
               onClick: () => openSession(session.id),
             },
-            [h('strong', session.title)],
+            [h('span', { class: 'standalone-chat__session-title' }, session.title)],
           ),
           h(
             Dropdown,
@@ -331,10 +332,21 @@ function formatMessageMeta(elapsedMs: number, tokens?: number) {
 
 async function scrollChatToBottom(force = true) {
   await nextTick()
-  const scrollElement = document.scrollingElement ?? document.documentElement
+  await waitForNextFrame()
+  const scrollElement = getPageScrollElement()
   const distanceToBottom = scrollElement.scrollHeight - window.scrollY - window.innerHeight
   if (!force && distanceToBottom > bottomScrollThreshold) return
   window.scrollTo(0, scrollElement.scrollHeight)
+}
+
+function getPageScrollElement() {
+  return document.scrollingElement ?? document.documentElement
+}
+
+function waitForNextFrame() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve())
+  })
 }
 
 function submitSuggestedPrompt(content: string) {
@@ -511,12 +523,21 @@ function handleSessionListScroll(event: Event) {
 }
 
 function handleDocumentScroll() {
+  if (sessionTransitioning) return
   if (window.scrollY <= historyLoadScrollThreshold) void loadMoreHistory()
 }
 
+async function handleSessionTransitionEnter() {
+  try {
+    await scrollChatToBottom()
+  } finally {
+    sessionTransitioning = false
+  }
+}
+
 async function openSession(sessionId: number) {
-  if (responding.value || activeSessionId.value === sessionId) return
-  historyLoading.value = true
+  if (responding.value || sessionTransitioning || activeSessionId.value === sessionId) return
+  sessionTransitioning = true
   try {
     const result = await listStandaloneChatMessagesApi(appId.value, sessionId, {
       page: 1,
@@ -529,9 +550,9 @@ async function openSession(sessionId: number) {
     messagePages.value = result.pages || 1
     resetComposerState()
     mobileSidebarOpen.value = false
-    await scrollChatToBottom()
-  } finally {
-    historyLoading.value = false
+  } catch (error) {
+    sessionTransitioning = false
+    throw error
   }
 }
 
@@ -540,7 +561,7 @@ async function loadMoreHistory() {
   if (!sessionId || historyLoading.value || !hasMoreHistory.value) return
 
   historyLoading.value = true
-  const scrollElement = document.scrollingElement ?? document.documentElement
+  const scrollElement = getPageScrollElement()
   const previousScroll = {
     scrollTop: window.scrollY,
     scrollHeight: scrollElement.scrollHeight,
@@ -652,34 +673,41 @@ onUnmounted(() => {
           </Button>
         </header>
 
-        <DebugPreviewPanel
-          v-model:sender-value="senderValue"
-          :title="chatTitle"
-          :composer-placeholder="`给“${appName}”发送消息`"
-          :app-name="appName"
-          :app-avatar="appAvatar"
-          :user-name="userName"
-          :opening-statement="openingStatement"
-          :opening-questions="openingQuestions"
-          :messages="displayMessages"
-          :chat-roles="chatRoles"
-          :attachments="attachments"
-          :responding="responding"
-          :show-clear-button="false"
-          :show-memory-button="false"
-          :voice-input-enabled="voiceInputEnabled"
-          :transcribing-voice="transcribingVoice"
-          :history-loading="historyLoading"
-          :has-more-history="hasMoreHistory"
-          @submit-suggested="submitSuggestedPrompt"
-          @upload-files="uploadFiles"
-          @remove-attachment="removeAttachment"
-          @submit-message="submitStandaloneMessage"
-          @submit-voice="(file) => submitVoiceMessage(file, scrollChatToBottom)"
-          @toggle-audio-text="(key) => sessionStore.toggleAudioText(storeKey, key)"
-          @stop-response="stopResponse"
-          @load-more-history="loadMoreHistory"
-        />
+        <Transition
+          name="standalone-chat-switch"
+          mode="out-in"
+          @enter="handleSessionTransitionEnter"
+        >
+          <DebugPreviewPanel
+            :key="activeSessionId ?? 'new'"
+            v-model:sender-value="senderValue"
+            :title="chatTitle"
+            :composer-placeholder="`给“${appName}”发送消息`"
+            :app-name="appName"
+            :app-avatar="appAvatar"
+            :user-name="userName"
+            :opening-statement="openingStatement"
+            :opening-questions="openingQuestions"
+            :messages="displayMessages"
+            :chat-roles="chatRoles"
+            :attachments="attachments"
+            :responding="responding"
+            :show-clear-button="false"
+            :show-memory-button="false"
+            :voice-input-enabled="voiceInputEnabled"
+            :transcribing-voice="transcribingVoice"
+            :history-loading="historyLoading"
+            :has-more-history="hasMoreHistory"
+            @submit-suggested="submitSuggestedPrompt"
+            @upload-files="uploadFiles"
+            @remove-attachment="removeAttachment"
+            @submit-message="submitStandaloneMessage"
+            @submit-voice="(file) => submitVoiceMessage(file, scrollChatToBottom)"
+            @toggle-audio-text="(key) => sessionStore.toggleAudioText(storeKey, key)"
+            @stop-response="stopResponse"
+            @load-more-history="loadMoreHistory"
+          />
+        </Transition>
       </main>
 
       <Drawer
@@ -767,13 +795,17 @@ onUnmounted(() => {
   align-items: start;
 }
 
-.standalone-chat__sidebar {
+.standalone-chat__directory {
   display: flex;
   min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.standalone-chat__sidebar {
   height: 100dvh;
   position: sticky;
   top: 0;
-  flex-direction: column;
   gap: 1.8rem;
   padding: 1.8rem 1.4rem;
   background: #fafafa;
@@ -813,15 +845,11 @@ onUnmounted(() => {
 }
 
 .standalone-chat__drawer-body {
-  display: flex;
-  min-height: 0;
   height: 100%;
-  flex-direction: column;
   gap: 1.6rem;
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__brand),
-.standalone-chat__drawer-body :deep(.standalone-chat__brand) {
+.standalone-chat__directory :deep(.standalone-chat__brand) {
   display: flex;
   align-items: center;
   min-width: 0;
@@ -829,18 +857,15 @@ onUnmounted(() => {
   font-size: 1.5rem;
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__brand strong),
-.standalone-chat__sidebar :deep(.standalone-chat__menu strong),
-.standalone-chat__drawer-body :deep(.standalone-chat__brand strong),
-.standalone-chat__drawer-body :deep(.standalone-chat__menu strong) {
+.standalone-chat__directory :deep(.standalone-chat__brand strong),
+.standalone-chat__directory :deep(.standalone-chat__session-title) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__app-icon),
-.standalone-chat__drawer-body :deep(.standalone-chat__app-icon) {
+.standalone-chat__directory :deep(.standalone-chat__app-icon) {
   display: grid;
   width: 3.2rem;
   height: 3.2rem;
@@ -852,62 +877,54 @@ onUnmounted(() => {
   border-radius: 0.8rem;
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__app-icon.has-image),
-.standalone-chat__drawer-body :deep(.standalone-chat__app-icon.has-image) {
+.standalone-chat__directory :deep(.standalone-chat__app-icon.has-image) {
   background: var(--background-hover-color);
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__app-icon img),
-.standalone-chat__drawer-body :deep(.standalone-chat__app-icon img) {
+.standalone-chat__directory :deep(.standalone-chat__app-icon img) {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__new),
-.standalone-chat__drawer-body :deep(.standalone-chat__new) {
+.standalone-chat__directory :deep(.standalone-chat__new) {
   min-height: 3.6rem;
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__menu),
-.standalone-chat__drawer-body :deep(.standalone-chat__menu) {
+.standalone-chat__directory :deep(.standalone-chat__menu) {
   display: grid;
   gap: 0.8rem;
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__menu--grow),
-.standalone-chat__drawer-body :deep(.standalone-chat__menu--grow) {
+.standalone-chat__directory :deep(.standalone-chat__menu--grow) {
   min-height: 0;
   overflow-y: auto;
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__menu > span),
-.standalone-chat__drawer-body :deep(.standalone-chat__menu > span) {
+.standalone-chat__directory :deep(.standalone-chat__menu > span) {
   color: var(--font-light-color);
   font-size: 1.3rem;
   line-height: 1.8rem;
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__empty-list),
-.standalone-chat__drawer-body :deep(.standalone-chat__empty-list) {
+.standalone-chat__directory :deep(.standalone-chat__empty-list) {
   padding: 0.6rem 0.9rem;
   color: var(--font-light-color);
   font-size: 1.3rem;
   line-height: 1.8rem;
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__session),
-.standalone-chat__drawer-body :deep(.standalone-chat__session) {
+.standalone-chat__directory :deep(.standalone-chat__session) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 2.8rem;
   align-items: center;
   min-height: 3.2rem;
   overflow: hidden;
   border-radius: 0.6rem;
+  transition: background-color 0.16s ease;
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__session-main),
-.standalone-chat__drawer-body :deep(.standalone-chat__session-main) {
+.standalone-chat__directory :deep(.standalone-chat__session-main) {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: center;
@@ -917,46 +934,47 @@ onUnmounted(() => {
   color: var(--font-color);
   font: inherit;
   font-size: 1.3rem;
+  font-weight: 600;
   text-align: left;
   background: transparent;
   border: 0;
   cursor: pointer;
+  transition: color 0.16s ease;
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__session-action),
-.standalone-chat__drawer-body :deep(.standalone-chat__session-action) {
+.standalone-chat__sidebar :deep(.standalone-chat__session-action) {
   opacity: 0;
+  transition: opacity 0.16s ease;
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__session.is-active),
-.standalone-chat__sidebar :deep(.standalone-chat__session:hover),
-.standalone-chat__drawer-body :deep(.standalone-chat__session.is-active),
-.standalone-chat__drawer-body :deep(.standalone-chat__session:hover) {
+.standalone-chat__directory :deep(.standalone-chat__session.is-active),
+.standalone-chat__directory :deep(.standalone-chat__session:hover) {
   color: var(--primary-color);
   background: var(--background-hover-color);
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__session.is-active .standalone-chat__session-main),
-.standalone-chat__sidebar :deep(.standalone-chat__session:hover .standalone-chat__session-main),
-.standalone-chat__drawer-body
+.standalone-chat__directory
   :deep(.standalone-chat__session.is-active .standalone-chat__session-main),
-.standalone-chat__drawer-body
+.standalone-chat__directory
   :deep(.standalone-chat__session:hover .standalone-chat__session-main) {
   color: var(--primary-color);
 }
 
-.standalone-chat__sidebar :deep(.standalone-chat__session:hover .standalone-chat__session-action),
 .standalone-chat__sidebar
-  :deep(.standalone-chat__session.is-active .standalone-chat__session-action),
-.standalone-chat__drawer-body
   :deep(.standalone-chat__session:hover .standalone-chat__session-action),
-.standalone-chat__drawer-body
+.standalone-chat__sidebar
   :deep(.standalone-chat__session.is-active .standalone-chat__session-action) {
   opacity: 1;
 }
 
-.standalone-chat__drawer-body :deep(.standalone-chat__session-action) {
-  opacity: 1;
+.standalone-chat-switch-enter-active,
+.standalone-chat-switch-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.standalone-chat-switch-enter-from,
+.standalone-chat-switch-leave-to {
+  opacity: 0;
 }
 
 .standalone-chat :deep(.app-orchestration__preview) {
@@ -1088,6 +1106,16 @@ onUnmounted(() => {
     margin-top: 0.6rem;
     font-size: 1.1rem;
     line-height: 1.6rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .standalone-chat__directory :deep(.standalone-chat__session),
+  .standalone-chat__directory :deep(.standalone-chat__session-main),
+  .standalone-chat__sidebar :deep(.standalone-chat__session-action),
+  .standalone-chat-switch-enter-active,
+  .standalone-chat-switch-leave-active {
+    transition-duration: 0.01ms;
   }
 }
 </style>
