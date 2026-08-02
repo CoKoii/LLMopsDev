@@ -154,10 +154,10 @@ const createKnowledgeCitationView = (message: DebugChatMessage): KnowledgeCitati
     return { queries: [], knowledgeNames: [], showItemKnowledgeName: false }
   }
 
-  const queries = normalizeTextList([
-    message.knowledgeQuery,
-    ...citations.flatMap((citation) => citation.queries ?? []),
-  ])
+  const citationQueries = normalizeTextList(citations.flatMap((citation) => citation.queries ?? []))
+  const queries = citationQueries.length
+    ? citationQueries
+    : normalizeTextList([message.knowledgeQuery])
   const knowledgeNames = normalizeTextList(citations.map((citation) => citation.knowledgeName))
 
   return {
@@ -171,11 +171,12 @@ const createAttachmentCitationView = (message: DebugChatMessage): AttachmentCita
   const citations = message.attachmentCitations ?? []
   if (!citations.length) return { queries: [], fileNames: [] }
 
+  const citationQueries = normalizeTextList(citations.flatMap((citation) => citation.queries ?? []))
+
   return {
-    queries: normalizeTextList([
-      message.attachmentQuery,
-      ...citations.flatMap((citation) => citation.queries ?? []),
-    ]),
+    queries: citationQueries.length
+      ? citationQueries
+      : normalizeTextList([message.attachmentQuery]),
     fileNames: normalizeTextList(
       citations.map((citation) => citation.displayLabel || citation.fileName),
     ),
