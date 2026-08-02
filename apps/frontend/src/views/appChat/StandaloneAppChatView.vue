@@ -60,6 +60,8 @@ const renaming = ref(false)
 const renameTarget = ref<StandaloneChatSessionItem>()
 const renameTitleDraft = ref('')
 const mobileSidebarOpen = ref(false)
+const conversationViewKey = ref('new-0')
+let conversationViewSequence = 0
 let sessionTransitioning = false
 const appName = computed(() => meta.value?.app.name || '聊天机器人')
 const appAvatar = computed(() => meta.value?.app.image || '')
@@ -356,6 +358,8 @@ function submitSuggestedPrompt(content: string) {
 function startNewChat() {
   if (responding.value) return
   sessionStore.clearMessages(storeKey.value)
+  conversationViewSequence += 1
+  conversationViewKey.value = `new-${conversationViewSequence}`
   resetComposerState()
   resetMessagePaging()
   mobileSidebarOpen.value = false
@@ -546,6 +550,7 @@ async function openSession(sessionId: number) {
     sessionStore.setSessionId(storeKey.value, sessionId)
     sessionStore.setSuggestions(storeKey.value, [])
     sessionStore.setMessages(storeKey.value, result.items.map(toDebugMessage))
+    conversationViewKey.value = `session-${sessionId}`
     messagePage.value = result.page
     messagePages.value = result.pages || 1
     resetComposerState()
@@ -679,7 +684,7 @@ onUnmounted(() => {
           @enter="handleSessionTransitionEnter"
         >
           <DebugPreviewPanel
-            :key="activeSessionId ?? 'new'"
+            :key="conversationViewKey"
             v-model:sender-value="senderValue"
             :title="chatTitle"
             :composer-placeholder="`给“${appName}”发送消息`"
