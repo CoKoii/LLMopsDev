@@ -3,7 +3,8 @@ import type { VxeTableGridColumns } from '#/adapter/vxe-table';
 
 export const usageTypeOptions = [
   { label: '通用对话', value: 'chat' },
-  { label: '格式处理', value: 'structured' },
+  { label: '内置小模型', value: 'structured' },
+  { label: '内置大模型', value: 'built_in_large' },
   { label: 'Embedding 模型', value: 'embedding' },
   { label: '多模态模型', value: 'multimodal' },
   { label: 'Rerank 模型', value: 'rerank' },
@@ -31,6 +32,16 @@ export function useGridFormSchema(): VbenFormSchema[] {
       },
       fieldName: 'name',
       label: '关键词',
+    },
+    {
+      component: 'Select',
+      componentProps: {
+        allowClear: true,
+        options: usageTypeOptions,
+        placeholder: '全部分类',
+      },
+      fieldName: 'usageType',
+      label: '模型分类',
     },
   ];
 }
@@ -92,7 +103,15 @@ export function useColumns(): VxeTableGridColumns {
       align: 'left',
       field: 'modelName',
       minWidth: 200,
+      slots: { default: 'modelName' },
       title: '模型名称',
+      treeNode: true,
+    },
+    {
+      field: 'usageType',
+      slots: { default: 'usageType' },
+      title: '用途',
+      width: 130,
     },
     {
       align: 'left',

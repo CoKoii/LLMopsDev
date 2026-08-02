@@ -76,7 +76,7 @@ export class HomeBuilderService {
       yield this.sse({ status: "正在读取可用资源" }, "status");
       const context = await this.loadCatalogContext(userId);
       const model = await this.llmService.createDefaultChatModel(
-        LlmUsageType.CHAT,
+        LlmUsageType.BUILT_IN_LARGE,
         { temperature: 0.2, maxRetries: 1 },
       );
       const agent = createAgent({

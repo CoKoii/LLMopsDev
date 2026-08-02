@@ -20,6 +20,7 @@ export interface PageParams {
 }
 
 export type LlmUsageType =
+  | 'built_in_large'
   | 'chat'
   | 'structured'
   | 'embedding'

@@ -2,6 +2,7 @@ import { requestClient } from '#/api/request';
 
 export namespace AiModelApi {
   export type UsageType =
+    | 'built_in_large'
     | 'chat'
     | 'embedding'
     | 'multimodal'
@@ -57,6 +58,9 @@ export function deleteAiModelApi(id: number) {
 export function getAiModelListApi(params: AiModelApi.QueryParams) {
   return requestClient.get<{
     items: AiModelApi.ModelConfig[];
+    page: number;
+    pageSize: number;
+    pages: number;
     total: number;
   }>('/ai/llms', { params });
 }

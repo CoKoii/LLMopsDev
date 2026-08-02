@@ -1,10 +1,8 @@
 <script lang="ts" setup>
 import type { AiModelApi } from '#/api';
 
-import { computed } from 'vue';
-
 import { Page, useVbenModal } from '@vben/common-ui';
-import { Plus, RotateCw } from '@vben/icons';
+import { ChevronDown, Plus, RotateCw } from '@vben/icons';
 
 import { Button, message, Modal, Tag } from 'antdv-next';
 
@@ -19,48 +17,115 @@ import {
 import {
   getUsageTypeText,
   testStatusMeta,
+  usageTypeOptions,
   useColumns,
   useGridFormSchema,
 } from './data';
 import Form from './modules/form.vue';
 
-const props = defineProps<{
+type UsageGroupRow = {
+  id: string;
+  kind: 'group';
+  modelCount: number;
+  modelName: string;
   usageType: AiModelApi.UsageType;
-}>();
+};
+
+type ModelRow = AiModelApi.ModelConfig & {
+  id: string;
+  kind: 'model';
+  modelId: number;
+  parentId: string;
+};
+
+type ModelTableRow = ModelRow | UsageGroupRow;
 
 const systemUsageTypes = new Set<AiModelApi.UsageType>([
   'structured',
+  'built_in_large',
   'embedding',
   'multimodal',
   'rerank',
   'speech_to_text',
   'text_to_speech',
 ]);
-const pageTitle = computed(() => getUsageTypeText(props.usageType));
 
 const [FormModal, formModalApi] = useVbenModal({
   connectedComponent: Form,
   destroyOnClose: true,
 });
 
-const [Grid, gridApi] = useVbenVxeGrid<AiModelApi.ModelConfig>({
+async function getAllModels(query: AiModelApi.QueryParams) {
+  const firstPage = await getAiModelListApi({
+    ...query,
+    page: 1,
+    pageSize: 200,
+  });
+  if (firstPage.pages <= 1) return firstPage.items;
+
+  const remainingPages = await Promise.all(
+    Array.from({ length: firstPage.pages - 1 }, (_, index) =>
+      getAiModelListApi({
+        ...query,
+        page: index + 2,
+        pageSize: firstPage.pageSize,
+      }),
+    ),
+  );
+  return [
+    ...firstPage.items,
+    ...remainingPages.flatMap((page) => page.items),
+  ];
+}
+
+const [Grid, gridApi] = useVbenVxeGrid<ModelTableRow>({
   formOptions: {
     schema: useGridFormSchema(),
-    submitOnChange: true,
   },
+  showSearchForm: false,
   gridOptions: {
     columns: useColumns(),
     height: 'auto',
     keepSource: true,
+    pagerConfig: {
+      enabled: false,
+    },
     proxyConfig: {
       ajax: {
-        query: ({ page }: any, formValues: AiModelApi.QueryParams) =>
-          getAiModelListApi({
-            page: page.currentPage,
-            pageSize: page.pageSize,
-            ...formValues,
-            usageType: props.usageType,
-          }),
+        query: async (_params: unknown, formValues: AiModelApi.QueryParams) => {
+          const models = await getAllModels(formValues);
+          const modelsByUsage = new Map<
+            AiModelApi.UsageType,
+            AiModelApi.ModelConfig[]
+          >();
+          for (const model of models) {
+            const usageModels = modelsByUsage.get(model.usageType) ?? [];
+            usageModels.push(model);
+            modelsByUsage.set(model.usageType, usageModels);
+          }
+
+          return usageTypeOptions.flatMap((option) => {
+            const usageType = option.value as AiModelApi.UsageType;
+            const groupId = `usage:${usageType}`;
+            const models = modelsByUsage.get(usageType) ?? [];
+            return [
+              {
+                id: groupId,
+                kind: 'group' as const,
+                modelCount: models.length,
+                modelName: option.label,
+                usageType,
+              },
+              ...models.map((model) => ({
+                ...model,
+                id: `model:${model.id}`,
+                kind: 'model' as const,
+                modelId: model.id,
+                parentId: groupId,
+              })),
+            ];
+          });
+        },
       },
     },
     rowConfig: {
@@ -73,29 +138,46 @@ const [Grid, gridApi] = useVbenVxeGrid<AiModelApi.ModelConfig>({
       search: true,
       zoom: true,
     },
+    treeConfig: {
+      parentField: 'parentId',
+      rowField: 'id',
+      transform: true,
+    },
   },
 });
+
+function isModelRow(row: ModelTableRow): row is ModelRow {
+  return row.kind === 'model';
+}
 
 function refresh() {
   gridApi.query();
 }
 
-function openCreate() {
-  formModalApi.setData({ usageType: props.usageType }).open();
+function expandAll() {
+  gridApi.grid?.setAllTreeExpand(true);
 }
 
-function openEdit(row: AiModelApi.ModelConfig) {
-  formModalApi.setData(row).open();
+function collapseAll() {
+  gridApi.grid?.setAllTreeExpand(false);
 }
 
-async function testModel(row: AiModelApi.ModelConfig) {
+function openCreate(usageType: AiModelApi.UsageType) {
+  formModalApi.setData({ usageType }).open();
+}
+
+function openEdit(row: ModelRow) {
+  formModalApi.setData({ ...row, id: row.modelId }).open();
+}
+
+async function testModel(row: ModelRow) {
   const hide = message.loading({
     content: `正在测试 ${row.modelName}`,
     duration: 0,
     key: 'model_test',
   });
   try {
-    const result = await testAiModelApi(row.id);
+    const result = await testAiModelApi(row.modelId);
     message.success({
       content: `${result.message}（${result.elapsedMs}ms）`,
       key: 'model_test',
@@ -106,7 +188,7 @@ async function testModel(row: AiModelApi.ModelConfig) {
   }
 }
 
-function enableModel(row: AiModelApi.ModelConfig) {
+function enableModel(row: ModelRow) {
   if (row.enabled) return;
 
   Modal.confirm({
@@ -115,7 +197,7 @@ function enableModel(row: AiModelApi.ModelConfig) {
       : `确认启用 ${row.modelName} 吗？启用后可供用户选择。`,
     okText: '启用',
     onOk: async () => {
-      await updateAiModelApi(row.id, { enabled: true });
+      await updateAiModelApi(row.modelId, { enabled: true });
       message.success('模型已启用');
       refresh();
     },
@@ -123,16 +205,16 @@ function enableModel(row: AiModelApi.ModelConfig) {
   });
 }
 
-function disableModel(row: AiModelApi.ModelConfig) {
+function disableModel(row: ModelRow) {
   if (!row.enabled) return;
 
   Modal.confirm({
     content: systemUsageTypes.has(row.usageType)
-      ? `确认停用 ${row.modelName} 吗？停用后后端没有可用的${getUsageTypeText(row.usageType)}模型。`
+      ? `确认停用 ${row.modelName} 吗？停用后后端没有可用的${getUsageTypeText(row.usageType)}。`
       : `确认停用 ${row.modelName} 吗？停用后用户不能选择该模型。`,
     okText: '停用',
     onOk: async () => {
-      await updateAiModelApi(row.id, { enabled: false });
+      await updateAiModelApi(row.modelId, { enabled: false });
       message.success('模型已停用');
       refresh();
     },
@@ -140,13 +222,13 @@ function disableModel(row: AiModelApi.ModelConfig) {
   });
 }
 
-function removeModel(row: AiModelApi.ModelConfig) {
+function removeModel(row: ModelRow) {
   Modal.confirm({
     content: `确认删除模型配置 ${row.modelName} 吗？`,
     okText: '删除',
     okType: 'danger',
     onOk: async () => {
-      await deleteAiModelApi(row.id);
+      await deleteAiModelApi(row.modelId);
       message.success('删除成功');
       refresh();
     },
@@ -159,28 +241,56 @@ function removeModel(row: AiModelApi.ModelConfig) {
   <Page auto-content-height>
     <FormModal @success="refresh" />
 
-    <Grid :table-title="pageTitle">
+    <Grid table-title="模型管理">
       <template #toolbar-tools>
-        <Button type="primary" @click="openCreate">
-          <Plus class="size-5" />
-          添加{{ pageTitle }}模型
+        <Button @click="expandAll">
+          <ChevronDown class="size-4" />
+          展开全部
+        </Button>
+        <Button @click="collapseAll">
+          <ChevronDown class="size-4 rotate-180" />
+          折叠全部
         </Button>
       </template>
 
-      <template #enabled="{ row }">
-        <Tag :color="row.enabled ? 'success' : 'default'">
+      <template #modelName="{ row }: { row: ModelTableRow }">
+        <div v-if="row.kind === 'group'" class="usage-group">
+          <strong>{{ row.modelName }}</strong>
+          <Tag>{{ row.modelCount }} 个配置</Tag>
+        </div>
+        <span v-else>{{ row.modelName }}</span>
+      </template>
+
+      <template #usageType="{ row }: { row: ModelTableRow }">
+        <span v-if="isModelRow(row)">{{ getUsageTypeText(row.usageType) }}</span>
+      </template>
+
+      <template #enabled="{ row }: { row: ModelTableRow }">
+        <Tag v-if="isModelRow(row)" :color="row.enabled ? 'success' : 'default'">
           {{ row.enabled ? '启用' : '停用' }}
         </Tag>
       </template>
 
-      <template #lastTestStatus="{ row }">
-        <Tag :color="testStatusMeta[row.lastTestStatus]?.color">
+      <template #lastTestStatus="{ row }: { row: ModelTableRow }">
+        <Tag
+          v-if="isModelRow(row)"
+          :color="testStatusMeta[row.lastTestStatus]?.color"
+        >
           {{ testStatusMeta[row.lastTestStatus]?.text }}
         </Tag>
       </template>
 
-      <template #action="{ row }">
-        <div class="action-list">
+      <template #action="{ row }: { row: ModelTableRow }">
+        <Button
+          v-if="row.kind === 'group'"
+          class="action-button"
+          type="link"
+          @click="openCreate(row.usageType)"
+        >
+          <Plus class="size-4" />
+          新增配置
+        </Button>
+        <div v-else class="action-list">
           <Button class="action-button" type="link" @click="openEdit(row)">
             编辑
           </Button>
@@ -219,18 +329,24 @@ function removeModel(row: AiModelApi.ModelConfig) {
 </template>
 
 <style scoped>
-.action-list {
+.usage-group,
+.action-list,
+.action-button {
   display: flex;
   align-items: center;
+}
+
+.usage-group {
+  gap: 8px;
+}
+
+.action-list {
   justify-content: center;
   gap: 4px;
 }
 
 .action-button {
-  display: inline-flex;
-  align-items: center;
   gap: 4px;
   padding: 0 2px;
 }
-
 </style>

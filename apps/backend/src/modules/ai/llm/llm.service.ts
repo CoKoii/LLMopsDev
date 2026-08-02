@@ -336,6 +336,7 @@ const extractMessageText = (message: AIMessage) => {
 
 const SINGLE_ENABLED_USAGE_TYPES = new Set<LlmUsageType>([
   LlmUsageType.STRUCTURED,
+  LlmUsageType.BUILT_IN_LARGE,
   LlmUsageType.EMBEDDING,
   LlmUsageType.MULTIMODAL,
   LlmUsageType.RERANK,

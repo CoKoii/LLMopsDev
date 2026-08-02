@@ -3,5 +3,5 @@ import ModelListPage from './ModelListPage.vue';
 </script>
 
 <template>
-  <ModelListPage usage-type="chat" />
+  <ModelListPage />
 </template>

@@ -3,7 +3,7 @@ import { createApp, watchEffect } from 'vue';
 import { registerAccessDirective } from '@vben/access';
 import { registerLoadingDirective } from '@vben/common-ui/es/loading';
 import { preferences } from '@vben/preferences';
-import { initStores } from '@vben/stores';
+import { initStores, useTabbarStore } from '@vben/stores';
 import '@vben/styles';
 import '@vben/styles/antdv-next';
 
@@ -15,6 +15,16 @@ import { initComponentAdapter } from './adapter/component';
 import { initSetupVbenForm } from './adapter/form';
 import App from './app.vue';
 import { router } from './router';
+
+const LEGACY_AI_MODEL_PATHS = [
+  '/ai/chat-models',
+  '/ai/structured-models',
+  '/ai/embedding-models',
+  '/ai/multimodal-models',
+  '/ai/rerank-models',
+  '/ai/speech-to-text-models',
+  '/ai/text-to-speech-models',
+];
 
 async function bootstrap(namespace: string) {
   // 初始化组件适配器
@@ -45,6 +55,7 @@ async function bootstrap(namespace: string) {
 
   // 配置 pinia-tore
   await initStores(app, { namespace });
+  await useTabbarStore()._bulkCloseByKeys(LEGACY_AI_MODEL_PATHS);
 
   // 安装权限指令
   registerAccessDirective(app);

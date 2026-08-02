@@ -4,6 +4,7 @@ import { AuditableEntity } from "../../../../common/database/base.entity";
 export enum LlmUsageType {
   CHAT = "chat",
   STRUCTURED = "structured",
+  BUILT_IN_LARGE = "built_in_large",
   EMBEDDING = "embedding",
   MULTIMODAL = "multimodal",
   RERANK = "rerank",
