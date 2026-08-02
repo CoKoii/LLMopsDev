@@ -1,5 +1,5 @@
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
-import { createAgent, toolCallLimitMiddleware } from "langchain";
+import { createAgent } from "langchain";
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Readable } from "stream";
@@ -28,19 +28,16 @@ const SSE_DONE = "data: [DONE]\n\n";
 
 const HOME_BUILDER_SYSTEM_PROMPT = [
   "你是 LLMOps 首页的对话式构建助手，帮助用户创建 AI 应用或插件。",
-  "每轮先调用资源目录工具，了解当前可用的真实资源。",
-  "需求宽泛时，调用需求询问工具，每轮只问最多三个最影响核心效果的问题，并结合已知信息给出有用建议。",
-  "信息足够时直接调用创建工具，不展示草案，也不要求确认。用户明确要求直接创建时，合理补全非关键细节。",
-  "名称、开场白和常规模型参数由你合理决定，不为这些细节反复提问。",
-  "模型、分类、插件和知识库只能使用资源目录中的 id；没有合适资源就不选。",
-  "只有用户提供了足够完整、真实的接口资料时才能创建插件，绝不虚构接口、地址或参数。",
-  "普通交流直接回复。除资源目录工具外，每轮最多调用一个需求询问或创建工具。",
-  "根据工具的真实结果自然回复用户，不暴露内部工具和结构化数据。",
+  "不要询问模型、分类、温度等实现细节；默认配置由你决定。围绕目标用户、使用方式、输入、输出和业务约束提问。",
+  "先理解用户目标。信息不足时，直接用中文流式询问最多三个最关键的问题，不调用工具，不展示草案，也不要求确认。",
+  "当前可用资源目录会随请求提供给你。信息足够时直接调用合适的创建工具；信息不足时直接回复并提问，不调用工具。",
+  "模型、分类、插件和知识库只能使用资源目录中的真实 id；没有合适资源就留空。",
+  "名称、开场白和常规模型参数由你合理决定，不为非关键细节反复提问。",
+  "只有用户提供了足够完整真实的接口资料时才能创建插件，绝不虚构接口、地址或参数。",
+  "调用创建工具时，在 completionMessage 中写好创建成功后给用户的简洁自然回复。普通交流直接回复。",
 ].join("\n");
 
 const TOOL_STATUSES: Record<string, string> = {
-  home_builder_catalog: "正在匹配可用资源",
-  home_builder_ask_requirements: "正在整理需要了解的信息",
   home_builder_create_app: "正在创建 AI 应用",
   home_builder_create_plugin: "正在创建插件",
 };
@@ -85,17 +82,9 @@ export class HomeBuilderService {
       const agent = createAgent({
         model,
         tools: this.toolFactory.create(context, userId),
-        systemPrompt: HOME_BUILDER_SYSTEM_PROMPT,
-        middleware: [
-          toolCallLimitMiddleware({
-            toolName: "home_builder_create_app",
-            runLimit: 1,
-          }),
-          toolCallLimitMiddleware({
-            toolName: "home_builder_create_plugin",
-            runLimit: 1,
-          }),
-        ],
+        systemPrompt: `${HOME_BUILDER_SYSTEM_PROMPT}\n可用资源目录：${JSON.stringify(
+          this.toolFactory.describeResources(context),
+        )}`,
       });
       const messages = (dto.history ?? [])
         .slice(-12)
@@ -111,8 +100,6 @@ export class HomeBuilderService {
         { messages },
         { version: "v2", recursionLimit: 12 },
       );
-      let createdResource: HomeBuilderCreatedResource | undefined;
-
       for await (const event of events) {
         if (event.event === "on_tool_start") {
           const status = TOOL_STATUSES[event.name];
@@ -122,12 +109,10 @@ export class HomeBuilderService {
 
         if (event.event === "on_tool_end") {
           const result = this.parseToolResult(event.data.output);
-          if (result?.kind === "created" && !createdResource) {
-            createdResource = result.resource;
+          if (result?.kind === "created") {
             yield this.sse({ created: result.resource }, "created");
-          }
-          if (result) {
-            yield this.sse({ status: "正在生成回复" }, "status");
+            yield this.sse({ content: result.reply }, "content");
+            break;
           }
           continue;
         }
@@ -206,33 +191,49 @@ export class HomeBuilderService {
   }
 
   private parseToolResult(output: unknown): HomeBuilderToolResult | undefined {
-    const content = isObject(output) ? output.content : output;
-    const text = this.getMessageText(content);
-    if (!text) return undefined;
+    return this.findToolResult(output, new Set(), 0);
+  }
 
-    try {
-      const result: unknown = JSON.parse(text);
-      if (!isObject(result)) return undefined;
-      if (result.kind === "catalog") {
-        return { kind: "catalog", resources: result.resources };
+  private findToolResult(
+    value: unknown,
+    visited: Set<object>,
+    depth: number,
+  ): HomeBuilderToolResult | undefined {
+    if (depth > 6) return undefined;
+    if (typeof value === "string") {
+      try {
+        return this.findToolResult(JSON.parse(value), visited, depth + 1);
+      } catch {
+        return undefined;
       }
-      if (
-        result.kind === "needs_input" &&
-        Array.isArray(result.questions) &&
-        result.questions.every((item) => typeof item === "string")
-      ) {
-        return { kind: "needs_input", questions: result.questions };
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const result = this.findToolResult(item, visited, depth + 1);
+        if (result) return result;
       }
-      if (
-        result.kind === "created" &&
-        this.isCreatedResource(result.resource)
-      ) {
-        return { kind: "created", resource: result.resource };
-      }
-    } catch {
       return undefined;
     }
+    if (!isObject(value) || visited.has(value)) return undefined;
+    visited.add(value);
 
+    if (
+      value.kind === "created" &&
+      this.isCreatedResource(value.resource) &&
+      typeof value.reply === "string" &&
+      value.reply.trim()
+    ) {
+      return {
+        kind: "created",
+        resource: value.resource,
+        reply: value.reply.trim(),
+      };
+    }
+
+    for (const child of Object.values(value)) {
+      const result = this.findToolResult(child, visited, depth + 1);
+      if (result) return result;
+    }
     return undefined;
   }
 

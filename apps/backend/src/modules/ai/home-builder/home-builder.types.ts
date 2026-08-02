@@ -17,7 +17,8 @@ export type HomeBuilderCreatedResource =
   | { type: "app"; id: number; name: string }
   | { type: "plugin"; name: string };
 
-export type HomeBuilderToolResult =
-  | { kind: "catalog"; resources: unknown }
-  | { kind: "needs_input"; questions: string[] }
-  | { kind: "created"; resource: HomeBuilderCreatedResource };
+export type HomeBuilderToolResult = {
+  kind: "created";
+  resource: HomeBuilderCreatedResource;
+  reply: string;
+};

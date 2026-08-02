@@ -5,10 +5,8 @@ import { AppService } from "../app/app.service";
 import type { AiAppVersionConfig } from "../app/entities/app-version.entity";
 import { PluginService } from "../plugin/plugin.service";
 import {
-  catalogToolInputSchema,
   createAppInputSchema,
   createPluginInputSchema,
-  requirementsInputSchema,
 } from "./home-builder.schemas";
 import type {
   HomeBuilderCatalogContext,
@@ -16,7 +14,7 @@ import type {
   HomeBuilderToolResult,
 } from "./home-builder.types";
 
-const compact = (value?: string | null, limit = 220) => {
+const compact = (value?: string | null, limit = 160) => {
   const text = value?.replace(/\s+/g, " ").trim() ?? "";
   return text.length > limit ? `${text.slice(0, limit)}...` : text;
 };
@@ -35,64 +33,94 @@ export class HomeBuilderToolFactory {
     context: HomeBuilderCatalogContext,
     userId: number,
   ): StructuredToolInterface[] {
+    let creationStarted = false;
+    const runCreation = async <T>(operation: () => Promise<T>) => {
+      if (creationStarted) {
+        throw new BadRequestException("本轮已经执行过创建操作");
+      }
+      creationStarted = true;
+      return operation();
+    };
+
     return [
-      tool(
-        (args: z.infer<typeof catalogToolInputSchema>) => {
-          const input = catalogToolInputSchema.parse(args);
-          return serializeResult({
-            kind: "catalog",
-            resources: this.createPromptCatalog(context, input.keyword),
-          });
-        },
-        {
-          name: "home_builder_catalog",
-          description:
-            "查询当前用户可用的应用分类、对话模型、公开及自有插件、自有知识库和插件分类。规划或创建资源前调用。",
-          schema: catalogToolInputSchema,
-        },
-      ),
-      tool(
-        (args: z.infer<typeof requirementsInputSchema>) => {
-          const input = requirementsInputSchema.parse(args);
-          return serializeResult({
-            kind: "needs_input",
-            questions: input.questions,
-          });
-        },
-        {
-          name: "home_builder_ask_requirements",
-          description:
-            "需求不足以确定核心使用效果时调用。返回本轮需要自然询问用户的问题，不创建任何资源。",
-          schema: requirementsInputSchema,
-        },
-      ),
       tool(
         async (args: z.infer<typeof createAppInputSchema>) => {
           const input = createAppInputSchema.parse(args);
-          const created = await this.createApp(context, input, userId);
-          return serializeResult({ kind: "created", resource: created });
+          const created = await runCreation(() =>
+            this.createApp(context, input, userId),
+          );
+          return serializeResult({
+            kind: "created",
+            resource: created,
+            reply: input.completionMessage,
+          });
         },
         {
           name: "home_builder_create_app",
           description:
-            "需求足以确定核心使用效果时，使用完整配置立即创建 AI 应用。",
+            "信息足以确定核心使用效果时，使用资源目录中的真实 id 和完整配置立即创建 AI 应用。成功后直接回复用户，不再调用工具。",
           schema: createAppInputSchema,
         },
       ),
       tool(
         async (args: z.infer<typeof createPluginInputSchema>) => {
           const input = createPluginInputSchema.parse(args);
-          const created = await this.createPlugin(context, input, userId);
-          return serializeResult({ kind: "created", resource: created });
+          const created = await runCreation(() =>
+            this.createPlugin(context, input, userId),
+          );
+          return serializeResult({
+            kind: "created",
+            resource: created,
+            reply: input.completionMessage,
+          });
         },
         {
           name: "home_builder_create_plugin",
           description:
-            "用户已经提供足够真实接口资料时，生成完整 OpenAPI 配置并立即创建插件。",
+            "用户已经提供足够完整真实的接口资料时，生成 OpenAPI 配置并立即创建插件。成功后直接回复用户，不再调用工具。",
           schema: createPluginInputSchema,
         },
       ),
     ];
+  }
+
+  describeResources(context: HomeBuilderCatalogContext) {
+    const publicPluginIds = new Set(
+      context.availablePlugins.map((item) => item.id),
+    );
+
+    return {
+      appCategories: context.appCategories.map(({ id, key, name }) => ({
+        id,
+        key,
+        name,
+      })),
+      pluginCategories: context.pluginCategories.map(({ id, key, name }) => ({
+        id,
+        key,
+        name,
+      })),
+      chatModels: context.chatModels,
+      publicPlugins: context.availablePlugins.map((item) => ({
+        id: item.id,
+        name: item.name,
+        description: compact(item.description),
+        category: item.category?.name,
+      })),
+      userPlugins: context.ownedPlugins
+        .filter((item) => !publicPluginIds.has(item.id))
+        .map((item) => ({
+          id: item.id,
+          name: item.name,
+          description: compact(item.description),
+          category: item.category?.name,
+        })),
+      userKnowledge: context.ownedKnowledge.map((item) => ({
+        id: item.id,
+        name: item.name,
+        description: compact(item.description),
+      })),
+    };
   }
 
   private async createApp(
@@ -183,54 +211,5 @@ export class HomeBuilderToolFactory {
     );
 
     return { type: "plugin", name: input.name };
-  }
-
-  private createPromptCatalog(
-    context: HomeBuilderCatalogContext,
-    keyword: string,
-  ) {
-    const term = keyword.trim().toLowerCase();
-    const matches = (name: string, description?: string | null) =>
-      !term || `${name} ${description ?? ""}`.toLowerCase().includes(term);
-
-    return {
-      appCategories: context.appCategories.map(({ id, key, name }) => ({
-        id,
-        key,
-        name,
-      })),
-      pluginCategories: context.pluginCategories.map(({ id, key, name }) => ({
-        id,
-        key,
-        name,
-      })),
-      chatModels: context.chatModels,
-      publicPlugins: context.availablePlugins
-        .filter((item) => matches(item.name, item.description))
-        .slice(0, 12)
-        .map((item) => ({
-          id: item.id,
-          name: item.name,
-          description: compact(item.description),
-          category: item.category?.name,
-        })),
-      userPlugins: context.ownedPlugins
-        .filter((item) => matches(item.name, item.description))
-        .slice(0, 12)
-        .map((item) => ({
-          id: item.id,
-          name: item.name,
-          description: compact(item.description),
-          category: item.category?.name,
-        })),
-      userKnowledge: context.ownedKnowledge
-        .filter((item) => matches(item.name, item.description))
-        .slice(0, 12)
-        .map((item) => ({
-          id: item.id,
-          name: item.name,
-          description: compact(item.description),
-        })),
-    };
   }
 }

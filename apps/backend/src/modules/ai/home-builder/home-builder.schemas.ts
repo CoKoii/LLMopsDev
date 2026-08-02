@@ -1,17 +1,5 @@
 import { z } from "zod";
 
-export const catalogToolInputSchema = z.object({
-  keyword: z.string().default(""),
-});
-
-export const requirementsInputSchema = z.object({
-  questions: z
-    .array(z.string().min(1))
-    .min(1)
-    .max(3)
-    .describe("当前最影响最终效果且对话中尚未回答的问题"),
-});
-
 export const createAppInputSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(800).default(""),
@@ -49,6 +37,11 @@ export const createAppInputSchema = z.object({
       questions: z.array(z.string()).max(4).default([]),
     })
     .default({ content: "", questions: [] }),
+  completionMessage: z
+    .string()
+    .min(1)
+    .max(500)
+    .describe("应用创建成功后直接回复用户的自然语言消息"),
 });
 
 export const createPluginInputSchema = z.object({
@@ -62,4 +55,9 @@ export const createPluginInputSchema = z.object({
   headers: z
     .array(z.object({ key: z.string(), value: z.string() }))
     .default([]),
+  completionMessage: z
+    .string()
+    .min(1)
+    .max(500)
+    .describe("插件创建成功后直接回复用户的自然语言消息"),
 });
