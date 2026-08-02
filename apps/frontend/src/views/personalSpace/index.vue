@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import ListPage from '@/components/ListPage/ListPage.vue'
+import { useAppCreationStore } from '@/stores/appCreation'
 import { useAuthStore } from '@/stores/auth'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -14,6 +15,7 @@ interface CurrentUserInfo {
 }
 
 const route = useRoute()
+const appCreationStore = useAppCreationStore()
 const authStore = useAuthStore()
 const searchValue = ref('')
 const createKey = ref(0)
@@ -44,6 +46,16 @@ watch(
   () => {
     searchValue.value = ''
   },
+)
+
+watch(
+  [() => appCreationStore.requestId, () => route.name],
+  ([requestId, routeName]) => {
+    if (!requestId || routeName !== 'personal-space-apps') return
+    createKey.value += 1
+    appCreationStore.consumeRequest()
+  },
+  { immediate: true },
 )
 
 onMounted(() => {

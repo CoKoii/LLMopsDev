@@ -2,6 +2,7 @@
 import { changeCurrentPasswordApi, updateCurrentProfileApi, uploadFileApi } from '@/api'
 import AppModal from '@/components/AppModal/AppModal.vue'
 import { mainRoutes } from '@/router/menus'
+import { useAppCreationStore } from '@/stores/appCreation'
 import { useAuthStore } from '@/stores/auth'
 import { EditOutlined, LogoutOutlined, PlusOutlined, SettingOutlined } from '@antdv-next/icons'
 import {
@@ -18,9 +19,11 @@ import {
 import type { FormInstance, MenuProps, UploadProps } from 'antdv-next'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import type { RouteRecordNameGeneric, RouteRecordRaw } from 'vue-router'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 const route = useRoute()
+const router = useRouter()
+const appCreationStore = useAppCreationStore()
 const authStore = useAuthStore()
 const accountSettingsOpen = ref(false)
 const profileFormRef = ref<FormInstance>()
@@ -64,6 +67,13 @@ const canSubmitPassword = computed(
     Boolean(passwordForm.newPassword) &&
     Boolean(passwordForm.confirmPassword),
 )
+
+const openCreateApp = () => {
+  appCreationStore.requestCreate()
+  if (route.name !== 'personal-space-apps') {
+    void router.push({ name: 'personal-space-apps' })
+  }
+}
 
 const passwordRules = {
   currentPassword: [{ required: true, message: '请输入原密码' }],
@@ -255,7 +265,7 @@ watch(
           <img src="@/assets/images/logo.png" alt="Logo" class="logo" />
           <span class="text">苏应LLMOps</span>
         </div>
-        <Button type="primary" block class="create-btn">
+        <Button type="primary" block class="create-btn" @click="openCreateApp">
           <template #icon>
             <PlusOutlined />
           </template>

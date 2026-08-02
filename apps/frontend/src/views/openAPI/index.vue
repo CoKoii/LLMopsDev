@@ -22,8 +22,35 @@ const tabs: ListPageTab[] = [
     :create-text="isKeysPage ? '新增密钥' : undefined"
     @create="createRequest += 1"
   >
-    <RouterView v-slot="{ Component }">
-      <component :is="Component" v-bind="isKeysPage ? { createRequest } : {}" />
+    <RouterView v-slot="{ Component, route: tabRoute }">
+      <Transition name="open-api-tab" mode="out-in">
+        <div :key="tabRoute.name" class="open-api-tab-panel">
+          <component :is="Component" v-bind="isKeysPage ? { createRequest } : {}" />
+        </div>
+      </Transition>
     </RouterView>
   </ListPage>
 </template>
+
+<style scoped lang="scss">
+.open-api-tab-panel {
+  min-height: 100%;
+}
+
+.open-api-tab-enter-active,
+.open-api-tab-leave-active {
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+
+.open-api-tab-enter-from {
+  opacity: 0;
+  transform: translateY(0.6rem);
+}
+
+.open-api-tab-leave-to {
+  opacity: 0;
+  transform: translateY(-0.3rem);
+}
+</style>

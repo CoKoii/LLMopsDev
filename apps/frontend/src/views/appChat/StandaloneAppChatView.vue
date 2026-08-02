@@ -30,11 +30,9 @@ import { Prompts } from 'ant-design-x-vue'
 import type { BubbleListProps } from 'ant-design-x-vue'
 import { Button, Drawer, Dropdown, Input, Modal, Result, Spin, message } from 'antdv-next'
 import type { MenuProps } from 'antdv-next'
-import { computed, defineComponent, h, nextTick, onMounted, ref } from 'vue'
+import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import DebugPreviewPanel, {
-  type DebugChatMessage,
-} from '../appOrchestration/DebugPreviewPanel.vue'
+import DebugPreviewPanel, { type DebugChatMessage } from '../appOrchestration/DebugPreviewPanel.vue'
 import { useAppDebugSession } from '../appOrchestration/useAppDebugSession'
 
 const route = useRoute()
@@ -43,6 +41,9 @@ const appId = computed(() => Number(route.params.appId))
 const storeKey = computed(() => -appId.value)
 const sessionPageSize = 30
 const messagePageSize = 30
+const pageScrollClassName = 'standalone-chat-page'
+const historyLoadScrollThreshold = 24
+const bottomScrollThreshold = 48
 const meta = ref<StandaloneAiAppMeta>()
 const loading = ref(false)
 const sessionsLoading = ref(false)
@@ -59,7 +60,6 @@ const renaming = ref(false)
 const renameTarget = ref<StandaloneChatSessionItem>()
 const renameTitleDraft = ref('')
 const mobileSidebarOpen = ref(false)
-const chatPreviewRef = ref<InstanceType<typeof DebugPreviewPanel>>()
 const appName = computed(() => meta.value?.app.name || '聊天机器人')
 const appAvatar = computed(() => meta.value?.app.image || '')
 const userName = computed(
@@ -161,9 +161,11 @@ const SessionDirectory = defineComponent({
     return () =>
       h('div', { class: props.rootClass }, [
         h('div', { class: 'standalone-chat__brand' }, [
-          h('div', { class: ['standalone-chat__app-icon', { 'has-image': Boolean(appAvatar.value) }] }, [
-            appAvatar.value ? h('img', { src: appAvatar.value, alt: '' }) : h(Bot, { size: 18 }),
-          ]),
+          h(
+            'div',
+            { class: ['standalone-chat__app-icon', { 'has-image': Boolean(appAvatar.value) }] },
+            [appAvatar.value ? h('img', { src: appAvatar.value, alt: '' }) : h(Bot, { size: 18 })],
+          ),
           h('strong', appName.value),
         ]),
         h(
@@ -329,7 +331,10 @@ function formatMessageMeta(elapsedMs: number, tokens?: number) {
 
 async function scrollChatToBottom(force = true) {
   await nextTick()
-  chatPreviewRef.value?.scrollToBottom(force)
+  const scrollElement = document.scrollingElement ?? document.documentElement
+  const distanceToBottom = scrollElement.scrollHeight - window.scrollY - window.innerHeight
+  if (!force && distanceToBottom > bottomScrollThreshold) return
+  window.scrollTo(0, scrollElement.scrollHeight)
 }
 
 function submitSuggestedPrompt(content: string) {
@@ -421,7 +426,9 @@ function confirmDeleteSession(session: StandaloneChatSessionItem) {
     centered: true,
     async onOk() {
       await deleteStandaloneChatSessionApi(appId.value, session.id)
-      conversationSessions.value = conversationSessions.value.filter((item) => item.id !== session.id)
+      conversationSessions.value = conversationSessions.value.filter(
+        (item) => item.id !== session.id,
+      )
       if (activeSessionId.value === session.id) {
         sessionStore.clearMessages(storeKey.value)
         resetComposerState()
@@ -503,6 +510,10 @@ function handleSessionListScroll(event: Event) {
   if (remaining <= 32) void loadSessions(false)
 }
 
+function handleDocumentScroll() {
+  if (window.scrollY <= historyLoadScrollThreshold) void loadMoreHistory()
+}
+
 async function openSession(sessionId: number) {
   if (responding.value || activeSessionId.value === sessionId) return
   historyLoading.value = true
@@ -529,7 +540,11 @@ async function loadMoreHistory() {
   if (!sessionId || historyLoading.value || !hasMoreHistory.value) return
 
   historyLoading.value = true
-  const previousScroll = chatPreviewRef.value?.getScrollState()
+  const scrollElement = document.scrollingElement ?? document.documentElement
+  const previousScroll = {
+    scrollTop: window.scrollY,
+    scrollHeight: scrollElement.scrollHeight,
+  }
   try {
     const result = await listStandaloneChatMessagesApi(appId.value, sessionId, {
       page: messagePage.value + 1,
@@ -544,7 +559,8 @@ async function loadMoreHistory() {
     messagePage.value = result.page
     messagePages.value = result.pages || 1
     await nextTick()
-    if (previousScroll) chatPreviewRef.value?.restoreScrollFromTop(previousScroll)
+    const heightDelta = scrollElement.scrollHeight - previousScroll.scrollHeight
+    window.scrollTo(0, previousScroll.scrollTop + heightDelta)
   } finally {
     historyLoading.value = false
   }
@@ -552,6 +568,18 @@ async function loadMoreHistory() {
 
 async function submitStandaloneMessage(value: string) {
   await submitMessage(value, scrollChatToBottom)
+}
+
+function getPageScrollModeElements() {
+  return [document.documentElement, document.body, document.getElementById('app')].filter(
+    (element): element is HTMLElement => Boolean(element),
+  )
+}
+
+function setPageScrollMode(enabled: boolean) {
+  getPageScrollModeElements().forEach((element) => {
+    element.classList.toggle(pageScrollClassName, enabled)
+  })
 }
 
 async function loadApp() {
@@ -572,8 +600,15 @@ async function loadApp() {
 }
 
 onMounted(async () => {
+  setPageScrollMode(true)
+  window.addEventListener('scroll', handleDocumentScroll, { passive: true })
   await authStore.getUserInfo()
   await loadApp()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('scroll', handleDocumentScroll)
+  setPageScrollMode(false)
 })
 </script>
 
@@ -618,7 +653,6 @@ onMounted(async () => {
         </header>
 
         <DebugPreviewPanel
-          ref="chatPreviewRef"
           v-model:sender-value="senderValue"
           :title="chatTitle"
           :composer-placeholder="`给“${appName}”发送消息`"
@@ -705,12 +739,15 @@ onMounted(async () => {
   --space-2: 0.8rem;
   --space-3: 1.2rem;
   --space-4: 1.6rem;
+  --chat-sidebar-width: 24rem;
+  --chat-header-height: 6.4rem;
+  --chat-mobile-topbar-height: 5.6rem;
+  --chat-composer-reserve: 13rem;
+  --chat-content-max-width: 112rem;
   --font-family: Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif;
 
   width: 100%;
-  height: 100dvh;
   min-height: 100dvh;
-  overflow: hidden;
   color: var(--color-text);
   background: var(--white);
   font-family: var(--font-family);
@@ -719,22 +756,23 @@ onMounted(async () => {
 .standalone-chat :deep(.ant-spin-nested-loading),
 .standalone-chat :deep(.ant-spin-container) {
   width: 100%;
-  height: 100%;
+  min-height: 100%;
 }
 
 .standalone-chat__shell {
   display: grid;
-  grid-template-columns: 24rem minmax(0, 1fr);
+  grid-template-columns: var(--chat-sidebar-width) minmax(0, 1fr);
   width: 100%;
-  height: 100dvh;
-  min-height: 0;
-  overflow: hidden;
+  min-height: 100dvh;
+  align-items: start;
 }
 
 .standalone-chat__sidebar {
   display: flex;
   min-width: 0;
   height: 100dvh;
+  position: sticky;
+  top: 0;
   flex-direction: column;
   gap: 1.8rem;
   padding: 1.8rem 1.4rem;
@@ -900,15 +938,20 @@ onMounted(async () => {
 
 .standalone-chat__sidebar :deep(.standalone-chat__session.is-active .standalone-chat__session-main),
 .standalone-chat__sidebar :deep(.standalone-chat__session:hover .standalone-chat__session-main),
-.standalone-chat__drawer-body :deep(.standalone-chat__session.is-active .standalone-chat__session-main),
-.standalone-chat__drawer-body :deep(.standalone-chat__session:hover .standalone-chat__session-main) {
+.standalone-chat__drawer-body
+  :deep(.standalone-chat__session.is-active .standalone-chat__session-main),
+.standalone-chat__drawer-body
+  :deep(.standalone-chat__session:hover .standalone-chat__session-main) {
   color: var(--primary-color);
 }
 
 .standalone-chat__sidebar :deep(.standalone-chat__session:hover .standalone-chat__session-action),
-.standalone-chat__sidebar :deep(.standalone-chat__session.is-active .standalone-chat__session-action),
-.standalone-chat__drawer-body :deep(.standalone-chat__session:hover .standalone-chat__session-action),
-.standalone-chat__drawer-body :deep(.standalone-chat__session.is-active .standalone-chat__session-action) {
+.standalone-chat__sidebar
+  :deep(.standalone-chat__session.is-active .standalone-chat__session-action),
+.standalone-chat__drawer-body
+  :deep(.standalone-chat__session:hover .standalone-chat__session-action),
+.standalone-chat__drawer-body
+  :deep(.standalone-chat__session.is-active .standalone-chat__session-action) {
   opacity: 1;
 }
 
@@ -919,9 +962,7 @@ onMounted(async () => {
 .standalone-chat :deep(.app-orchestration__preview) {
   display: block;
   min-width: 0;
-  height: 100dvh;
-  overflow-x: hidden !important;
-  overflow-y: auto !important;
+  min-height: 100dvh;
 }
 
 .standalone-chat :deep(.orchestration-panel__header) {
@@ -932,11 +973,12 @@ onMounted(async () => {
 }
 
 .standalone-chat :deep(.chat-preview) {
-  min-height: calc(100dvh - 18rem);
   width: 100%;
-  max-width: 112rem;
+  max-width: var(--chat-content-max-width);
+  min-height: calc(100dvh - var(--chat-header-height));
   margin: 0 auto;
-  overflow: visible !important;
+  overflow: visible;
+  padding-bottom: var(--chat-composer-reserve);
 }
 
 .standalone-chat :deep(.chat-preview__opening-questions button) {
@@ -958,21 +1000,40 @@ onMounted(async () => {
 }
 
 .standalone-chat :deep(.chat-composer) {
-  position: sticky;
+  position: fixed;
+  right: 0;
   bottom: 0;
+  left: var(--chat-sidebar-width);
   z-index: 2;
-  width: 100%;
-  max-width: 112rem;
-  margin: 0 auto;
   padding-right: 2.4rem;
   padding-left: 2.4rem;
   background: var(--color-bg-panel);
 }
 
+.standalone-chat :deep(.chat-composer > .composer-row),
+.standalone-chat :deep(.chat-composer > p) {
+  max-width: var(--chat-content-max-width);
+  margin-right: auto;
+  margin-left: auto;
+}
+
+:global(html.standalone-chat-page) {
+  height: auto;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+:global(body.standalone-chat-page),
+:global(#app.standalone-chat-page) {
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+}
+
 @media (max-width: 760px) {
   .standalone-chat__shell {
     grid-template-columns: 1fr;
-    grid-template-rows: 5.6rem minmax(0, 1fr);
   }
 
   .standalone-chat__sidebar {
@@ -981,9 +1042,12 @@ onMounted(async () => {
 
   .standalone-chat__mobile-topbar {
     display: flex;
+    position: sticky;
+    top: 0;
+    z-index: 3;
     align-items: center;
     min-width: 0;
-    height: 5.6rem;
+    height: var(--chat-mobile-topbar-height);
     gap: 0.8rem;
     padding: 0.8rem 1.2rem;
     background: var(--color-bg-panel);
@@ -996,7 +1060,7 @@ onMounted(async () => {
   }
 
   .standalone-chat :deep(.app-orchestration__preview) {
-    height: calc(100dvh - 5.6rem);
+    min-height: calc(100dvh - var(--chat-mobile-topbar-height));
   }
 
   .standalone-chat :deep(.orchestration-panel__header) {
@@ -1006,7 +1070,7 @@ onMounted(async () => {
   .standalone-chat :deep(.chat-preview) {
     min-height: max(42rem, calc(100dvh - 18rem));
     padding-top: 2rem;
-    padding-bottom: 1rem;
+    padding-bottom: var(--chat-composer-reserve);
   }
 
   .standalone-chat :deep(.chat-preview__empty) {
@@ -1014,6 +1078,7 @@ onMounted(async () => {
   }
 
   .standalone-chat :deep(.chat-composer) {
+    left: 0;
     padding-right: 1.6rem;
     padding-bottom: max(0.6rem, env(safe-area-inset-bottom));
     padding-left: 1.6rem;

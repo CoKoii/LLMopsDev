@@ -206,10 +206,11 @@ watch(
 watch(
   () => props.createKey,
   (value, oldValue) => {
-    if (value !== oldValue) {
+    if (value !== undefined && value > 0 && value !== oldValue) {
       void openCreate()
     }
   },
+  { immediate: true },
 )
 </script>
 

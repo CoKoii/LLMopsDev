@@ -170,7 +170,6 @@ onMounted(loadKeys)
       <template #emptyText>
         <Empty description="暂无 API 密钥">
           <template #image><KeyRound :size="42" /></template>
-          <Button type="primary" @click="openCreate">新增密钥</Button>
         </Empty>
       </template>
       <template #bodyCell="{ column, record }">
