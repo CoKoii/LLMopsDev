@@ -171,6 +171,8 @@
   font-size: 1.4rem;
   line-height: 2rem;
   text-align: left;
+  white-space: pre-line;
+  word-break: break-word;
   cursor: pointer;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 5;
@@ -219,6 +221,12 @@
 .chunk-form label > span b {
   color: #ef4444;
   font-weight: 600;
+}
+
+.chunk-form__hint {
+  color: var(--font-light-color);
+  font-size: 1.2rem;
+  line-height: 1.8rem;
 }
 
 :global(.chunk-keywords-select .ant-select-suffix) {

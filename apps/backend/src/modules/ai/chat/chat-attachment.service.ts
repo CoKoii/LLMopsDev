@@ -1,13 +1,17 @@
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { createHash, randomUUID } from "node:crypto";
-import { Not, Repository } from "typeorm";
+import { In, Not, Repository } from "typeorm";
 import { FilesService } from "../../files/files.service";
 import { DocumentChunkerService } from "../knowledge/document-chunker/document-chunker.service";
+import { normalizeCjkText } from "../knowledge/cjk-normalize";
 import { DocumentCleanerService } from "../knowledge/document-cleaner/document-cleaner.service";
 import { DocumentEmbeddingService } from "../knowledge/document-embedding/document-embedding.service";
 import { DocumentParserService } from "../knowledge/document-parser/document-parser.service";
-import type { ParsedDocument } from "../knowledge/document-parser/document-parser.types";
+import type {
+  ParsedDocument,
+  ParsedDocumentBlock,
+} from "../knowledge/document-parser/document-parser.types";
 import { DocumentVectorStoreService } from "../knowledge/document-vector-store/document-vector-store.service";
 import {
   CHAT_ATTACHMENT_KIND,
@@ -21,6 +25,8 @@ import { ChatSession } from "./entities/chat-session.entity";
 
 const ATTACHMENT_RECALL_LIMIT = 8;
 const ATTACHMENT_RECALL_MIN_SCORE = 0.35;
+const ATTACHMENT_TEXT_RECALL_MIN_SCORE = 0.25;
+const ATTACHMENT_TEXT_RECALL_MAX_CHUNKS = 200;
 const ATTACHMENT_CONTEXT_MAX_CHARS = 9000;
 const ATTACHMENT_CHUNK_MAX_CHARS = 900;
 const CURRENT_ATTACHMENT_CONTEXT_MAX_CHARS = 12000;
@@ -28,6 +34,7 @@ const CURRENT_ATTACHMENT_CHUNK_MAX_CHARS = 1200;
 
 type AttachmentRecallItem = {
   id: number;
+  chunkId?: number;
   attachmentId: number;
   messageId: number;
   fileId: number;
@@ -65,6 +72,41 @@ type ReusableAttachmentDocument = {
 const compactText = (value: string, maxLength: number) => {
   const text = value.replace(/\s+/g, " ").trim();
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+};
+
+const normalizeAttachmentText = (value: string) =>
+  normalizeCjkText(value).toLowerCase().replace(/\s+/g, " ").trim();
+
+const extractAttachmentTerms = (query: string) => {
+  const normalizedQuery = normalizeAttachmentText(query);
+  const terms: string[] = [];
+
+  terms.push(
+    ...Array.from(
+      normalizedQuery.matchAll(/[a-z0-9][a-z0-9_./+@-]{1,}/g),
+      (match) => match[0],
+    ).filter((term) => /[a-z]/.test(term)),
+  );
+
+  for (const match of normalizedQuery.matchAll(/[\u3400-\u9fff]{2,}/g)) {
+    const segment = match[0];
+    for (let index = 0; index <= segment.length - 2; index += 1) {
+      terms.push(segment.slice(index, index + 2));
+    }
+  }
+
+  return [...new Set(terms)];
+};
+
+const getAttachmentTextMatchScore = (
+  queryTerms: string[],
+  searchText: string,
+  text: string,
+) => {
+  if (!queryTerms.length) return 0;
+  const haystack = normalizeAttachmentText(`${searchText} ${text}`);
+  const matched = queryTerms.filter((term) => haystack.includes(term)).length;
+  return Math.max(0, Math.min(1, matched / queryTerms.length));
 };
 
 const compactMetadata = (metadata: Record<string, unknown>) =>
@@ -151,62 +193,157 @@ export class ChatAttachmentService {
       return { context: "", items: [] as AttachmentRecallItem[] };
     }
 
-    const embeddingResult = await this.documentEmbeddingService.embed([
+    let items = await this.searchAttachmentVectors(
+      sessionId,
       queryText,
-    ]);
-    const vector = embeddingResult.vectors[0] ?? [];
-    const points =
-      await this.documentVectorStoreService.searchSessionAttachments({
+      options,
+    );
+    if (!items.length) {
+      items = await this.searchAttachmentText(sessionId, queryText, options);
+    }
+    if (!items.length) {
+      return { context: "", items };
+    }
+
+    await Promise.all(
+      items
+        .filter((item) => item.chunkId !== undefined)
+        .map((item) =>
+          this.chunkRepository.increment(
+            { id: item.chunkId! },
+            "recallCount",
+            1,
+          ),
+        ),
+    );
+
+    return {
+      context: this.buildAttachmentRecallContext(queryText, items),
+      items,
+    };
+  }
+
+  private async searchAttachmentVectors(
+    sessionId: number,
+    query: string,
+    options: { excludeMessageId?: number },
+  ): Promise<AttachmentRecallItem[]> {
+    let vector: number[] = [];
+    try {
+      const embeddingResult = await this.documentEmbeddingService.embed([
+        query,
+      ]);
+      vector = embeddingResult.vectors[0] ?? [];
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`附件向量召回不可用，降级为文本召回: ${message}`);
+      return [];
+    }
+    if (!vector.length) return [];
+
+    let points;
+    try {
+      points = await this.documentVectorStoreService.searchSessionAttachments({
         vector,
         sessionId,
         limit: ATTACHMENT_RECALL_LIMIT,
         scoreThreshold: ATTACHMENT_RECALL_MIN_SCORE,
         excludeMessageId: options.excludeMessageId,
       });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`附件向量检索失败，降级为文本召回: ${message}`);
+      return [];
+    }
 
-    const items = points.map((point, index) => ({
+    return points.map((point, index) => ({
       id: index + 1,
+      chunkId: point.payload.chunkId,
       attachmentId: point.payload.attachmentId,
       messageId: point.payload.messageId,
       fileId: point.payload.fileId,
       fileName: point.payload.fileName,
       displayLabel: point.payload.displayLabel,
       duplicateOfLabel: point.payload.duplicateOfLabel,
-      queries: [queryText],
+      queries: [query],
       chunkIndex: point.payload.chunkIndex,
       score: point.score,
       text: compactText(point.payload.text, 180),
     }));
+  }
 
-    if (items.length) {
-      await Promise.all(
-        points.map((point) =>
-          this.chunkRepository.increment(
-            { id: point.payload.chunkId },
-            "recallCount",
-            1,
-          ),
+  private async searchAttachmentText(
+    sessionId: number,
+    query: string,
+    options: { excludeMessageId?: number },
+  ): Promise<AttachmentRecallItem[]> {
+    const queryTerms = extractAttachmentTerms(query);
+    if (!queryTerms.length) return [];
+
+    const chunks = await this.chunkRepository.find({
+      where: {
+        sessionId,
+        enabled: true,
+        ...(options.excludeMessageId
+          ? { messageId: Not(options.excludeMessageId) }
+          : {}),
+      },
+      order: { id: "DESC" },
+      take: ATTACHMENT_TEXT_RECALL_MAX_CHUNKS,
+      relations: { attachment: true },
+    });
+    if (!chunks.length) return [];
+
+    return chunks
+      .map((chunk) => ({
+        chunk,
+        score: getAttachmentTextMatchScore(
+          queryTerms,
+          chunk.searchText,
+          chunk.text,
         ),
-      );
-    }
+      }))
+      .filter(({ score }) => score >= ATTACHMENT_TEXT_RECALL_MIN_SCORE)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, ATTACHMENT_RECALL_LIMIT)
+      .map(({ chunk, score }, index) => ({
+        id: index + 1,
+        chunkId: chunk.id,
+        attachmentId: chunk.attachmentId,
+        messageId: chunk.messageId,
+        fileId: chunk.attachment.fileId,
+        fileName: chunk.attachment.fileName,
+        displayLabel: chunk.attachment.displayLabel ?? undefined,
+        duplicateOfLabel:
+          getMetadataString(chunk.metadata, "duplicateOfLabel") ?? undefined,
+        queries: [query],
+        chunkIndex: chunk.chunkIndex,
+        score,
+        text: compactText(chunk.text, 180),
+      }));
+  }
 
+  private buildAttachmentRecallContext(
+    query: string,
+    items: AttachmentRecallItem[],
+  ) {
     let totalChars = 0;
     const contextParts: string[] = [];
-    for (const [index, point] of points.entries()) {
-      const text = compactText(point.payload.text, ATTACHMENT_CHUNK_MAX_CHARS);
+    for (const [index, item] of items.entries()) {
+      const text = compactText(item.text, ATTACHMENT_CHUNK_MAX_CHARS);
       if (!text || totalChars + text.length > ATTACHMENT_CONTEXT_MAX_CHARS) {
         break;
       }
       contextParts.push(
         [
-          `历史附件资料 ${index + 1}：${point.payload.displayLabel ?? point.payload.fileName}`,
-          `检索问题：${queryText}`,
-          `文件名：${point.payload.fileName}`,
-          point.payload.duplicateOfLabel
-            ? `重复关系：该附件与${point.payload.duplicateOfLabel}的文件内容完全相同。`
+          `历史附件资料 ${index + 1}：${item.displayLabel ?? item.fileName}`,
+          `检索问题：${query}`,
+          `文件名：${item.fileName}`,
+          item.duplicateOfLabel
+            ? `重复关系：该附件与${item.duplicateOfLabel}的文件内容完全相同。`
             : "",
-          `片段 #${point.payload.chunkIndex + 1}`,
-          `匹配度：${point.score}`,
+          `片段 #${item.chunkIndex + 1}`,
+          `匹配度：${item.score}`,
           `内容：${text}`,
         ]
           .filter(Boolean)
@@ -215,10 +352,7 @@ export class ChatAttachmentService {
       totalChars += text.length;
     }
 
-    return {
-      context: contextParts.join("\n\n"),
-      items,
-    };
+    return contextParts.join("\n\n");
   }
 
   async hasRecallableChunks(
@@ -235,6 +369,11 @@ export class ChatAttachmentService {
       },
     });
     return count > 0;
+  }
+
+  async deleteSessionAttachments(sessionId: number) {
+    await this.documentVectorStoreService.deleteSessionPoints(sessionId);
+    await this.chunkRepository.delete({ sessionId });
   }
 
   private async processOneAttachment(params: {
@@ -311,7 +450,7 @@ export class ChatAttachmentService {
           attachmentId: attachment.id,
         });
       }
-      const indexTokens = await this.indexAttachmentDocument({
+      await this.indexAttachmentDocument({
         attachment,
         session: params.session,
         message: params.message,
@@ -325,10 +464,7 @@ export class ChatAttachmentService {
         session: params.session,
         message: params.message,
         duplicateOfLabel: duplicatedContent?.label,
-        tokens:
-          document.metadata.tokens !== undefined
-            ? document.metadata.tokens + (indexTokens ?? 0)
-            : undefined,
+        tokens: document.metadata.tokens,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -364,32 +500,39 @@ export class ChatAttachmentService {
     const text = source?.extractedText?.trim();
     if (!source || !text) return undefined;
 
+    // 复用完整清洗后的分块结构，避免退化为单块文本导致分块质量下降。
+    const storedBlocks = Array.isArray(source.metadata?.cleanedBlocks)
+      ? (source.metadata.cleanedBlocks as ParsedDocumentBlock[])
+      : undefined;
+
     return {
       sourceAttachmentId: source.id,
       document: {
         title: params.filename,
-        format: params.kind,
+        format: getMetadataString(source.metadata, "format") ?? params.kind,
         contentType: params.contentType,
         text,
         characterCount: text.length,
-        blocks: [
-          {
-            id: randomUUID(),
-            type: "paragraph",
-            text,
-            metadata: {
-              parser:
-                getMetadataString(source.metadata, "parser") ??
-                "reused-chat-attachment",
-              reusedFromAttachmentId: source.id,
-            },
-          },
-        ],
+        blocks: storedBlocks?.length
+          ? storedBlocks
+          : [
+              {
+                id: randomUUID(),
+                type: "paragraph",
+                text,
+                metadata: {
+                  parser:
+                    getMetadataString(source.metadata, "parser") ??
+                    "reused-chat-attachment",
+                  reusedFromAttachmentId: source.id,
+                },
+              },
+            ],
         metadata: {
           parser:
             getMetadataString(source.metadata, "parser") ??
             "reused-chat-attachment",
-          blockCount: 1,
+          blockCount: storedBlocks?.length ?? 1,
         },
       },
     };
@@ -403,7 +546,7 @@ export class ChatAttachmentService {
     userId: number;
     duplicateOfLabel?: string;
     reusedFromAttachmentId?: number;
-  }): Promise<number | undefined> {
+  }): Promise<void> {
     const cleaned = this.documentCleanerService.clean(params.document).document;
     const chunks = this.documentChunkerService.createChunks({
       knowledgeId: 0,
@@ -412,83 +555,142 @@ export class ChatAttachmentService {
       contentType: params.attachment.contentType,
       document: cleaned,
     });
-    const embeddingResult = await this.documentEmbeddingService.embed(
-      chunks.map((chunk) => chunk.embeddingText),
-    );
-    await this.documentVectorStoreService.ensureCollection(
-      embeddingResult.dimension,
-    );
-    const savedChunks = await this.chunkRepository.save(
-      chunks.map((chunk) =>
-        this.chunkRepository.create({
-          sessionId: params.session.id,
-          messageId: params.message.id,
-          attachmentId: params.attachment.id,
-          chunkIndex: chunk.chunkIndex,
-          text: chunk.text,
-          searchText: chunk.searchText,
-          tokenCount: chunk.tokenCount,
-          characterCount: chunk.characterCount,
-          recallCount: 0,
-          enabled: true,
-          embeddingModel: embeddingResult.model,
-          embeddingDimension: embeddingResult.dimension,
-          vectorId: randomUUID(),
-          metadata: {
-            ...chunk.metadata,
+    const duplicateOfAttachmentId =
+      params.attachment.duplicateOfAttachmentId ?? undefined;
+    const chunkMetadata = (chunk: (typeof chunks)[number]) => ({
+      ...chunk.metadata,
+      sessionId: params.session.id,
+      messageId: params.message.id,
+      attachmentId: params.attachment.id,
+      fileId: params.attachment.fileId,
+      displayOrder: params.attachment.displayOrder,
+      kindOrder: params.attachment.kindOrder,
+      displayLabel: params.attachment.displayLabel,
+      contentHash: params.attachment.contentHash,
+      duplicateOfAttachmentId: params.attachment.duplicateOfAttachmentId,
+      duplicateOfLabel: params.duplicateOfLabel,
+    });
+
+    let embeddingResult:
+      | Awaited<ReturnType<DocumentEmbeddingService["embed"]>>
+      | undefined;
+    let savedChunks: ChatAttachmentChunk[] | undefined;
+    let vectorUpserted = false;
+    let indexingError: string | undefined;
+
+    try {
+      embeddingResult = await this.documentEmbeddingService.embed(
+        chunks.map((chunk) => chunk.embeddingText),
+      );
+      if (!embeddingResult.dimension) {
+        throw new Error("embedding 返回空维度");
+      }
+      await this.documentVectorStoreService.ensureCollection(
+        embeddingResult.dimension,
+      );
+      savedChunks = await this.chunkRepository.save(
+        chunks.map((chunk) =>
+          this.chunkRepository.create({
             sessionId: params.session.id,
             messageId: params.message.id,
             attachmentId: params.attachment.id,
-            fileId: params.attachment.fileId,
-            displayOrder: params.attachment.displayOrder,
-            kindOrder: params.attachment.kindOrder,
-            displayLabel: params.attachment.displayLabel,
-            contentHash: params.attachment.contentHash,
-            duplicateOfAttachmentId: params.attachment.duplicateOfAttachmentId,
-            duplicateOfLabel: params.duplicateOfLabel,
-          },
-          createdBy: params.userId,
-          updatedBy: params.userId,
-        }),
-      ),
-    );
-    const duplicateOfAttachmentId =
-      params.attachment.duplicateOfAttachmentId ?? undefined;
-    await this.documentVectorStoreService.upsert(
-      savedChunks.map((chunk, index) => ({
-        id: chunk.vectorId,
-        vector: embeddingResult.vectors[index] ?? [],
-        payload: {
-          source: "chat_attachment",
-          sessionId: chunk.sessionId,
-          messageId: chunk.messageId,
-          attachmentId: chunk.attachmentId,
-          fileId: params.attachment.fileId,
-          fileName: params.attachment.fileName,
-          kind: params.attachment.kind,
-          displayOrder: params.attachment.displayOrder,
-          kindOrder: params.attachment.kindOrder,
-          displayLabel: params.attachment.displayLabel ?? undefined,
-          contentHash: params.attachment.contentHash ?? undefined,
-          duplicateOfAttachmentId,
-          duplicateOfLabel: params.duplicateOfLabel,
-          chunkId: chunk.id,
-          chunkIndex: chunk.chunkIndex,
-          text: chunk.text,
-          searchText: chunk.searchText,
-          enabled: chunk.enabled,
-          metadata: chunk.metadata,
-        },
-      })),
-    );
+            chunkIndex: chunk.chunkIndex,
+            text: chunk.text,
+            searchText: chunk.searchText,
+            tokenCount: chunk.tokenCount,
+            characterCount: chunk.characterCount,
+            recallCount: 0,
+            enabled: true,
+            embeddingModel: embeddingResult!.model,
+            embeddingDimension: embeddingResult!.dimension,
+            vectorId: randomUUID(),
+            metadata: chunkMetadata(chunk),
+            createdBy: params.userId,
+            updatedBy: params.userId,
+          }),
+        ),
+      );
+      try {
+        await this.documentVectorStoreService.upsert(
+          savedChunks.map((chunk, index) => ({
+            id: chunk.vectorId,
+            vector: embeddingResult!.vectors[index] ?? [],
+            payload: {
+              source: "chat_attachment",
+              sessionId: chunk.sessionId,
+              messageId: chunk.messageId,
+              attachmentId: chunk.attachmentId,
+              fileId: params.attachment.fileId,
+              fileName: params.attachment.fileName,
+              kind: params.attachment.kind,
+              displayOrder: params.attachment.displayOrder,
+              kindOrder: params.attachment.kindOrder,
+              displayLabel: params.attachment.displayLabel ?? undefined,
+              contentHash: params.attachment.contentHash ?? undefined,
+              duplicateOfAttachmentId,
+              duplicateOfLabel: params.duplicateOfLabel,
+              chunkId: chunk.id,
+              chunkIndex: chunk.chunkIndex,
+              text: chunk.text,
+              searchText: chunk.searchText,
+              enabled: chunk.enabled,
+              metadata: chunk.metadata,
+            },
+          })),
+        );
+        vectorUpserted = true;
+      } catch (error) {
+        await this.chunkRepository.delete({
+          id: In(savedChunks.map((chunk) => chunk.id)),
+        });
+        savedChunks = undefined;
+        throw error;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `附件向量索引失败，降级为纯文本 fileId=${params.attachment.fileId}: ${message}`,
+      );
+      indexingError = message;
+      // 向量链路不可用时仅保存分块文本：本轮上下文仍可引用，历史召回走文本降级。
+      savedChunks = await this.chunkRepository.save(
+        chunks.map((chunk) =>
+          this.chunkRepository.create({
+            sessionId: params.session.id,
+            messageId: params.message.id,
+            attachmentId: params.attachment.id,
+            chunkIndex: chunk.chunkIndex,
+            text: chunk.text,
+            searchText: chunk.searchText,
+            tokenCount: chunk.tokenCount,
+            characterCount: chunk.characterCount,
+            recallCount: 0,
+            enabled: true,
+            embeddingModel: "",
+            embeddingDimension: 0,
+            vectorId: "",
+            metadata: chunkMetadata(chunk),
+            createdBy: params.userId,
+            updatedBy: params.userId,
+          }),
+        ),
+      );
+    }
 
     const attachmentMetadata = compactMetadata({
       parser: params.document.metadata.parser,
       blockCount: params.document.metadata.blockCount,
-      chunkCount: savedChunks.length,
+      chunkCount: savedChunks?.length ?? 0,
       format: params.document.format,
-      embeddingModel: embeddingResult.model,
-      embeddingDimension: embeddingResult.dimension,
+      cleanedBlocks: cleaned.blocks,
+      ...(embeddingResult
+        ? {
+            embeddingModel: embeddingResult.model,
+            embeddingDimension: embeddingResult.dimension,
+          }
+        : {}),
+      indexed: vectorUpserted,
+      indexingError,
       displayLabel: params.attachment.displayLabel,
       displayOrder: params.attachment.displayOrder,
       kindOrder: params.attachment.kindOrder,
@@ -507,8 +709,6 @@ export class ChatAttachmentService {
       metadata: attachmentMetadata,
       updatedBy: params.userId,
     });
-
-    return undefined;
   }
 
   private async createCurrentAttachmentContext(params: {

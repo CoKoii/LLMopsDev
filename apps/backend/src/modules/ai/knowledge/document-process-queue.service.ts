@@ -17,6 +17,11 @@ const JOB_RETENTION = {
   age: 3600,
   count: 1000,
 };
+const JOB_ATTEMPTS = 3;
+const JOB_BACKOFF = {
+  type: "exponential" as const,
+  delay: 3000,
+};
 
 @Injectable()
 export class DocumentProcessQueueService
@@ -56,6 +61,8 @@ export class DocumentProcessQueueService
 
     await queue.add(KNOWLEDGE_DOCUMENT_PROCESS_JOB, data, {
       jobId,
+      attempts: JOB_ATTEMPTS,
+      backoff: JOB_BACKOFF,
       removeOnComplete: JOB_RETENTION,
       removeOnFail: JOB_RETENTION,
     });

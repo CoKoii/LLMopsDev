@@ -8,13 +8,14 @@ import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
 import { Segment, useDefault } from "segmentit";
 import { DataSource, In, Repository } from "typeorm";
 import { DocumentEmbeddingService } from "./document-embedding/document-embedding.service";
+import { normalizeCjkText } from "./cjk-normalize";
 import { DocumentRerankService } from "./document-rerank/document-rerank.service";
 import { DocumentVectorStoreService } from "./document-vector-store/document-vector-store.service";
-import type { DocumentChunkMetadata } from "./document-chunker/document-chunker.types";
 import { RecallTestDto } from "./dto/recall-test.dto";
 import { KnowledgeDocumentChunk } from "./entities/knowledge-document-chunk.entity";
 import { KnowledgeDocument } from "./entities/knowledge-document.entity";
 import { Knowledge } from "./entities/knowledge.entity";
+import { estimateTokens } from "./token-estimator";
 
 type KnowledgeRecallStrategy = "hybrid" | "vector" | "text";
 
@@ -107,8 +108,16 @@ const segmenter = useDefault(new Segment());
 const clampScore = (score: number) =>
   Math.max(0, Math.min(1, Number(score.toFixed(4))));
 
+const getRecallItemRankScore = (item: {
+  score: number;
+  rerankScore?: number;
+}) =>
+  item.rerankScore === undefined
+    ? item.score
+    : clampScore(item.rerankScore * 0.75 + item.score * 0.25);
+
 const normalizeRecallText = (value: string) =>
-  value.toLowerCase().replace(/\s+/g, " ").trim();
+  normalizeCjkText(value).toLowerCase().replace(/\s+/g, " ").trim();
 
 const uniqueStrings = (items: string[]) => [...new Set(items)];
 
@@ -124,9 +133,9 @@ const extractRecallTerms = (query: string) => {
 
   terms.push(
     ...Array.from(
-      normalizedQuery.matchAll(/[A-Za-z][A-Za-z0-9_./+-]{1,}/g),
+      normalizedQuery.matchAll(/[A-Za-z0-9][A-Za-z0-9_./+@-]{1,}/g),
       (match) => match[0].toLowerCase(),
-    ),
+    ).filter((term) => /[a-z]/.test(term)),
   );
 
   terms.push(
@@ -322,9 +331,18 @@ export class KnowledgeRecallService implements OnModuleInit {
     const needsQueryVector =
       accessibleKnowledgeIds.length > 0 &&
       (strategy === "hybrid" || strategy === "vector");
-    const queryEmbedding = needsQueryVector
-      ? await this.createQueryEmbedding(query)
-      : undefined;
+    let effectiveSettings = params.settings;
+    let queryEmbedding: { vector: number[] } | undefined;
+    if (needsQueryVector) {
+      try {
+        queryEmbedding = await this.createQueryEmbedding(query);
+      } catch (error) {
+        if (strategy === "vector") throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`向量召回不可用，降级为文本召回: ${message}`);
+        effectiveSettings = { ...params.settings, strategy: "text" };
+      }
+    }
     const results = (
       await Promise.all(
         accessibleKnowledgeIds.map(async (knowledgeId) => {
@@ -334,7 +352,7 @@ export class KnowledgeRecallService implements OnModuleInit {
           const recallResult = await this.executeRecall(
             knowledgeId,
             query,
-            params.settings,
+            effectiveSettings,
             { queryVector: queryEmbedding?.vector },
           );
           this.scheduleRecallCountIncrement(knowledgeId, recallResult.items);
@@ -350,8 +368,12 @@ export class KnowledgeRecallService implements OnModuleInit {
 
     return {
       items: results
-        .sort((left, right) => right.score - left.score)
+        .sort(
+          (left, right) =>
+            getRecallItemRankScore(right) - getRecallItemRankScore(left),
+        )
         .slice(0, limit),
+      tokens: queryEmbedding ? estimateTokens(query) : undefined,
     };
   }
 
@@ -400,17 +422,7 @@ export class KnowledgeRecallService implements OnModuleInit {
             $3::text[] AS trigram_terms
         )
         SELECT
-          chunk.id AS "chunkId",
-          GREATEST(
-            ts_rank_cd(
-              to_tsvector('simple', COALESCE(chunk."searchText", '') || ' ' || COALESCE(chunk."text", '')),
-              search_input.ts_query
-            ),
-            COALESCE((
-              SELECT MAX(similarity(LOWER(chunk."searchText"), term))
-              FROM unnest(search_input.trigram_terms) AS terms(term)
-            ), 0)
-          ) AS "score"
+          chunk.id AS "chunkId"
         FROM "ai_knowledge_document_chunks" chunk
         INNER JOIN "ai_knowledge_documents" document
           ON document.id = chunk."documentId"
@@ -418,15 +430,72 @@ export class KnowledgeRecallService implements OnModuleInit {
         WHERE chunk."knowledgeId" = $1
           AND chunk.enabled = true
           AND document.enabled = true
-          AND (
-            to_tsvector('simple', COALESCE(chunk."searchText", '') || ' ' || COALESCE(chunk."text", '')) @@ search_input.ts_query
-            OR EXISTS (
-              SELECT 1
-              FROM unnest(search_input.trigram_terms) AS terms(term)
-              WHERE LOWER(chunk."searchText") % term
-            )
+        AND (
+          to_tsvector('simple', COALESCE(chunk."searchText", '') || ' ' || COALESCE(chunk."text", '')) @@ search_input.ts_query
+          OR EXISTS (
+            SELECT 1
+            FROM unnest(search_input.trigram_terms) AS terms(term)
+            WHERE LOWER(chunk."searchText") % term
+              OR POSITION(term IN LOWER(chunk."searchText")) > 0
           )
-        ORDER BY "score" DESC, chunk.id DESC
+          OR EXISTS (
+            SELECT 1
+            FROM unnest(search_input.trigram_terms) AS terms(term)
+            WHERE POSITION(
+              term IN LOWER(COALESCE(chunk.metadata->>'keywords', ''))
+            ) > 0
+          )
+        )
+        ORDER BY
+          (
+            CASE
+              WHEN to_tsvector('simple', COALESCE(chunk."searchText", '') || ' ' || COALESCE(chunk."text", '')) @@ search_input.ts_query
+              THEN ts_rank_cd(
+                to_tsvector('simple', COALESCE(chunk."searchText", '') || ' ' || COALESCE(chunk."text", '')),
+                search_input.ts_query
+              )
+              ELSE 0
+            END
+          )
+          + (
+            CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM unnest(search_input.trigram_terms) AS terms(term)
+                WHERE LOWER(chunk."searchText") % term
+                  OR POSITION(term IN LOWER(chunk."searchText")) > 0
+              )
+              THEN 0.15
+              ELSE 0
+            END
+          )
+          + (
+            CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM unnest(search_input.trigram_terms) AS terms(term)
+                WHERE POSITION(
+                  term IN LOWER(COALESCE(chunk.metadata->>'keywords', ''))
+                ) > 0
+              )
+              THEN 0.3
+              ELSE 0
+            END
+          )
+          + (
+            CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM unnest(search_input.trigram_terms) AS terms(term)
+                WHERE POSITION(
+                  term IN LOWER(COALESCE(chunk.metadata->>'documentKeywords', ''))
+                ) > 0
+              )
+              THEN 0.1
+              ELSE 0
+            END
+          ) DESC,
+          chunk.id DESC
         LIMIT $4
       `,
       [
@@ -558,7 +627,7 @@ export class KnowledgeRecallService implements OnModuleInit {
   private buildCandidateWeightedTexts(
     candidate: RecallCandidate,
   ): WeightedRecallText[] {
-    const metadata = candidate.chunk.metadata as DocumentChunkMetadata;
+    const metadata = candidate.chunk.metadata;
 
     return [
       { text: candidate.chunk.document.name, boost: 1.15 },
@@ -638,7 +707,7 @@ export class KnowledgeRecallService implements OnModuleInit {
     const sectionMap = new Map<string, RecallCandidate>();
 
     for (const candidate of candidates) {
-      const metadata = candidate.chunk.metadata as DocumentChunkMetadata;
+      const metadata = candidate.chunk.metadata;
       const sectionKey = [
         candidate.chunk.documentId,
         metadata.sectionId ?? `chunk-${candidate.chunk.id}`,
@@ -656,7 +725,7 @@ export class KnowledgeRecallService implements OnModuleInit {
   }
 
   private getChunkHeadingPath(chunk: KnowledgeDocumentChunk) {
-    const metadata = chunk.metadata as DocumentChunkMetadata;
+    const metadata = chunk.metadata;
     const headingPath = metadata.sectionHeadingPath?.length
       ? metadata.sectionHeadingPath
       : metadata.headingPath;

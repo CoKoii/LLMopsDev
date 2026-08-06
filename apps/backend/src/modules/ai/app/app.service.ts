@@ -23,6 +23,8 @@ import {
   type AiAppVersionConfig,
   AiAppVersionStatus,
 } from "./entities/app-version.entity";
+import { ChatSession } from "../chat/entities/chat-session.entity";
+import { ChatUserMemory } from "../chat/entities/chat-user-memory.entity";
 import { AiAppCategory } from "./entities/app-category.entity";
 import { AiApp } from "./entities/app.entity";
 
@@ -676,6 +678,7 @@ export class AppService {
     if (app.createdBy !== userId && !app.published) {
       throw new ForbiddenException("无权访问该应用");
     }
+    if (!app.status) throw new ForbiddenException("AI应用已停用");
 
     const version = await this.getBoundPublishedVersion(app);
     if (!version) throw new NotFoundException("应用尚未保存版本");
@@ -828,6 +831,8 @@ export class AppService {
       where: { id, createdBy: userId },
     });
     if (!app) throw new NotFoundException("AI应用不存在");
+    await this.dataSource.getRepository(ChatSession).delete({ appId: id });
+    await this.dataSource.getRepository(ChatUserMemory).delete({ appId: id });
     await this.appRepository.softRemove(app);
     return { success: true };
   }

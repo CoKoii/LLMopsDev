@@ -76,6 +76,8 @@ const KNOWLEDGE_QUERY_REWRITE_SYSTEM_PROMPT = [
   "- 当上文对象是登录接口，用户追问“它成功后返回什么”时，将“它”替换为“登录接口”。",
   "- 当用户同时询问“登录接口是什么，字体子集化如何实现”时，识别为两个独立检索意图。",
 ].join("\n");
+const QUERY_REWRITE_FAST_PATH_MAX_LENGTH = 40;
+const QUERY_REWRITE_MULTI_QUESTION_MARKERS = ["、", "；", ";", "以及"];
 const QuestionSuggestionsSchema = z
   .object({
     suggestions: z
@@ -319,6 +321,13 @@ export class ChatService {
     return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
   }
 
+  // 分块文本携带“标题路径”标注，压缩进对话上下文时剥离：
+  // 章节信息已由“章节”字段单独提供，避免重复占用上下文。
+  private stripChunkTextLabels(value: string) {
+    const match = /^标题路径:[\s\S]*?\n\n内容:\s*/.exec(value);
+    return match ? value.slice(match[0].length) : value;
+  }
+
   private encodeSpeechAudioChunk(chunk: SpeechAudioChunk) {
     return {
       contentType: chunk.contentType,
@@ -454,6 +463,16 @@ export class ChatService {
     const fallback = message.trim();
     if (!fallback) return [];
 
+    if (
+      this.shouldSkipKnowledgeQueryRewrite(
+        fallback,
+        history,
+        currentAttachmentContext,
+      )
+    ) {
+      return [fallback];
+    }
+
     try {
       const model = await this.createStructuredOutputModel();
       const structuredModel = model.withStructuredOutput(
@@ -488,6 +507,26 @@ export class ChatService {
       this.logger.warn(`知识库检索问题改写失败，使用原问题检索: ${warning}`);
       return [fallback];
     }
+  }
+
+  private shouldSkipKnowledgeQueryRewrite(
+    message: string,
+    history: ChatMessage[] = [],
+    currentAttachmentContext = "",
+  ) {
+    // 无历史、无附件、且问题短且自包含时，改写模型只会原样返回，
+    // 直接跳过可省去一次结构化模型调用（约 1-2s 延迟）。
+    if (history.length || currentAttachmentContext) return false;
+    if (message.length > QUERY_REWRITE_FAST_PATH_MAX_LENGTH) return false;
+    if (
+      QUERY_REWRITE_MULTI_QUESTION_MARKERS.some((marker) =>
+        message.includes(marker),
+      )
+    ) {
+      return false;
+    }
+    if ((message.match(/[?？]/g) ?? []).length >= 2) return false;
+    return true;
   }
 
   private resolveKnowledgeConfig(config: AiAppVersionConfig): KnowledgeConfig {
@@ -572,7 +611,10 @@ export class ChatService {
     for (const item of uniqueItems) {
       if (citations.length >= maxItems) break;
 
-      const text = this.compactText(item.text, maxItemChars);
+      const text = this.compactText(
+        this.stripChunkTextLabels(item.text),
+        maxItemChars,
+      );
       if (!text || totalChars + text.length > maxTotalChars) break;
 
       const citationId = citations.length + 1;
@@ -754,7 +796,7 @@ export class ChatService {
 
       if (!toolCalls.length) {
         const answer = this.getMessageText(aiMessage.content).trim();
-        if (answer && !hasExecutedTools) {
+        if (answer) {
           yield { type: "result", result: { answer, messages } };
           return;
         }
@@ -1500,6 +1542,7 @@ export class ChatService {
       sessionId,
       userId,
     );
+    await this.chatAttachmentService.deleteSessionAttachments(session.id);
     await this.sessionRepository.delete(session.id);
     return { id: session.id };
   }

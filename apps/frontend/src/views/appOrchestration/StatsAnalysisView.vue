@@ -1,12 +1,6 @@
 <script setup lang="ts">
 import { getAiAppStatsApi, type AiAppStats } from '@/api'
-import {
-  BotMessageSquare,
-  Gauge,
-  Hash,
-  RefreshCw,
-  UsersRound,
-} from '@lucide/vue'
+import { BotMessageSquare, Gauge, Hash, RefreshCw, UsersRound } from '@lucide/vue'
 import { Button, Spin, message } from 'antdv-next'
 import * as echarts from 'echarts'
 import type { EChartsOption } from 'echarts'
@@ -390,7 +384,9 @@ watch([() => props.appId, rangeDays], () => {
           <div v-if="!recentMessages.length" class="stats-table__empty">暂无数据</div>
           <div v-for="item in recentMessages" :key="item.id" class="stats-table__row">
             <span>{{ formatDate(item.createdAt) }}</span>
-            <span>{{ item.mode === 'debug' ? '调试' : '独立页' }}</span>
+            <span>{{
+              item.mode === 'debug' ? '调试' : item.mode === 'openapi' ? 'API' : '独立页'
+            }}</span>
             <span>{{ item.title }}</span>
             <span>{{ formatTokenSpeed(item.tokensPerSecond) }}</span>
             <strong>{{ formatNumber(item.tokens) }}</strong>

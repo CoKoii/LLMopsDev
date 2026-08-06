@@ -41,6 +41,8 @@ export interface DocumentChunkMetadata {
   };
   overlapFromPrevious: boolean;
   keywords: string[];
+  /** 文档级关键词（enhance 阶段生成），用于检索加权，编辑片段时不可改 */
+  documentKeywords?: string[];
 }
 
 export interface DocumentChunkDraft {

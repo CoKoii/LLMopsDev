@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
+import { normalizeCjkText } from "../cjk-normalize";
 import type {
   ParsedDocumentBlock,
   ParsedDocumentBlockType,
@@ -31,7 +32,6 @@ interface DocumentSection {
   units: ParagraphUnit[];
   sourceBlockIds: string[];
   tokenCount: number;
-  anchorText: string;
 }
 
 interface ChunkGroup {
@@ -45,7 +45,6 @@ const DEFAULT_MAX_TOKENS = 700;
 const MIN_CHUNK_TOKENS = 160;
 const OVERLAP_TOKENS = 80;
 const SECTION_SINGLE_CHUNK_MULTIPLIER = 1.45;
-const SECTION_CONTEXT_TOKENS = 220;
 
 const PRESERVE_FORMAT_TYPES = new Set<ParsedDocumentBlockType>([
   "code",
@@ -56,6 +55,55 @@ const PRESERVE_FORMAT_TYPES = new Set<ParsedDocumentBlockType>([
 const unique = <T>(items: T[]) => Array.from(new Set(items));
 
 const compact = (value: string) => value.replace(/\s+/g, " ").trim();
+
+const stripFileExtension = (value: string) =>
+  value.replace(/\.[^.\\/]+$/, "").trim();
+
+const toMarkdownHeadingPath = (headingPath: string[]) =>
+  headingPath
+    .map(
+      (item, index) => `${"#".repeat(Math.min(6, index + 1))} ${compact(item)}`,
+    )
+    .join("\n");
+
+// 每个分块都带“标题路径 + 内容”的层级标注：
+// 无标题文档（纯文本/CSV 等）以文档标题作为一级标题兜底，保证所有格式都有层级上下文。
+const buildChunkText = (headingPath: string[], content: string) =>
+  normalizeCjkText(
+    [
+      headingPath.length
+        ? `标题路径:\n${toMarkdownHeadingPath(headingPath)}`
+        : "",
+      `内容:\n${content}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+  );
+
+// 超长章节按句切分时，合并单元可能以标题文本开头（标题与正文同属一个单元），
+// 标题已由“标题路径”标注，避免在“内容”中重复。
+const stripLeadingHeading = (content: string, headingPath: string[]) => {
+  const lastHeading = headingPath[headingPath.length - 1];
+  if (!lastHeading) return content;
+
+  const headingText = compact(lastHeading);
+  const contentText = compact(content);
+  if (!headingText) return content;
+
+  // 兼容“# 标题”与纯标题两种单元文本形式
+  const markdownHeading = `# ${headingText}`;
+  const prefix = contentText.startsWith(markdownHeading)
+    ? markdownHeading
+    : contentText.startsWith(headingText)
+      ? headingText
+      : "";
+  if (!prefix) return content;
+
+  return contentText
+    .slice(prefix.length)
+    .replace(/^[\s:：\-—]+/, "")
+    .trim();
+};
 
 const normalizePreservedText = (value: string) =>
   value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
@@ -115,12 +163,20 @@ const normalizeBlockText = (block: ParsedDocumentBlock) => {
   return normalizeFlowText(block.text);
 };
 
+const headingToMarkdown = (block: ParsedDocumentBlock) => {
+  const level = Math.max(1, block.level ?? 1);
+  return `${"#".repeat(level)} ${normalizeFlowText(block.text)}`;
+};
+
 const blockToUnit = (
   block: ParsedDocumentBlock,
   headingPath: string[],
   orderIndex: number,
 ): ParagraphUnit | undefined => {
-  const text = normalizeBlockText(block);
+  const text =
+    block.type === "heading"
+      ? headingToMarkdown(block)
+      : normalizeBlockText(block);
   if (!text) return undefined;
 
   return {
@@ -361,42 +417,8 @@ const splitOversizedUnit = (
   );
 };
 
-const appendWithinTokenLimit = (
-  base: string,
-  next: string,
-  tokenLimit: number,
-) => {
-  const candidate = [base, next].filter(Boolean).join("\n\n");
-  return estimateTokens(candidate) <= tokenLimit ? candidate : base;
-};
-
-const createAnchorText = (headingPath: string[], units: ParagraphUnit[]) => {
-  let anchor = headingPath.join(" > ");
-
-  for (const unit of units) {
-    if (unit.blockTypes.some((type) => type === "code" || type === "json")) {
-      continue;
-    }
-    const text = compact(unit.text);
-    if (!text || headingPath.includes(text)) continue;
-
-    const nextAnchor = appendWithinTokenLimit(
-      anchor,
-      text,
-      SECTION_CONTEXT_TOKENS,
-    );
-    if (nextAnchor === anchor) break;
-    anchor = nextAnchor;
-  }
-
-  return anchor.trim();
-};
-
 const finalizeSection = (
-  section: Omit<
-    DocumentSection,
-    "anchorText" | "sourceBlockIds" | "tokenCount"
-  >,
+  section: Omit<DocumentSection, "sourceBlockIds" | "tokenCount">,
 ): DocumentSection => {
   const sourceBlockIds = unique(
     section.units.flatMap((unit) => unit.sourceBlockIds),
@@ -407,7 +429,6 @@ const finalizeSection = (
     ...section,
     sourceBlockIds,
     tokenCount: estimateTokens(text),
-    anchorText: createAnchorText(section.headingPath, section.units),
   };
 };
 
@@ -451,14 +472,6 @@ const uniqueTextParts = (parts: string[]) => {
   });
 };
 
-const contextualizeText = (section: DocumentSection, text: string) => {
-  const context = section.anchorText;
-  if (!context) return text;
-  if (compact(text).startsWith(compact(context))) return text;
-
-  return [context, text].join("\n\n");
-};
-
 @Injectable()
 export class DocumentChunkerService {
   createChunks(input: DocumentChunkerInput): DocumentChunkDraft[] {
@@ -482,10 +495,7 @@ export class DocumentChunkerService {
     let headingPath: string[] = [];
     let nextOrderIndex = 0;
     const sections: DocumentSection[] = [];
-    let current: Omit<
-      DocumentSection,
-      "anchorText" | "sourceBlockIds" | "tokenCount"
-    > = {
+    let current: Omit<DocumentSection, "sourceBlockIds" | "tokenCount"> = {
       id: "section-1",
       index: 0,
       headingPath: [],
@@ -590,8 +600,17 @@ export class DocumentChunkerService {
       if (shouldMerge) {
         current.push(unit);
       } else {
-        groups.push({ units: current });
-        current = [unit];
+        // 仅含标题的组（如“前 言”后紧跟超长段落无法合并）不单独成块：
+        // 标题并入下一组开头，避免产生没有正文的孤立标题分块。
+        const headingOnly = current.every((item) =>
+          item.blockTypes.every((type) => type === "heading"),
+        );
+        if (headingOnly && !unit.breakBefore) {
+          current.push(unit);
+        } else {
+          groups.push({ units: current });
+          current = [unit];
+        }
       }
     }
 
@@ -609,18 +628,35 @@ export class DocumentChunkerService {
       const merged = mergeUnits(group.units);
       const previousText = chunks[chunks.length - 1]?.text;
       const overlap = previousText ? overlapTail(previousText) : "";
-      const contextualized =
-        group.sectionChunkCount > 1 || group.section.headingPath.length > 1;
-      const text = contextualized
-        ? contextualizeText(group.section, merged.text)
-        : merged.text;
-      const indexText = uniqueTextParts([
-        overlap,
-        group.section.anchorText,
-        text,
-      ]).join("\n\n");
+      // 每个分块都带“标题路径 + 内容”标注；无标题文档以文档标题作为一级标题兜底。
+      const documentRootTitle = stripFileExtension(
+        input.document.title || input.documentName,
+      );
+      const effectiveHeadingPath =
+        merged.headingPath.length > 0
+          ? merged.headingPath
+          : [documentRootTitle].filter(Boolean);
+      // 章节起始标题已由“标题路径”标注，不再重复出现在“内容”；
+      // 内容中间的层级子标题保留，避免丢失小节信息。
+      let seenContent = false;
+      const contentUnits = group.units.filter((unit) => {
+        const headingOnly = unit.blockTypes.every((type) => type === "heading");
+        if (!headingOnly) {
+          seenContent = true;
+          return true;
+        }
+        return seenContent;
+      });
+      const rawContent = contentUnits.map((unit) => unit.text).join("\n\n");
+      const contentText =
+        stripLeadingHeading(rawContent || merged.text, merged.headingPath) ||
+        merged.text;
+      const text = buildChunkText(effectiveHeadingPath, contentText);
+      const indexText = normalizeCjkText(
+        uniqueTextParts([overlap, text]).join("\n\n"),
+      );
       const chunkIndex = chunks.length;
-      const keywords = extractChunkKeywords(text, merged.headingPath);
+      const keywords = extractChunkKeywords(contentText, merged.headingPath);
       const metadata: DocumentChunkMetadata = {
         knowledgeId: input.knowledgeId,
         documentId: input.documentId,
@@ -637,7 +673,6 @@ export class DocumentChunkerService {
         sectionTokenCount: group.section.tokenCount,
         sectionChunkIndex: group.sectionChunkIndex,
         sectionChunkCount: group.sectionChunkCount,
-        contextualized,
         headingPath: merged.headingPath,
         sourceBlockIds: merged.sourceBlockIds,
         blockTypes: merged.blockTypes,

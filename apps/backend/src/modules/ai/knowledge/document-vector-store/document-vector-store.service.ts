@@ -120,6 +120,13 @@ export class DocumentVectorStoreService {
     ]);
   }
 
+  async deleteSessionPoints(sessionId: number) {
+    await this.deleteByFilter([
+      { key: "source", match: { value: "chat_attachment" } },
+      { key: "sessionId", match: { value: sessionId } },
+    ]);
+  }
+
   async search(params: {
     vector: number[];
     knowledgeId: number;
@@ -132,7 +139,10 @@ export class DocumentVectorStoreService {
       vector: params.vector,
       limit: params.limit,
       scoreThreshold: params.scoreThreshold,
-      must: [{ key: "knowledgeId", match: { value: params.knowledgeId } }],
+      must: [
+        { key: "knowledgeId", match: { value: params.knowledgeId } },
+        { key: "enabled", match: { value: true } },
+      ],
     });
   }
 

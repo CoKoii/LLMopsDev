@@ -29,11 +29,11 @@ const SESSION_SUMMARY_PROMPT = [
   "删除寒暄、重复内容和无效过程。不要编造。",
 ].join("\n");
 const LONG_TERM_MEMORY_PROMPT = [
-  "你负责从会话摘要中抽取长期记忆。",
-  "只保留未来对这个 AI 应用服务该用户仍然有帮助的稳定信息。",
-  "包括用户偏好、长期事实、项目背景、长期约束和反复强调的工作习惯。",
+  "你负责维护用户的长期记忆。",
+  "基于已有长期记忆和最新会话摘要，输出更新后的完整长期记忆。",
+  "保留用户偏好、长期事实、项目背景、长期约束和反复强调的工作习惯。",
   "不要保存临时任务进展、一次性文件内容、普通问答或不确定推断。",
-  "如果没有值得长期保存的信息，输出空字符串。",
+  "如果新增内容没有值得长期保存的信息，原样返回已有长期记忆；两者都没有时输出空字符串。",
 ].join("\n");
 
 const SessionSummarySchema = z
@@ -168,20 +168,23 @@ export class ChatMemoryService {
     summary.updatedBy = params.userId;
     await this.summaryRepository.save(summary);
 
+    const existingMemory =
+      (
+        await this.memoryRepository.findOne({
+          where: {
+            appId: params.appId,
+            userId: params.userId,
+            memoryKey,
+          },
+        })
+      )?.content ?? "";
     const nextLongTermMemory = await this.generateLongTermMemory({
-      existingMemory:
-        (
-          await this.memoryRepository.findOne({
-            where: {
-              appId: params.appId,
-              userId: params.userId,
-              memoryKey,
-            },
-          })
-        )?.content ?? "",
+      existingMemory,
       sessionSummary: nextSummary,
     });
     if (nextLongTermMemory === undefined) return;
+    // 模型未提炼出新长期信息时保留已有记忆，避免空输出覆盖历史记忆。
+    if (!nextLongTermMemory && existingMemory) return;
 
     const memory = await this.findOrCreateMemory(
       params.appId,

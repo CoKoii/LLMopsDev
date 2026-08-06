@@ -1,12 +1,15 @@
 import {
   BadRequestException,
+  BadGatewayException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
+import { normalizeCjkText } from "./cjk-normalize";
 import { randomUUID } from "crypto";
-import { Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import { z } from "zod";
 import { OssService } from "../../../common/oss/oss.service";
 import { FilesService } from "../../files/files.service";
@@ -18,7 +21,10 @@ import {
 import { DocumentProcessQueueService } from "./document-process-queue.service";
 import { DocumentCleanerService } from "./document-cleaner/document-cleaner.service";
 import { DocumentChunkerService } from "./document-chunker/document-chunker.service";
-import type { DocumentChunkMetadata } from "./document-chunker/document-chunker.types";
+import type {
+  DocumentChunkDraft,
+  DocumentChunkMetadata,
+} from "./document-chunker/document-chunker.types";
 import { DocumentEmbeddingService } from "./document-embedding/document-embedding.service";
 import { DocumentEnhancerService } from "./document-enhancer/document-enhancer.service";
 import { DocumentParserService } from "./document-parser/document-parser.service";
@@ -54,6 +60,7 @@ import {
 } from "./knowledge-recall.service";
 import { LlmUsageType } from "../llm/entities/llm.entity";
 import { LlmService } from "../llm/llm.service";
+import { LlmKeywordService } from "./llm-keyword.service";
 import { estimateTokens } from "./token-estimator";
 
 export type {
@@ -71,6 +78,18 @@ const normalizeChunkKeywords = (keywords: string[] | undefined) =>
     0,
     10,
   );
+
+const createChunkSearchText = (
+  metadata: DocumentChunkMetadata | undefined,
+  text: string,
+) => {
+  // 与分块器保持一致：检索/向量文本附带章节标题上下文，提升编辑后片段的召回质量。
+  const headingPath =
+    metadata?.sectionHeadingPath ?? metadata?.headingPath ?? [];
+  const anchor = headingPath.filter(Boolean).join(" > ");
+
+  return normalizeCjkText([anchor, text].filter(Boolean).join("\n\n"));
+};
 
 const WEB_CLIP_SYSTEM_PROMPT = [
   "你是网页文章清洗器。请把用户提供的网页片段整理为适合知识库检索的 Markdown。",
@@ -109,11 +128,7 @@ const buildFallbackWebClipMarkdown = (dto: CleanWebClipDto) => {
   const body = normalizeMarkdownLines(dto.markdown?.trim() || dto.text);
 
   return normalizeMarkdownLines(
-    [
-      title ? `# ${title}` : "",
-      url ? `> 来源：${url}` : "",
-      body,
-    ]
+    [title ? `# ${title}` : "", url ? `> 来源：${url}` : "", body]
       .filter(Boolean)
       .join("\n\n"),
   );
@@ -124,6 +139,8 @@ const compactForPrompt = (value: string) =>
 
 @Injectable()
 export class KnowledgeService {
+  private readonly logger = new Logger(KnowledgeService.name);
+
   constructor(
     @InjectRepository(Knowledge)
     private readonly knowledgeRepository: Repository<Knowledge>,
@@ -142,6 +159,7 @@ export class KnowledgeService {
     private readonly documentProcessQueueService: DocumentProcessQueueService,
     private readonly knowledgeRecallService: KnowledgeRecallService,
     private readonly llmService: LlmService,
+    private readonly llmKeywordService: LlmKeywordService,
   ) {}
 
   private createWebClipModel() {
@@ -213,22 +231,22 @@ export class KnowledgeService {
 
   private withAccessibleDocumentUrl(
     document: KnowledgeDocument,
-    options: { includeParsed?: boolean } = {},
   ): KnowledgeDocument {
     const result = {
       ...document,
       url: this.filesService.createAccessibleUrl(document.url) ?? "",
     };
-
-    if (!options.includeParsed) {
-      result.parsedText = undefined;
-      result.parsedDocument = undefined;
-      result.cleanedText = undefined;
-      result.cleanedDocument = undefined;
-      result.enhancedText = undefined;
-      result.enhancedDocument = undefined;
+    // 解析/清洗/增强产物可达百 KB 且前端不消费，置空避免随接口返回。
+    for (const key of [
+      "parsedText",
+      "parsedDocument",
+      "cleanedText",
+      "cleanedDocument",
+      "enhancedText",
+      "enhancedDocument",
+    ] as const) {
+      result[key] = undefined;
     }
-
     return result;
   }
 
@@ -382,6 +400,7 @@ export class KnowledgeService {
       characterCount: text.length,
       overlapFromPrevious: false,
       keywords,
+      documentKeywords: document.enhancedDocument?.metadata.keywords ?? [],
     };
   }
 
@@ -476,6 +495,7 @@ export class KnowledgeService {
     if (!knowledge) throw new NotFoundException("知识库不存在");
     await this.documentVectorStoreService.deleteKnowledgePoints(id);
     await this.chunkRepository.delete({ knowledgeId: id });
+    await this.documentRepository.delete({ knowledgeId: id });
     await this.knowledgeRepository.softRemove(knowledge);
     return { success: true };
   }
@@ -552,7 +572,7 @@ export class KnowledgeService {
       documentId,
       userId,
     );
-    return this.withAccessibleDocumentUrl(document, { includeParsed: true });
+    return this.withAccessibleDocumentUrl(document);
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -621,7 +641,7 @@ export class KnowledgeService {
       documentId,
       chunkIndex,
       text,
-      searchText: "",
+      searchText: createChunkSearchText(metadata, text),
       tokenCount: metadata.tokenCount,
       characterCount: metadata.characterCount,
       recallCount: 0,
@@ -633,7 +653,6 @@ export class KnowledgeService {
       createdBy: userId,
       updatedBy: userId,
     });
-    chunk.searchText = chunk.text;
 
     const savedChunk = await this.upsertChunkVector(document, chunk);
     await this.syncDocumentChunkCount(documentId);
@@ -674,6 +693,7 @@ export class KnowledgeService {
         tokenCount: chunk.tokenCount,
         characterCount: chunk.characterCount,
       };
+      chunk.searchText = createChunkSearchText(chunk.metadata, nextText);
     }
 
     if (dto.keywords !== undefined) {
@@ -688,7 +708,6 @@ export class KnowledgeService {
     }
 
     chunk.updatedBy = userId;
-    chunk.searchText = chunk.text;
 
     return shouldUpdateVector
       ? this.upsertChunkVector(document, chunk)
@@ -821,6 +840,30 @@ export class KnowledgeService {
       await this.documentRepository.save(document),
     );
   }
+
+  // 用模型为每个片段生成检索关键词（与“用户问题建议”同一模型：STRUCTURED），
+  // 失败时保留 chunker 的规则版关键词，不影响文档处理流程。
+  private async enrichChunkKeywords(chunks: DocumentChunkDraft[]) {
+    try {
+      const keywordsByIndex =
+        await this.llmKeywordService.extractChunkKeywordsBatch(
+          chunks.map((chunk) => ({
+            chunkIndex: chunk.chunkIndex,
+            headingPath: chunk.metadata.headingPath ?? [],
+            text: chunk.text,
+          })),
+        );
+      if (keywordsByIndex.size) {
+        for (const chunk of chunks) {
+          const keywords = keywordsByIndex.get(chunk.chunkIndex);
+          if (keywords?.length) chunk.metadata.keywords = keywords;
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`片段关键词模型生成失败，保留规则版：${message}`);
+    }
+  }
   // --------------------------------------------------------------------------------------------------
 
   // --------------------------------------------------------------------------------------------------
@@ -855,13 +898,13 @@ export class KnowledgeService {
       userId,
     );
 
-    await this.clearDocumentIndex(documentId);
-
     document.parseStatus = KnowledgeDocumentParseStatus.PARSING;
     this.resetParsedArtifacts(document);
     await this.documentRepository.save(document);
 
     try {
+      await this.clearDocumentIndex(documentId);
+
       const buffer = await this.ossService.getObjectBuffer(document.objectKey);
       const parsedDocument = await this.documentParserService.parse({
         filename: document.name,
@@ -898,6 +941,25 @@ export class KnowledgeService {
       await this.documentRepository.save(document);
       const { document: enhancedDocument } =
         this.documentEnhancerService.enhance(cleanedDocument);
+      // 用模型生成文档级关键词（与“用户问题建议”同一模型：STRUCTURED），失败时保留规则版
+      try {
+        const keywords = await this.llmKeywordService.extractDocumentKeywords({
+          title: enhancedDocument.title,
+          summary: enhancedDocument.metadata.summary,
+          headings: enhancedDocument.blocks
+            .filter((block) => block.type === "heading")
+            .map((block) => block.text),
+        });
+        if (keywords.length) {
+          enhancedDocument.metadata.keywords = keywords;
+          enhancedDocument.metadata.enhancementRules.push(
+            "extract-llm-keywords",
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`文档关键词模型生成失败，保留规则版：${message}`);
+      }
 
       document.enhanceStatus = KnowledgeDocumentEnhanceStatus.ENHANCED;
       document.enhanceError = null;
@@ -918,6 +980,9 @@ export class KnowledgeService {
         document: enhancedDocument,
         chunkConfig,
       });
+      // 按章节用模型生成片段关键词（失败时保留规则版），供检索精确召回与加权
+      await this.enrichChunkKeywords(chunks);
+      const documentKeywords = enhancedDocument.metadata.keywords ?? [];
 
       document.chunkStatus = KnowledgeDocumentChunkStatus.CHUNKED;
       document.chunkError = null;
@@ -939,6 +1004,11 @@ export class KnowledgeService {
           },
         },
       );
+      if (embeddingResult.vectors.length !== chunks.length) {
+        throw new BadGatewayException(
+          `向量数量与分块数量不一致：${embeddingResult.vectors.length}/${chunks.length}`,
+        );
+      }
 
       document.embeddingStatus = KnowledgeDocumentEmbeddingStatus.EMBEDDED;
       document.embeddingError = null;
@@ -968,29 +1038,40 @@ export class KnowledgeService {
             embeddingModel: embeddingResult.model,
             embeddingDimension: embeddingResult.dimension,
             vectorId: randomUUID(),
-            metadata: chunk.metadata,
+            metadata: {
+              ...chunk.metadata,
+              documentKeywords,
+            },
             createdBy: userId,
             updatedBy: userId,
           }),
         ),
       );
-      await this.documentVectorStoreService.upsert(
-        savedChunks.map((chunk, index) => ({
-          id: chunk.vectorId,
-          vector: embeddingResult.vectors[index] ?? [],
-          payload: {
-            knowledgeId,
-            documentId,
-            documentName: document.name,
-            chunkId: chunk.id,
-            chunkIndex: chunk.chunkIndex,
-            text: chunk.text,
-            searchText: chunk.searchText,
-            enabled: chunk.enabled,
-            metadata: chunk.metadata,
-          },
-        })),
-      );
+      try {
+        await this.documentVectorStoreService.upsert(
+          savedChunks.map((chunk, index) => ({
+            id: chunk.vectorId,
+            vector: embeddingResult.vectors[index] ?? [],
+            payload: {
+              knowledgeId,
+              documentId,
+              documentName: document.name,
+              chunkId: chunk.id,
+              chunkIndex: chunk.chunkIndex,
+              text: chunk.text,
+              searchText: chunk.searchText,
+              enabled: chunk.enabled,
+              metadata: chunk.metadata,
+            },
+          })),
+        );
+      } catch (error) {
+        // 向量写入失败时回滚已入库的片段，避免 DB 与向量库不一致。
+        await this.chunkRepository.delete({
+          id: In(savedChunks.map((chunk) => chunk.id)),
+        });
+        throw error;
+      }
 
       document.indexStatus = KnowledgeDocumentIndexStatus.INDEXED;
       document.indexError = null;
@@ -1002,7 +1083,6 @@ export class KnowledgeService {
 
     return this.withAccessibleDocumentUrl(
       await this.documentRepository.save(document),
-      { includeParsed: true },
     );
   }
   // --------------------------------------------------------------------------------------------------

@@ -242,7 +242,7 @@ export interface AiAppStatsDailyItem {
 
 export interface AiAppStatsRecentMessage {
   id: number
-  mode: 'debug' | 'standalone'
+  mode: 'debug' | 'standalone' | 'openapi'
   title: string
   tokens: number
   tokensPerSecond?: number
@@ -644,13 +644,6 @@ export const restoreAiAppVersionApi = async (
   versionId: number,
 ): Promise<AiAppVersionItem> => {
   return request.post(`/ai/apps/${appId}/versions/${versionId}/restore`)
-}
-
-export const optimizeAiAppPromptApi = async (
-  appId: number,
-  payload: { prompt: string },
-): Promise<{ prompt: string }> => {
-  return request.post(`/ai/apps/${appId}/prompt/optimize`, payload, { timeout: 60000 })
 }
 
 export const getAiAppMemoryApi = async (appId: number): Promise<AppChatMemory> => {

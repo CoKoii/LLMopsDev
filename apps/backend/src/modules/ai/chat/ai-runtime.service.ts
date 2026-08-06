@@ -63,6 +63,7 @@ export class AiRuntimeService {
     if (app.createdBy !== userId && !app.published) {
       throw new ForbiddenException("无权访问该应用");
     }
+    if (!app.status) throw new ForbiddenException("AI应用已停用");
 
     const version = app.publishedVersionId
       ? await this.appVersionRepository.findOne({
@@ -198,15 +199,5 @@ export class AiRuntimeService {
         systemPrompt,
       }),
     };
-  }
-
-  async createAgent(
-    appId: number,
-    userId: number,
-    options: CreateAgentOptions = {},
-  ) {
-    const draft = await this.getDraft(appId, userId);
-    const model = await this.createModel(draft.config);
-    return this.createAgentFromDraft(draft, model, userId, options);
   }
 }

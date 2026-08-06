@@ -124,8 +124,40 @@ export class FilesService {
   async remove(id: number, userId: number) {
     const file = await this.findOwnedFile(id, userId);
 
+    const [documentRows, attachmentRows] = await Promise.all([
+      this.filesRepository.manager.query<Array<{ count: string }>>(
+        `SELECT COUNT(*) AS count FROM ai_knowledge_documents WHERE "fileId" = $1 AND "deletedAt" IS NULL`,
+        [id],
+      ),
+      this.filesRepository.manager.query<Array<{ count: string }>>(
+        `SELECT COUNT(*) AS count FROM ai_chat_attachments WHERE "fileId" = $1`,
+        [id],
+      ),
+    ]);
+    const documentCount = Number(documentRows?.[0]?.count ?? 0);
+    const attachmentCount = Number(attachmentRows?.[0]?.count ?? 0);
+
+    if (documentCount > 0 || attachmentCount > 0) {
+      const references = [
+        documentCount > 0 ? "知识库文档" : "",
+        attachmentCount > 0 ? "聊天附件" : "",
+      ]
+        .filter(Boolean)
+        .join("、");
+
+      throw new ConflictException(`文件已被${references}引用，无法删除`);
+    }
+
     await this.ossService.deleteObject(file.objectKey);
-    await this.filesRepository.delete(file.id);
+    try {
+      await this.filesRepository.delete(file.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("foreign key") || message.includes("23503")) {
+        throw new ConflictException("文件已被其他数据引用，无法删除");
+      }
+      throw error;
+    }
     return { success: true };
   }
 

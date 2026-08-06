@@ -287,8 +287,11 @@ watch(searchValue, () => {
             :max-tag-count="10"
             :open="false"
             :token-separators="[',', '，']"
-            placeholder="请输入该文档片段关键词，最多不超过10个，按Enter输入"
+            placeholder="输入检索关键词，最多10个，按Enter输入"
           />
+          <small class="chunk-form__hint">
+            建议补充正文中没有、但用户可能搜索的词（别名、缩写、术语），可提升召回命中率
+          </small>
         </label>
       </div>
     </AppModal>

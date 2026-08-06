@@ -18,6 +18,7 @@ import { Knowledge } from "./entities/knowledge.entity";
 import { KnowledgeController } from "./knowledge.controller";
 import { KnowledgeRecallService } from "./knowledge-recall.service";
 import { KnowledgeService } from "./knowledge.service";
+import { LlmKeywordService } from "./llm-keyword.service";
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { KnowledgeService } from "./knowledge.service";
     DocumentProcessQueueService,
     DocumentProcessProcessor,
     KnowledgeRecallService,
+    LlmKeywordService,
   ],
   exports: [
     KnowledgeService,

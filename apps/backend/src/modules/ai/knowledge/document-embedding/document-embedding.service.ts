@@ -40,19 +40,29 @@ export class DocumentEmbeddingService {
   }
 
   private async executeEmbed(input: string[]): Promise<EmbeddingResult> {
-    const texts = input.map((item) => item.trim()).filter(Boolean);
-    if (!texts.length) {
+    const texts = input.map((item) => item.trim());
+    const nonEmptyTexts = texts.filter(Boolean);
+    if (!nonEmptyTexts.length) {
       return { model: "", dimension: 0, vectors: [] };
     }
 
     const { embeddings, modelName } =
       await this.llmService.createEmbeddingClient();
-    const vectors: number[][] = [];
-    for (const batch of chunkArray(texts, EMBEDDING_BATCH_SIZE)) {
-      vectors.push(...(await this.embedTextsWithRetry(embeddings, batch)));
+    const embeddedVectors: number[][] = [];
+    for (const batch of chunkArray(nonEmptyTexts, EMBEDDING_BATCH_SIZE)) {
+      embeddedVectors.push(
+        ...(await this.embedTextsWithRetry(embeddings, batch)),
+      );
     }
 
-    const dimension = vectors[0]?.length ?? 0;
+    // 与输入保持一一对应，避免空文本过滤导致调用方向量错位。
+    let embeddedIndex = 0;
+    const vectors = texts.map((text) => {
+      if (!text) return [];
+      return embeddedVectors[embeddedIndex++] ?? [];
+    });
+
+    const dimension = embeddedVectors[0]?.length ?? 0;
     return {
       model: modelName,
       dimension,

@@ -19,6 +19,11 @@ import { PluginCategory } from "./entities/plugin-category.entity";
 import { Plugin, type PluginHeader } from "./entities/plugin.entity";
 import { validatePluginOpenApiSchema } from "./openapi-schema.validator";
 
+/**
+ * headers 明文密钥脱敏占位符：前端回显/保存时以此标记"密钥已配置，未修改"。
+ */
+const HEADER_VALUE_PLACEHOLDER = "******";
+
 @Injectable()
 export class PluginService {
   constructor(
@@ -34,6 +39,22 @@ export class PluginService {
     return {
       ...plugin,
       icon: this.filesService.createAccessibleUrl(plugin.icon),
+    };
+  }
+
+  /**
+   * 插件响应脱敏：headers 中的明文密钥绝不返回给前端。
+   * 详情/列表保留 openapiSchema 供前端解析工具定义，但 headers 只回显 key 名。
+   */
+  private toSafePlugin(plugin: Plugin): Plugin {
+    return {
+      ...plugin,
+      icon: this.filesService.createAccessibleUrl(plugin.icon),
+      headers:
+        plugin.headers?.map((header) => ({
+          key: header.key,
+          value: HEADER_VALUE_PLACEHOLDER,
+        })) ?? [],
     };
   }
 
@@ -175,7 +196,7 @@ export class PluginService {
     const [items, total]: [Plugin[], number] =
       await queryBuilder.getManyAndCount();
     return createPageResult(
-      items.map((item) => this.withAccessibleIcon(item)),
+      items.map((item) => this.toSafePlugin(item)),
       total,
       page,
       pageSize,
@@ -194,7 +215,7 @@ export class PluginService {
     if (!this.isReadableByCurrentUser(plugin)) {
       throw new NotFoundException("插件不存在");
     }
-    return this.withAccessibleIcon(plugin);
+    return this.toSafePlugin(plugin);
   }
   // --------------------------------------------------------------------------------------------------
 
@@ -209,10 +230,21 @@ export class PluginService {
     if (plugin.createdBy !== userId) {
       throw new NotFoundException("插件不存在");
     }
-    Object.assign(
-      plugin,
-      await this.buildPluginPayload(updatePluginDto, userId),
-    );
+    const payload = await this.buildPluginPayload(updatePluginDto, userId);
+    if (payload.headers) {
+      const existing = new Map(
+        (plugin.headers ?? []).map((header) => [header.key, header.value]),
+      );
+      // 前端回显时值为脱敏占位（空字符串），保存时保留原密钥，避免明文密钥往返。
+      payload.headers = payload.headers.map((header) => ({
+        key: header.key,
+        value:
+          header.value === HEADER_VALUE_PLACEHOLDER
+            ? existing.get(header.key) || ""
+            : header.value,
+      }));
+    }
+    Object.assign(plugin, payload);
     await this.pluginRepository.save(plugin);
     return { success: true };
   }
