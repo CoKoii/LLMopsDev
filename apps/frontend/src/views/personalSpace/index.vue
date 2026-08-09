@@ -45,6 +45,7 @@ watch(
   () => route.name,
   () => {
     searchValue.value = ''
+    createKey.value = 0
   },
 )
 
