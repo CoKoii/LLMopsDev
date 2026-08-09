@@ -13,12 +13,13 @@
 | 知识库 | 支持 TXT、Markdown、JSON、CSV、HTML、PDF、Word、Excel 和图片；提供解析、清洗、分块、向量化、混合召回、Rerank、召回测试和片段编辑 |
 | 插件 | 导入 OpenAPI Schema，自动生成工具定义并执行接口调用，支持自定义鉴权请求头 |
 | 模型 | 统一管理 Chat、Embedding、Rerank、多模态、结构化输出、STT 和 TTS 模型，兼容 OpenAI 风格接口 |
+| 后台管理 | 独立的 Admin 管理端，统一创建、编辑、启停、删除和连通性测试系统模型 |
 | 开放 API | 管理 API Key，通过流式或非流式接口将已发布应用接入外部系统 |
 | 网页剪藏 | 浏览器扩展可选择网页正文、清洗为 Markdown 并上传至知识库 |
 
 ## 创建与发布流程
 
-`创建应用 → 准备插件 → 准备知识库 → 上传文档 → 管理切片 → 召回测试 → 应用编排 → 发布 → 统计 → 独立对话页 / 开放 API`
+`后台配置模型 → 创建应用 → 准备插件 → 准备知识库 → 上传文档 → 管理切片 → 召回测试 → 应用编排 → 发布 → 统计 → 独立对话页 / 开放 API`
 
 ### 1. 创建 AI 应用
 
@@ -92,33 +93,33 @@
 
 <img src="docs/screenshots/api-keys.png" alt="API 密钥管理" width="520" />
 
+## 后台管理系统
+
+Admin 是独立于用户端的后台管理系统。进入“AI 管理 → 模型管理”可按模型用途维护服务地址和 API Key，并执行启停、删除与连通性测试；启用后的 Chat 模型会出现在用户端应用编排页。
+
 ## 技术架构
 
 | 层级 | 技术 |
 | --- | --- |
-| Web | Vue 3、Vite、Pinia、Ant Design X Vue、ECharts |
+| 用户端 | Vue 3、Vite、Pinia、Ant Design X Vue、ECharts |
+| 管理端 | Vue 3、Vite、Vben Admin、Ant Design Vue |
 | API | NestJS、TypeORM、BullMQ、LangChain |
 | 数据 | PostgreSQL、Redis、Qdrant |
 | 文件 | 阿里云 OSS |
 
 ```text
 apps/
-├── frontend           Web 管理端
+├── frontend           Web 用户端
+├── admin              后台管理系统
 ├── backend            NestJS API 服务
 └── browser-extension  网页剪藏浏览器扩展
 ```
 
-## 本地运行
+## 快速启动
 
-### 1. 环境要求
+需要 Node.js ^22.19.0 或 ^24.12.0、pnpm 11.7.0 和 Docker。
 
-- Node.js >= 22.19.0
-- pnpm >= 11.7.0
-- PostgreSQL
-- Redis
-- Qdrant：仅知识库向量化与召回需要
-
-使用 Docker 启动本地依赖：
+### 1. 启动依赖
 
 ```bash
 docker run -d --name llmops-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=llmops -p 5432:5432 -v llmops-pg:/var/lib/postgresql/data postgres:16
@@ -126,20 +127,63 @@ docker run -d --name llmops-redis -p 6379:6379 -v llmops-redis:/data redis:7
 docker run -d --name llmops-qdrant -p 6333:6333 -v llmops-qdrant:/qdrant/storage qdrant/qdrant
 ```
 
-### 2. 安装与配置
+### 2. 配置环境变量
 
 ```bash
-pnpm install
 cp apps/backend/.env.example apps/backend/.env
 cp apps/frontend/.env.example apps/frontend/.env
 ```
+
+按下方“环境配置”填写数据库、Redis、JWT、OSS 等基础配置；模型服务在启动后进入 Admin 配置。
+
+### 3. 安装并启动
+
+根目录执行：
+
+```bash
+pnpm install
+pnpm dev
+```
+
+Admin 是独立工作区，另开终端执行：
+
+```bash
+cd apps/admin
+pnpm install
+pnpm dev
+```
+
+### 4. 访问系统
+
+| 服务 | 地址 |
+| --- | --- |
+| Web 用户端 | `http://localhost:5173` |
+| Admin 后台 | `http://localhost:5999` |
+| API | `http://localhost:3000/api` |
+| Qdrant | `http://localhost:6333` |
+
+空数据库首次运行时创建登录账号：
+
+```bash
+curl -X POST http://localhost:3000/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"super_admin","password":"123456","confirmPassword":"123456"}'
+```
+
+使用 `super_admin / 123456` 登录用户端或 Admin 后台。
+
+![登录页](docs/screenshots/login.png)
+
+## 环境配置
+
+### Backend
 
 `apps/backend/.env` 完整配置：
 
 ```dotenv
 # 服务与跨域
 PORT=3000
-CORS_ORIGINS=http://localhost:5173
+CORS_ORIGINS=http://localhost:5173,http://localhost:5999
 
 # 数据库：支持 postgres / mysql
 DB_TYPE=postgres
@@ -195,12 +239,35 @@ LOG_ON=true
 LOG_LEVEL=info
 ```
 
+### Frontend
+
 `apps/frontend/.env`：
 
 ```dotenv
 VITE_APP_NAME=llmops
 VITE_API_BASE_URL=http://127.0.0.1:3000/api
 ```
+
+### Admin
+
+配置位于 `apps/admin/apps/web-antdv-next`：
+
+```dotenv
+# .env
+VITE_APP_TITLE=LLMOps Admin
+VITE_APP_NAMESPACE=llmops-admin
+VITE_APP_STORE_SECURE_KEY=replace-with-a-random-secret
+
+# .env.development
+VITE_PORT=5999
+VITE_BASE=/
+VITE_GLOB_API_URL=/api
+VITE_NITRO_MOCK=false
+VITE_DEVTOOLS=false
+VITE_INJECT_APP_LOADING=true
+```
+
+开发环境中 `/api` 会代理到 `http://localhost:3000/api`。生产环境需由网关或反向代理将管理端的 `/api` 转发到后端服务。
 
 配置说明：
 
@@ -215,45 +282,11 @@ VITE_API_BASE_URL=http://127.0.0.1:3000/api
 
 `OSS_ENABLED=false` 仅适合不使用上传功能的场景，当前版本没有本地文件存储回退。生产环境必须设置 `DB_SYNC=false`，并使用独立随机 JWT 密钥；不要提交数据库密码、SMTP 密码、OSS 密钥和模型 API Key。
 
-默认地址如下：
-
-| 服务 | 地址 |
-| --- | --- |
-| Web | `http://localhost:5173` |
-| API | `http://localhost:3000/api` |
-| Qdrant | `http://localhost:6333` |
-
-### 3. 启动
-
-分别打开两个终端：
-
-```bash
-pnpm --dir apps/backend dev
-```
-
-```bash
-pnpm --dir apps/frontend dev
-```
-
 开发环境默认启用 `DB_SYNC=true`，首次启动会自动创建数据表；生产环境必须改为 `false`。
-
-### 4. 创建登录账号
-
-空数据库首次运行时，通过注册接口创建账号：
-
-```bash
-curl -X POST http://localhost:3000/api/auth/register \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"super_admin","password":"123456","confirmPassword":"123456"}'
-```
-
-然后访问 `http://localhost:5173`，使用 `super_admin / 123456` 登录。
-
-![登录页](docs/screenshots/login.png)
 
 ## 使用前配置
 
-模型配置保存在数据库中，不写入 `.env`。登录后通过 `/api/ai/llms` 创建并测试模型；每条配置包含 `usageType`、`modelName`、`baseUrl`、`apiKey` 和 `enabled`。
+模型配置保存在数据库中，不写入 `.env`。登录后台管理系统，进入“AI 管理 → 模型管理”创建并测试模型，也可直接调用 `/api/ai/llms`；每条配置包含 `usageType`、`modelName`、`baseUrl`、`apiKey` 和 `enabled`。
 
 | `usageType` | 对应功能 | 是否必需 |
 | --- | --- | --- |
@@ -287,11 +320,9 @@ pnpm --dir apps/browser-extension build
 
 ## 常用命令
 
-| 命令 | 说明 |
-| --- | --- |
-| `pnpm --dir apps/backend test` | 后端单元测试 |
-| `pnpm --dir apps/backend typecheck` | 后端类型检查 |
-| `pnpm --dir apps/frontend test:unit` | 前端单元测试 |
-| `pnpm --dir apps/frontend type-check` | 前端类型检查 |
-| `pnpm --dir apps/frontend build` | 构建前端 |
-| `pnpm --dir apps/backend build` | 构建后端 |
+| 执行目录 | 命令 | 说明 |
+| --- | --- | --- |
+| 项目根目录 | `pnpm dev` | 启动用户端、API 和浏览器扩展构建监听 |
+| `apps/admin` | `pnpm dev` | 启动 Admin 后台 |
+| `apps/backend` | `pnpm test` | 后端单元测试 |
+| `apps/frontend` | `pnpm test:unit` | 前端单元测试 |
