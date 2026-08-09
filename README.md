@@ -99,7 +99,7 @@
 | Web | Vue 3、Vite、Pinia、Ant Design X Vue、ECharts |
 | API | NestJS、TypeORM、BullMQ、LangChain |
 | 数据 | PostgreSQL、Redis、Qdrant |
-| 文件 | 本地存储或阿里云 OSS |
+| 文件 | 阿里云 OSS |
 
 ```text
 apps/
@@ -134,13 +134,86 @@ cp apps/backend/.env.example apps/backend/.env
 cp apps/frontend/.env.example apps/frontend/.env
 ```
 
-至少修改 `apps/backend/.env` 中的以下配置：
+`apps/backend/.env` 完整配置：
 
 ```dotenv
+# 服务与跨域
+PORT=3000
+CORS_ORIGINS=http://localhost:5173
+
+# 数据库：支持 postgres / mysql
+DB_TYPE=postgres
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_USERNAME=postgres
 DB_PASSWORD=postgres
+DB_DATABASE=llmops
+DB_SYNC=true
+
+# Redis
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+REDIS_USERNAME=
+REDIS_PASSWORD=
+REDIS_DB=0
+REDIS_KEY_PREFIX=llmops:
+
+# JWT
 JWT_ACCESS_SECRET=replace-with-a-random-secret
+JWT_ACCESS_EXPIRES_IN=30m
 JWT_REFRESH_SECRET=replace-with-another-random-secret
+JWT_REFRESH_EXPIRES_IN=7d
+
+# SMTP；不使用邮件时设为 false，其余字段可留空
+MAIL_ENABLED=true
+MAIL_HOST=smtp.example.com
+MAIL_PORT=465
+MAIL_SECURE=true
+MAIL_IGNORE_TLS=false
+MAIL_USER=your-smtp-user
+MAIL_PASS=your-smtp-password
+MAIL_FROM_NAME=llmops
+MAIL_FROM_ADDRESS=noreply@example.com
+
+# 阿里云 OSS；完整文件上传功能必须启用
+OSS_ENABLED=true
+OSS_REGION=oss-cn-hangzhou
+OSS_BUCKET=your-bucket
+OSS_ACCESS_KEY_ID=your-access-key-id
+OSS_ACCESS_KEY_SECRET=your-access-key-secret
+OSS_PUBLIC_BASE_URL=
+OSS_UPLOAD_EXPIRES_IN=3600
+OSS_UPLOAD_MAX_SIZE=10485760
+OSS_TEMP_EXPIRES_IN_HOURS=24
+
+# Qdrant；知识库与聊天附件的向量化、召回需要
+QDRANT_URL=http://127.0.0.1:6333
+QDRANT_COLLECTION=ai_knowledge_chunks
+
+# 日志
+LOG_ON=true
+LOG_LEVEL=info
 ```
+
+`apps/frontend/.env`：
+
+```dotenv
+VITE_APP_NAME=llmops
+VITE_API_BASE_URL=http://127.0.0.1:3000/api
+```
+
+配置说明：
+
+| 配置 | 作用 |
+| --- | --- |
+| `DB_*`、`REDIS_*`、`JWT_*` | 登录、会话和全部业务数据，启动必需 |
+| `OSS_*` | 知识库文档、应用/插件/知识库图片、聊天附件、浏览器剪藏上传 |
+| `QDRANT_*` | 知识库和聊天附件的向量索引与召回 |
+| `MAIL_*` | SMTP 邮件发送；启用后必须填写主机和发件邮箱 |
+| `CORS_ORIGINS` | 允许访问 API 的前端来源，多个地址用英文逗号分隔 |
+| `LOG_*` | 日志开关与级别，可选 `error`、`warn`、`info`、`http`、`verbose`、`debug`、`silly` |
+
+`OSS_ENABLED=false` 仅适合不使用上传功能的场景，当前版本没有本地文件存储回退。生产环境必须设置 `DB_SYNC=false`，并使用独立随机 JWT 密钥；不要提交数据库密码、SMTP 密码、OSS 密钥和模型 API Key。
 
 默认地址如下：
 
@@ -180,11 +253,29 @@ curl -X POST http://localhost:3000/api/auth/register \
 
 ## 使用前配置
 
-- 对话应用至少需要一个已启用的 `chat` 模型。
-- 知识库处理需要 `embedding` 模型和 Qdrant；`rerank` 模型可选。
-- 语音和图片能力分别需要 `speech_to_text`、`text_to_speech` 和 `multimodal` 模型。
-- 模型通过 `/api/ai/llms` 接口管理，应用编排页会读取已启用的 Chat 模型。
-- `OSS_ENABLED=false` 时文件保存在本地；生产环境可切换到阿里云 OSS。
+模型配置保存在数据库中，不写入 `.env`。登录后通过 `/api/ai/llms` 创建并测试模型；每条配置包含 `usageType`、`modelName`、`baseUrl`、`apiKey` 和 `enabled`。
+
+| `usageType` | 对应功能 | 是否必需 |
+| --- | --- | --- |
+| `chat` | 应用编排、调试和对话 | 必需 |
+| `structured` | 记忆提取、问题建议、知识清洗/增强/关键词 | 建议配置 |
+| `built_in_large` | 首页 AI 创建应用 | 使用该功能时必需 |
+| `embedding` | 知识库、聊天附件向量化和召回 | 使用知识功能时必需 |
+| `multimodal` | 图片及 Office 文档的多模态内容提取 | 使用该类文档时必需 |
+| `rerank` | 召回结果重排 | 可选 |
+| `speech_to_text` | 语音输入 | 使用语音输入时必需 |
+| `text_to_speech` | 语音输出 | 使用语音输出时必需 |
+
+创建模型示例：
+
+```bash
+curl -X POST http://localhost:3000/api/ai/llms \
+  -H 'Authorization: Bearer <ACCESS_TOKEN>' \
+  -H 'Content-Type: application/json' \
+  -d '{"usageType":"chat","modelName":"your-model","baseUrl":"https://your-provider.example/v1","apiKey":"your-api-key","enabled":true}'
+```
+
+`chat`、`embedding` 使用 OpenAI 兼容接口；语音模型只支持 HTTP/OpenAI 兼容接口，不支持 WebSocket 地址。除 `chat` 外，同一用途同时只会启用一个系统模型。
 
 ## 浏览器扩展
 
