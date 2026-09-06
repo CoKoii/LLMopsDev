@@ -6,7 +6,7 @@ import {
 } from "@nestjs/common";
 import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
 import { Segment, useDefault } from "segmentit";
-import { DataSource, In, Repository } from "typeorm";
+import { Brackets, DataSource, In, Repository } from "typeorm";
 import { DocumentEmbeddingService } from "./document-embedding/document-embedding.service";
 import { normalizeCjkText } from "./cjk-normalize";
 import { DocumentRerankService } from "./document-rerank/document-rerank.service";
@@ -16,6 +16,7 @@ import { KnowledgeDocumentChunk } from "./entities/knowledge-document-chunk.enti
 import { KnowledgeDocument } from "./entities/knowledge-document.entity";
 import { Knowledge } from "./entities/knowledge.entity";
 import { estimateTokens } from "./token-estimator";
+import { createAiTrace } from "../../../common/trace/ai-trace";
 
 type KnowledgeRecallStrategy = "hybrid" | "vector" | "text";
 
@@ -98,12 +99,106 @@ const DEFAULT_RECALL_LIMIT = 10;
 const DEFAULT_MIN_SCORE = 0.2;
 const DEFAULT_VECTOR_WEIGHT = 0.3;
 const RELAXED_MIN_SCORE = 0.12;
+const MIN_RERANK_SCORE = 0.15;
+const HYBRID_MIN_TEXT_SCORE = 0.25;
 const SECTION_EXPANSION_ANCHOR_LIMIT = 6;
 const SECTION_EXPANSION_PARENT_LIMIT = 3;
 const SECTION_EXPANSION_MAX_SIBLINGS_PER_PARENT = 8;
 const SECTION_EXPANSION_SCORE_DECAY = 0.98;
 
 const segmenter = useDefault(new Segment());
+
+// 这些词在中文问题中出现频率很高，但不能有效区分知识库片段。
+// 只过滤明确的功能词和单字词，保留两字以上的领域词，避免误伤专有名词。
+const RECALL_STOP_WORDS = new Set([
+  "一个",
+  "一些",
+  "以及",
+  "不是",
+  "介绍",
+  "分别",
+  "什么",
+  "如何",
+  "如果",
+  "是否",
+  "哪些",
+  "哪个",
+  "请问",
+  "同时",
+  "可以",
+  "相关",
+  "用户",
+  "文档",
+  "流程",
+  "步骤",
+  "问题",
+  "内容",
+  "功能",
+  "说明",
+  "描述",
+  "实现",
+  "进行",
+  "通过",
+  "其中",
+  "这个",
+  "那个",
+  "它们",
+  "他们",
+]);
+const RECALL_ENGLISH_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "can",
+  "do",
+  "does",
+  "for",
+  "from",
+  "had",
+  "has",
+  "have",
+  "how",
+  "in",
+  "is",
+  "it",
+  "of",
+  "on",
+  "or",
+  "that",
+  "the",
+  "these",
+  "this",
+  "those",
+  "to",
+  "was",
+  "were",
+  "what",
+  "when",
+  "where",
+  "which",
+  "who",
+  "why",
+  "with",
+  "you",
+]);
+const RECALL_FORMAT_TERMS = new Set([
+  "pdf",
+  "doc",
+  "docx",
+  "xls",
+  "xlsx",
+  "csv",
+  "md",
+  "markdown",
+  "txt",
+  "json",
+  "html",
+]);
 
 const clampScore = (score: number) =>
   Math.max(0, Math.min(1, Number(score.toFixed(4))));
@@ -137,6 +232,15 @@ const extractRecallTerms = (query: string) => {
       (match) => match[0].toLowerCase(),
     ).filter((term) => /[a-z]/.test(term)),
   );
+  for (const term of [...terms]) {
+    if (!/[a-z]/.test(term)) continue;
+
+    terms.push(
+      ...term
+        .split(/[_./+-]+/)
+        .filter((part) => part.length >= 2 && /[a-z]/.test(part)),
+    );
+  }
 
   terms.push(
     ...segmenter
@@ -153,10 +257,14 @@ const extractRecallTerms = (query: string) => {
     }
   }
 
-  return uniqueStrings(terms.map(normalizeRecallTerm)).slice(
-    0,
-    DEFAULT_TEXT_SEARCH_TERMS_LIMIT,
-  );
+  return uniqueStrings(terms.map(normalizeRecallTerm))
+    .filter((term) => {
+      if (!term || RECALL_STOP_WORDS.has(term)) return false;
+      if (RECALL_ENGLISH_STOP_WORDS.has(term)) return false;
+      if (/^[\u3400-\u9fff]$/.test(term)) return false;
+      return true;
+    })
+    .slice(0, DEFAULT_TEXT_SEARCH_TERMS_LIMIT);
 };
 
 const createWeightedTermMap = (
@@ -271,6 +379,8 @@ export class KnowledgeRecallService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
+    if (this.dataSource.options.type !== "postgres") return;
+
     void this.ensurePostgresTextSearch().catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(`知识库全文索引初始化失败: ${message}`);
@@ -332,7 +442,7 @@ export class KnowledgeRecallService implements OnModuleInit {
       accessibleKnowledgeIds.length > 0 &&
       (strategy === "hybrid" || strategy === "vector");
     let effectiveSettings = params.settings;
-    let queryEmbedding: { vector: number[] } | undefined;
+    let queryEmbedding: number[] | undefined;
     if (needsQueryVector) {
       try {
         queryEmbedding = await this.createQueryEmbedding(query);
@@ -353,7 +463,7 @@ export class KnowledgeRecallService implements OnModuleInit {
             knowledgeId,
             query,
             effectiveSettings,
-            { queryVector: queryEmbedding?.vector },
+            { queryVector: queryEmbedding },
           );
           this.scheduleRecallCountIncrement(knowledgeId, recallResult.items);
 
@@ -379,9 +489,7 @@ export class KnowledgeRecallService implements OnModuleInit {
 
   private async createQueryEmbedding(query: string) {
     const embeddingResult = await this.documentEmbeddingService.embed([query]);
-    return {
-      vector: embeddingResult.vectors[0] ?? [],
-    };
+    return embeddingResult.vectors[0] ?? [];
   }
 
   private async searchVectorRecall(
@@ -414,88 +522,104 @@ export class KnowledgeRecallService implements OnModuleInit {
     const tsQuery = createTsQuery(queryTerms);
     if (!queryTerms.length || !tsQuery) return [];
 
+    if (this.dataSource.options.type !== "postgres") {
+      const queryBuilder = this.chunkRepository
+        .createQueryBuilder("chunk")
+        .innerJoin("chunk.document", "document")
+        .select("chunk.id", "chunkId")
+        .where("chunk.knowledgeId = :knowledgeId", { knowledgeId })
+        .andWhere("chunk.enabled = :chunkEnabled", { chunkEnabled: true })
+        .andWhere("document.enabled = :documentEnabled", {
+          documentEnabled: true,
+        })
+        .andWhere(
+          new Brackets((builder) => {
+            for (const [index, term] of queryTerms.entries()) {
+              builder.orWhere(
+                "LOWER(CONCAT(COALESCE(document.name, ''), ' ', COALESCE(document.contentType, ''), ' ', COALESCE(chunk.searchText, ''), ' ', COALESCE(chunk.text, ''), ' ', CAST(chunk.metadata AS CHAR))) LIKE :term" +
+                  index,
+                { [`term${index}`]: `%${term.toLowerCase()}%` },
+              );
+            }
+          }),
+        )
+        .orderBy("chunk.id", "DESC")
+        .take(limit);
+
+      const rows = await queryBuilder.getRawMany<TextRecallRow>();
+      return rows.map((row) => ({
+        chunkId: Number(row.chunkId),
+        score: 0,
+        source: "text",
+      }));
+    }
+
     const rows = await this.dataSource.query<TextRecallRow[]>(
       `
         WITH search_input AS (
           SELECT
             to_tsquery('simple', $2) AS ts_query,
             $3::text[] AS trigram_terms
+        ), ranked AS (
+          SELECT
+            chunk.id AS "chunkId",
+            to_tsvector(
+              'simple',
+              COALESCE(chunk."searchText", '') || ' ' || COALESCE(chunk."text", '')
+            ) AS document_vector,
+            search_input.ts_query,
+            EXISTS (
+              SELECT 1
+              FROM unnest(search_input.trigram_terms) AS terms(term)
+              WHERE LOWER(COALESCE(document.name, '')) % term
+                OR LOWER(COALESCE(document."contentType", '')) % term
+                OR LOWER(COALESCE(chunk.metadata->>'format', '')) % term
+                OR LOWER(COALESCE(chunk.metadata->>'contentType', '')) % term
+                OR LOWER(COALESCE(chunk."searchText", '')) % term
+                OR POSITION(term IN LOWER(COALESCE(document.name, ''))) > 0
+                OR POSITION(term IN LOWER(COALESCE(document."contentType", ''))) > 0
+                OR POSITION(term IN LOWER(COALESCE(chunk.metadata->>'format', ''))) > 0
+                OR POSITION(term IN LOWER(COALESCE(chunk.metadata->>'contentType', ''))) > 0
+                OR POSITION(term IN LOWER(COALESCE(chunk."searchText", ''))) > 0
+            ) AS content_match,
+            EXISTS (
+              SELECT 1
+              FROM unnest(search_input.trigram_terms) AS terms(term)
+              WHERE POSITION(
+                term IN LOWER(COALESCE(chunk.metadata->>'keywords', ''))
+              ) > 0
+            ) AS keyword_match,
+            EXISTS (
+              SELECT 1
+              FROM unnest(search_input.trigram_terms) AS terms(term)
+              WHERE POSITION(
+                term IN LOWER(COALESCE(chunk.metadata->>'documentKeywords', ''))
+              ) > 0
+            ) AS document_keyword_match
+          FROM "ai_knowledge_document_chunks" chunk
+          INNER JOIN "ai_knowledge_documents" document
+            ON document.id = chunk."documentId"
+          CROSS JOIN search_input
+          WHERE chunk."knowledgeId" = $1
+            AND chunk.enabled = true
+            AND document.enabled = true
         )
-        SELECT
-          chunk.id AS "chunkId"
-        FROM "ai_knowledge_document_chunks" chunk
-        INNER JOIN "ai_knowledge_documents" document
-          ON document.id = chunk."documentId"
-        CROSS JOIN search_input
-        WHERE chunk."knowledgeId" = $1
-          AND chunk.enabled = true
-          AND document.enabled = true
-        AND (
-          to_tsvector('simple', COALESCE(chunk."searchText", '') || ' ' || COALESCE(chunk."text", '')) @@ search_input.ts_query
-          OR EXISTS (
-            SELECT 1
-            FROM unnest(search_input.trigram_terms) AS terms(term)
-            WHERE LOWER(chunk."searchText") % term
-              OR POSITION(term IN LOWER(chunk."searchText")) > 0
-          )
-          OR EXISTS (
-            SELECT 1
-            FROM unnest(search_input.trigram_terms) AS terms(term)
-            WHERE POSITION(
-              term IN LOWER(COALESCE(chunk.metadata->>'keywords', ''))
-            ) > 0
-          )
-        )
+        SELECT "chunkId"
+        FROM ranked
+        WHERE document_vector @@ ts_query
+          OR content_match
+          OR keyword_match
+          OR document_keyword_match
         ORDER BY
-          (
-            CASE
-              WHEN to_tsvector('simple', COALESCE(chunk."searchText", '') || ' ' || COALESCE(chunk."text", '')) @@ search_input.ts_query
-              THEN ts_rank_cd(
-                to_tsvector('simple', COALESCE(chunk."searchText", '') || ' ' || COALESCE(chunk."text", '')),
-                search_input.ts_query
-              )
-              ELSE 0
-            END
-          )
-          + (
-            CASE
-              WHEN EXISTS (
-                SELECT 1
-                FROM unnest(search_input.trigram_terms) AS terms(term)
-                WHERE LOWER(chunk."searchText") % term
-                  OR POSITION(term IN LOWER(chunk."searchText")) > 0
-              )
-              THEN 0.15
-              ELSE 0
-            END
-          )
-          + (
-            CASE
-              WHEN EXISTS (
-                SELECT 1
-                FROM unnest(search_input.trigram_terms) AS terms(term)
-                WHERE POSITION(
-                  term IN LOWER(COALESCE(chunk.metadata->>'keywords', ''))
-                ) > 0
-              )
-              THEN 0.3
-              ELSE 0
-            END
-          )
-          + (
-            CASE
-              WHEN EXISTS (
-                SELECT 1
-                FROM unnest(search_input.trigram_terms) AS terms(term)
-                WHERE POSITION(
-                  term IN LOWER(COALESCE(chunk.metadata->>'documentKeywords', ''))
-                ) > 0
-              )
-              THEN 0.1
-              ELSE 0
-            END
-          ) DESC,
-          chunk.id DESC
+          CASE
+            WHEN document_vector @@ ts_query
+            THEN ts_rank_cd(document_vector, ts_query)
+            ELSE 0
+          END
+          + CASE WHEN content_match THEN 0.15 ELSE 0 END
+          + CASE WHEN keyword_match THEN 0.3 ELSE 0 END
+          + CASE WHEN document_keyword_match THEN 0.1 ELSE 0 END DESC,
+          "chunkId" DESC
         LIMIT $4
       `,
       [
@@ -518,6 +642,9 @@ export class KnowledgeRecallService implements OnModuleInit {
     queryTerms: string[],
   ) {
     if (!queryTerms.length) return new Map<string, number>();
+    if (this.dataSource.options.type !== "postgres") {
+      return new Map(queryTerms.map((term) => [term, 1] as const));
+    }
 
     const rows = await this.dataSource.query<TextRecallTermFrequencyRow[]>(
       `
@@ -632,6 +759,8 @@ export class KnowledgeRecallService implements OnModuleInit {
     return [
       { text: candidate.chunk.document.name, boost: 1.15 },
       { text: metadata.documentTitle, boost: 1.35 },
+      { text: metadata.format, boost: 1.5 },
+      { text: metadata.contentType, boost: 1.5 },
       { text: metadata.sectionTitle, boost: 1.45 },
       { text: metadata.headingPath, boost: 1.4 },
       { text: metadata.sectionHeadingPath, boost: 1.45 },
@@ -837,6 +966,69 @@ export class KnowledgeRecallService implements OnModuleInit {
     return clampScore(candidate.rerankScore * 0.75 + candidate.score * 0.25);
   }
 
+  private filterFinalCandidates(
+    candidates: RecallCandidate[],
+    minScore: number,
+    queryTerms: string[] = [],
+    strategy: KnowledgeRecallStrategy = "hybrid",
+  ) {
+    const requestedFormats = queryTerms.filter((term) =>
+      RECALL_FORMAT_TERMS.has(term),
+    );
+
+    return candidates.filter((candidate) => {
+      // minScore 是原始召回的硬门槛。重排只负责改善候选顺序，不能把
+      // 向量/全文都低于门槛的弱相关候选重新放回结果集。
+      if (candidate.score < minScore) return false;
+      if (this.getCandidateRankScore(candidate) < minScore) return false;
+      if (
+        strategy === "hybrid" &&
+        (candidate.textScore ?? 0) < HYBRID_MIN_TEXT_SCORE
+      ) {
+        return false;
+      }
+      if (
+        candidate.rerankScore !== undefined &&
+        candidate.rerankScore < MIN_RERANK_SCORE
+      ) {
+        return false;
+      }
+      return this.matchesRequestedFormat(candidate, requestedFormats);
+    });
+  }
+
+  private matchesRequestedFormat(
+    candidate: RecallCandidate,
+    requestedFormats: string[],
+  ) {
+    if (!requestedFormats.length) return true;
+
+    const metadata = candidate.chunk.metadata;
+    const format = String(metadata.format ?? "").toLowerCase();
+    const documentName = candidate.chunk.document.name.toLowerCase();
+    const contentType = String(metadata.contentType ?? "").toLowerCase();
+
+    return requestedFormats.some((requestedFormat) => {
+      if (documentName.endsWith(`.${requestedFormat}`)) return true;
+      if (requestedFormat === "xlsx" || requestedFormat === "xls") {
+        return format === "excel" || contentType.includes("spreadsheet");
+      }
+      if (requestedFormat === "md" || requestedFormat === "markdown") {
+        return format === "md" || contentType.includes("markdown");
+      }
+      if (requestedFormat === "doc") {
+        return format === "doc" || contentType.includes("msword");
+      }
+      if (requestedFormat === "docx") {
+        return format === "docx" || contentType.includes("wordprocessingml");
+      }
+
+      return (
+        format === requestedFormat || contentType.includes(requestedFormat)
+      );
+    });
+  }
+
   private async rerankCandidates(
     query: string,
     candidates: RecallCandidate[],
@@ -847,7 +1039,17 @@ export class KnowledgeRecallService implements OnModuleInit {
       topN: Math.min(candidates.length, Math.max(limit * 4, limit)),
       documents: candidates.map((candidate) => ({
         id: candidate.chunk.id,
-        text: candidate.chunk.searchText || candidate.chunk.text,
+        text: [
+          candidate.chunk.document.name,
+          candidate.chunk.metadata.documentTitle,
+          candidate.chunk.metadata.format,
+          candidate.chunk.metadata.contentType,
+          candidate.chunk.metadata.headingPath?.join(" > "),
+          candidate.chunk.metadata.keywords?.join(" "),
+          candidate.chunk.searchText || candidate.chunk.text,
+        ]
+          .filter(Boolean)
+          .join("\n"),
       })),
     });
     if (!rerankResults.length) return candidates;
@@ -915,11 +1117,16 @@ export class KnowledgeRecallService implements OnModuleInit {
     settings: AppKnowledgeRecallSettings = {},
     options: KnowledgeRecallExecutionOptions = {},
   ) {
+    const trace = createAiTrace("knowledge.recall", {
+      knowledgeId,
+      query: query.slice(0, 160),
+    });
     const { strategy, limit, minScore, vectorWeight } =
       this.normalizeRecallSettings(settings);
     const recallLimit =
       strategy === "vector" ? limit : Math.min(1024, Math.max(limit * 16, 64));
     const queryTerms = extractRecallTerms(query);
+    trace.mark("query-terms", { count: queryTerms.length });
     const needsTermWeights = strategy !== "vector" && queryTerms.length > 0;
     const termIdfWeightsTask = needsTermWeights
       ? this.buildQueryTermIdfWeights(knowledgeId, queryTerms)
@@ -929,7 +1136,10 @@ export class KnowledgeRecallService implements OnModuleInit {
 
     if (strategy === "hybrid" || strategy === "vector") {
       queryVector =
-        options.queryVector ?? (await this.createQueryEmbedding(query)).vector;
+        options.queryVector ??
+        (await trace.step("query-embedding", () =>
+          this.createQueryEmbedding(query),
+        ));
     }
 
     if (strategy === "hybrid" || strategy === "vector") {
@@ -944,10 +1154,10 @@ export class KnowledgeRecallService implements OnModuleInit {
       );
     }
 
-    const [resultSets, termIdfWeights] = await Promise.all([
-      Promise.all(recallTasks),
-      termIdfWeightsTask,
-    ]);
+    const [resultSets, termIdfWeights] = await trace.step(
+      "candidate-recall",
+      () => Promise.all([Promise.all(recallTasks), termIdfWeightsTask]),
+    );
     const mergedMatches = this.mergeRecallResultSets(resultSets);
     const queryWeights = createWeightedRecallQuery(queryTerms, termIdfWeights);
     const candidates = this.scoreCandidates(
@@ -956,17 +1166,38 @@ export class KnowledgeRecallService implements OnModuleInit {
       strategy,
       vectorWeight,
     ).slice(0, recallLimit);
-    const rerankedCandidates = await this.rerankCandidates(
-      query,
-      this.selectCandidatesForRerank(candidates, minScore),
-      limit,
+    const rerankedCandidates = await trace.step("rerank", () =>
+      this.rerankCandidates(
+        query,
+        this.selectCandidatesForRerank(candidates, minScore),
+        limit,
+      ),
     );
-    const expandedCandidates = await this.expandCandidatesBySiblingSections(
+    const relevantCandidates = this.filterFinalCandidates(
       rerankedCandidates,
-      knowledgeId,
-      limit,
+      minScore,
+      queryTerms,
+      strategy,
     );
-    const items = this.dedupeCandidatesBySection(expandedCandidates)
+    trace.mark("relevance-gate", {
+      before: rerankedCandidates.length,
+      after: relevantCandidates.length,
+      minScore,
+      minRerankScore: MIN_RERANK_SCORE,
+    });
+    const expandedCandidates = await trace.step("section-expansion", () =>
+      this.expandCandidatesBySiblingSections(
+        relevantCandidates,
+        knowledgeId,
+        limit,
+      ),
+    );
+    const items = this.filterFinalCandidates(
+      this.dedupeCandidatesBySection(expandedCandidates),
+      minScore,
+      queryTerms,
+      strategy,
+    )
       .slice(0, limit)
       .map((item) => ({
         chunkId: item.chunk.id,
@@ -986,13 +1217,15 @@ export class KnowledgeRecallService implements OnModuleInit {
         metadata: item.chunk.metadata as unknown as Record<string, unknown>,
       }));
 
-    return {
+    const result = {
       strategy,
       limit,
       minScore,
       vectorWeight,
       items,
     };
+    trace.end({ candidateCount: candidates.length, resultCount: items.length });
+    return result;
   }
 
   private async incrementRecallCounts(

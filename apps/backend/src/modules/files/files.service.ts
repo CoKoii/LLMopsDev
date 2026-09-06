@@ -123,14 +123,19 @@ export class FilesService {
 
   async remove(id: number, userId: number) {
     const file = await this.findOwnedFile(id, userId);
+    const databaseType = this.filesRepository.manager.connection.options.type;
+    const quote = databaseType === "postgres" ? '"' : "`";
+    const parameter = databaseType === "postgres" ? "$1" : "?";
+    const fileIdColumn = `${quote}fileId${quote}`;
+    const deletedAtColumn = `${quote}deletedAt${quote}`;
 
     const [documentRows, attachmentRows] = await Promise.all([
       this.filesRepository.manager.query<Array<{ count: string }>>(
-        `SELECT COUNT(*) AS count FROM ai_knowledge_documents WHERE "fileId" = $1 AND "deletedAt" IS NULL`,
+        `SELECT COUNT(*) AS count FROM ai_knowledge_documents WHERE ${fileIdColumn} = ${parameter} AND ${deletedAtColumn} IS NULL`,
         [id],
       ),
       this.filesRepository.manager.query<Array<{ count: string }>>(
-        `SELECT COUNT(*) AS count FROM ai_chat_attachments WHERE "fileId" = $1`,
+        `SELECT COUNT(*) AS count FROM ai_chat_attachments WHERE ${fileIdColumn} = ${parameter}`,
         [id],
       ),
     ]);

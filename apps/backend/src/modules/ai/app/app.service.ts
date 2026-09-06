@@ -6,6 +6,7 @@ import {
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, In, Repository, type FindOptionsRelations } from "typeorm";
 import { FilesService } from "../../files/files.service";
+import { DocumentVectorStoreService } from "../knowledge/document-vector-store/document-vector-store.service";
 import {
   createPageResult,
   type PageResult,
@@ -97,6 +98,7 @@ export class AppService {
     private readonly knowledgeRepository: Repository<Knowledge>,
     private readonly dataSource: DataSource,
     private readonly filesService: FilesService,
+    private readonly documentVectorStoreService: DocumentVectorStoreService,
   ) {}
 
   private withAccessibleImage(app: AiApp): AiApp {
@@ -765,27 +767,37 @@ export class AppService {
     const draft = await this.ensureDraftVersion(id, userId);
     draft.config = await this.sanitizeSelectableResources(draft.config, userId);
     await this.appVersionRepository.save(draft);
-    const publishedVersions = await this.appVersionRepository.find({
-      select: ["version"],
-      where: [
-        { appId: id, status: AiAppVersionStatus.PUBLISHED },
-        { appId: id, status: AiAppVersionStatus.ARCHIVED },
-      ],
+    // Serialize version allocation on the app row; otherwise concurrent publish
+    // requests can both calculate the same next version number.
+    const savedVersion = await this.dataSource.transaction(async (manager) => {
+      await manager.findOne(AiApp, {
+        where: { id, createdBy: userId },
+        lock: { mode: "pessimistic_write" },
+      });
+      const publishedVersions = await manager.getRepository(AiAppVersion).find({
+        select: ["version"],
+        where: [
+          { appId: id, status: AiAppVersionStatus.PUBLISHED },
+          { appId: id, status: AiAppVersionStatus.ARCHIVED },
+        ],
+      });
+      const version = this.getNextPublishedVersion(publishedVersions);
+      const saved = await manager.getRepository(AiAppVersion).save(
+        manager.getRepository(AiAppVersion).create({
+          appId: id,
+          version,
+          status: AiAppVersionStatus.PUBLISHED,
+          config: draft.config,
+          publishedAt: new Date(),
+        }),
+      );
+      await manager.update(
+        AiApp,
+        { id, createdBy: userId },
+        { publishedVersionId: saved.id },
+      );
+      return saved;
     });
-    const version = this.getNextPublishedVersion(publishedVersions);
-    const savedVersion = await this.appVersionRepository.save(
-      this.appVersionRepository.create({
-        appId: id,
-        version,
-        status: AiAppVersionStatus.PUBLISHED,
-        config: draft.config,
-        publishedAt: new Date(),
-      }),
-    );
-    await this.appRepository.update(
-      { id, createdBy: userId },
-      { publishedVersionId: savedVersion.id },
-    );
 
     return this.withVersionRelations(savedVersion, userId);
   }
@@ -831,6 +843,15 @@ export class AppService {
       where: { id, createdBy: userId },
     });
     if (!app) throw new NotFoundException("AI应用不存在");
+    const sessions = await this.dataSource.getRepository(ChatSession).find({
+      select: ["id"],
+      where: { appId: id },
+    });
+    await Promise.all(
+      sessions.map((session) =>
+        this.documentVectorStoreService.deleteSessionPoints(session.id),
+      ),
+    );
     await this.dataSource.getRepository(ChatSession).delete({ appId: id });
     await this.dataSource.getRepository(ChatUserMemory).delete({ appId: id });
     await this.appRepository.softRemove(app);

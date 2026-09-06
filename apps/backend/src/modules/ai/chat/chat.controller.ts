@@ -11,9 +11,11 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   StreamableFile,
   Put,
 } from "@nestjs/common";
+import type { Response } from "express";
 import { SkipResponseWrap } from "../../../common/http/skip-response-wrap.decorator";
 import type { AuthUser } from "../../../common/auth/auth-user";
 import { CurrentUser } from "../../../common/auth/current-user.decorator";
@@ -57,19 +59,21 @@ export class ChatController {
     @Param("id", ParseIntPipe) id: number,
     @Body() dto: DebugAppChatDto,
     @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
   ): StreamableFile {
-    return new StreamableFile(
-      this.chatService.createAppDebugSseStream(
-        id,
-        dto.message,
-        user.userId,
-        dto.sessionId,
-        dto.attachmentFileIds,
-      ),
-      {
-        type: "text/event-stream; charset=utf-8",
-      },
+    const stream = this.chatService.createAppDebugSseStream(
+      id,
+      dto.message,
+      user.userId,
+      dto.sessionId,
+      dto.attachmentFileIds,
     );
+    response.once("close", () => {
+      if (!response.writableFinished) stream.destroy();
+    });
+    return new StreamableFile(stream, {
+      type: "text/event-stream; charset=utf-8",
+    });
   }
   // -------------------------
 
@@ -190,19 +194,21 @@ export class ChatController {
     @Param("id", ParseIntPipe) id: number,
     @Body() dto: DebugAppChatDto,
     @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) response: Response,
   ): StreamableFile {
-    return new StreamableFile(
-      this.chatService.createStandaloneAppSseStream(
-        id,
-        dto.message,
-        user.userId,
-        dto.sessionId,
-        dto.attachmentFileIds,
-      ),
-      {
-        type: "text/event-stream; charset=utf-8",
-      },
+    const stream = this.chatService.createStandaloneAppSseStream(
+      id,
+      dto.message,
+      user.userId,
+      dto.sessionId,
+      dto.attachmentFileIds,
     );
+    response.once("close", () => {
+      if (!response.writableFinished) stream.destroy();
+    });
+    return new StreamableFile(stream, {
+      type: "text/event-stream; charset=utf-8",
+    });
   }
   // -------------------------
 

@@ -11,6 +11,7 @@ import {
 import { InjectRepository } from "@nestjs/typeorm";
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
+import { AiTrace, createAiTrace } from "../../../common/trace/ai-trace";
 import { Repository } from "typeorm";
 import { z } from "zod";
 import {
@@ -252,7 +253,15 @@ class AsyncQueue<T> implements AsyncIterable<T> {
     if (this.items.length) {
       return { value: this.items.shift() as T, done: false };
     }
-    if (this.error) throw this.error;
+    if (this.error) {
+      throw this.error instanceof Error
+        ? this.error
+        : new Error(
+            typeof this.error === "string"
+              ? this.error
+              : (JSON.stringify(this.error) ?? "异步队列执行失败"),
+          );
+    }
     if (this.closed) return { value: undefined, done: true };
 
     return new Promise<IteratorResult<T>>((resolve, reject) => {
@@ -270,12 +279,16 @@ type AgentToolCall = {
   name?: string;
   args?: Record<string, unknown>;
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 type AgentToolRunResult = {
   answer?: string;
   messages: BaseMessageLike[];
 };
 type AgentToolRunEvent =
   | { type: "tool-call" }
+  | { type: "tool-result" }
   | { type: "result"; result: AgentToolRunResult };
 
 @Injectable()
@@ -699,15 +712,10 @@ export class ChatService {
     if (typeof content === "string") return content;
     if (!Array.isArray(content)) return "";
 
-    return content
+    return (content as unknown[])
       .map((item) => {
         if (typeof item === "string") return item;
-        if (
-          typeof item === "object" &&
-          item !== null &&
-          "text" in item &&
-          typeof item.text === "string"
-        ) {
+        if (isRecord(item) && typeof item.text === "string") {
           return item.text;
         }
         return "";
@@ -716,19 +724,15 @@ export class ChatService {
   }
 
   private getToolCalls(message: unknown): AgentToolCall[] {
-    const toolCalls = (message as { tool_calls?: unknown }).tool_calls;
+    const toolCalls = isRecord(message) ? message.tool_calls : undefined;
     if (!Array.isArray(toolCalls)) return [];
 
-    return toolCalls
-      .filter(
-        (item): item is AgentToolCall =>
-          typeof item === "object" && item !== null,
-      )
+    return (toolCalls as unknown[])
+      .filter((item): item is AgentToolCall => isRecord(item))
       .map((item) => ({
         id: typeof item.id === "string" ? item.id : undefined,
         name: typeof item.name === "string" ? item.name : undefined,
-        args:
-          typeof item.args === "object" && item.args !== null ? item.args : {},
+        args: isRecord(item.args) ? item.args : {},
       }));
   }
 
@@ -739,7 +743,7 @@ export class ChatService {
     };
     const shape = schema.shape ?? schema._def?.shape;
 
-    return typeof shape === "function" ? shape() : shape;
+    return typeof shape === "function" ? (shape as () => unknown)() : shape;
   }
 
   private toolExpectsBody(tool: StructuredToolInterface) {
@@ -779,6 +783,8 @@ export class ChatService {
     systemPrompt: string;
     messages: BaseMessageLike[];
     tokenUsage: TokenUsageTracker;
+    trace?: AiTrace;
+    signal?: AbortSignal;
   }): AsyncGenerator<AgentToolRunEvent> {
     const toolMap = new Map(params.tools.map((item) => [item.name, item]));
     const messages: BaseMessageLike[] = [
@@ -790,7 +796,11 @@ export class ChatService {
     let hasExecutedTools = false;
 
     for (let round = 1; round <= maxToolRounds; round += 1) {
-      const aiMessage = await modelWithTools.invoke(messages);
+      if (params.signal?.aborted) return;
+      params.trace?.mark("agent.model", { round });
+      const aiMessage = await modelWithTools.invoke(messages, {
+        signal: params.signal,
+      });
       params.tokenUsage.add(getAiMessageTokens(aiMessage));
       const toolCalls = this.getToolCalls(aiMessage);
 
@@ -811,8 +821,13 @@ export class ChatService {
       }
 
       yield { type: "tool-call" };
+      params.trace?.mark("agent.tool-calls", {
+        round,
+        count: toolCalls.length,
+      });
       messages.push(aiMessage);
       for (const toolCall of toolCalls) {
+        if (params.signal?.aborted) return;
         if (!toolCall.id || !toolCall.name) {
           throw new Error(
             `模型返回了无效工具调用：${JSON.stringify(toolCall)}`,
@@ -834,15 +849,17 @@ export class ChatService {
           continue;
         }
 
-        const toolResult = await selectedTool.invoke({
+        const toolResult = (await selectedTool.invoke({
           type: "tool_call",
           id: toolCall.id,
           name: toolCall.name,
           args: this.normalizeToolArgs(selectedTool, toolCall.args),
-        });
-        messages.push(toolResult as BaseMessageLike);
+        })) as BaseMessageLike;
+        messages.push(toolResult);
+        params.trace?.mark("agent.tool-result", { tool: toolCall.name });
         hasExecutedTools = true;
       }
+      yield { type: "tool-result" };
     }
 
     messages.push([
@@ -857,10 +874,14 @@ export class ChatService {
     model: ChatOpenAI;
     messages: BaseMessageLike[];
     tokenUsage: TokenUsageTracker;
+    signal?: AbortSignal;
   }): AsyncGenerator<string> {
-    const stream = await params.model.stream(params.messages);
+    const stream = await params.model.stream(params.messages, {
+      signal: params.signal,
+    });
 
     for await (const chunk of stream) {
+      if (params.signal?.aborted) return;
       params.tokenUsage.add(getAiMessageTokens(chunk));
       const content = this.getMessageText(chunk.content);
       if (!content) continue;
@@ -1304,13 +1325,14 @@ export class ChatService {
     sessionId?: number,
     attachmentFileIds: number[] = [],
   ): Readable {
-    return Readable.from(
+    return this.createAbortableAppChatStream((signal) =>
       this.streamAppChat({
         appId,
         message,
         userId,
         sessionId,
         attachmentFileIds,
+        signal,
         resolveRuntime: async () => ({
           version: await this.aiRuntimeService.getDraft(appId, userId),
           resourceUserId: userId,
@@ -1327,13 +1349,14 @@ export class ChatService {
     sessionId?: number,
     attachmentFileIds: number[] = [],
   ): Readable {
-    return Readable.from(
+    return this.createAbortableAppChatStream((signal) =>
       this.streamAppChat({
         appId,
         message,
         userId,
         sessionId,
         attachmentFileIds,
+        signal,
         resolveRuntime: async () => {
           const runtime = await this.aiRuntimeService.getStandaloneVersion(
             appId,
@@ -1627,6 +1650,7 @@ export class ChatService {
     }>;
     mode: ChatSessionMode;
     throwErrors?: boolean;
+    signal?: AbortSignal;
   }): AsyncGenerator<string> {
     const {
       appId,
@@ -1639,20 +1663,30 @@ export class ChatService {
       resolveRuntime,
       mode,
       throwErrors = false,
+      signal,
     } = params;
     const startedAt = Date.now();
     let output = "";
     let assistantMessage: ChatMessage | undefined;
     let activeSpeechInput: AsyncQueue<string> | undefined;
     const tokenUsage = this.createTokenUsageTracker();
+    const trace = createAiTrace("chat.stream", { appId, mode, userId });
+    let messageFinalized = false;
+
+    const isAborted = () => signal?.aborted === true;
 
     try {
       const content = message.trim();
       if (!content) {
         throw new BadRequestException("消息内容不能为空");
       }
-      const { version, resourceUserId } = await resolveRuntime();
-      const model = await this.aiRuntimeService.createModel(version.config);
+      const { version, resourceUserId } = await trace.step(
+        "resolve-runtime",
+        resolveRuntime,
+      );
+      const model = await trace.step("create-model", () =>
+        this.aiRuntimeService.createModel(version.config),
+      );
       const speechInput =
         mode !== "openapi" && version.config.toggles?.voiceOutput
           ? new AsyncQueue<string>()
@@ -1662,22 +1696,23 @@ export class ChatService {
         ? this.startSpeechAudioStream(speechInput)
         : undefined;
       let speechStarted = false;
-      const service = this;
+      const sse = this.sse.bind(this);
+      const encodeSpeechAudioChunk = this.encodeSpeechAudioChunk.bind(this);
       const drainReadySpeechAudio = function* () {
         for (const chunk of speechOutput?.drainReady() ?? []) {
-          yield service.sse(service.encodeSpeechAudioChunk(chunk), "audio");
+          yield sse(encodeSpeechAudioChunk(chunk), "audio");
         }
       };
-      const emitContent = async function* (value: string) {
+      const emitContent = function* (value: string) {
         output += value;
         if (speechInput) {
           if (!speechStarted) {
             speechStarted = true;
-            yield service.sse({ contentType: "audio/mpeg" }, "audio-start");
+            yield sse({ contentType: "audio/mpeg" }, "audio-start");
           }
           speechInput.push(value);
         }
-        yield service.sse({ content: value });
+        yield sse({ content: value });
         yield* drainReadySpeechAudio();
       };
       const finishSpeech = async function* () {
@@ -1685,13 +1720,13 @@ export class ChatService {
         speechInput.close();
         try {
           for await (const chunk of speechOutput) {
-            yield service.sse(service.encodeSpeechAudioChunk(chunk), "audio");
+            yield sse(encodeSpeechAudioChunk(chunk), "audio");
           }
-          yield service.sse({}, "audio-end");
+          yield sse({}, "audio-end");
         } catch (error) {
           const message =
             error instanceof Error ? error.message : String(error);
-          yield service.sse({ message }, "audio-error");
+          yield sse({ message }, "audio-error");
         }
       };
       const session = await this.resolveChatSession({
@@ -1710,6 +1745,7 @@ export class ChatService {
         attachmentFileIds,
       });
       assistantMessage = await this.createAssistantMessage(session, userId);
+      if (isAborted()) return;
       yield this.sse(
         {
           sessionId: session.id,
@@ -1723,19 +1759,24 @@ export class ChatService {
       if (attachmentFileIds.length) {
         yield this.sse({ status: "解析附件中" }, "status");
       }
-      const currentAttachmentContext =
-        await this.chatAttachmentService.processMessageAttachments({
-          session,
-          message: userMessage,
-          fileIds: attachmentFileIds,
-          userId,
-        });
+      const currentAttachmentContext = await trace.step(
+        "process-attachments",
+        () =>
+          this.chatAttachmentService.processMessageAttachments({
+            session,
+            message: userMessage,
+            fileIds: attachmentFileIds,
+            userId,
+          }),
+      );
+      if (isAborted()) return;
       tokenUsage.add(currentAttachmentContext.tokens);
       const history = await this.loadRecentHistory({
         sessionId: session.id,
         beforeMessageId: userMessage.id,
         limit: this.resolveContextMessageLimit(version.config),
       });
+      if (isAborted()) return;
       const knowledgeConfig = this.resolveKnowledgeConfig(version.config);
       const longTermMemoryEnabled =
         version.config.toggles?.longTermMemory ?? false;
@@ -1762,63 +1803,70 @@ export class ChatService {
       }
       const recallQueries =
         knowledgeConfig.ids.length || hasHistoricalAttachments
-          ? await this.rewriteKnowledgeQueries(
-              content,
-              history,
-              tokenUsage,
-              currentAttachmentContext.context,
+          ? await trace.step("rewrite-query", () =>
+              this.rewriteKnowledgeQueries(
+                content,
+                history,
+                tokenUsage,
+                currentAttachmentContext.context,
+              ),
             )
           : [content];
       if (knowledgeConfig.ids.length || hasHistoricalAttachments) {
         yield this.sse({ status: "检索知识库中" }, "status");
       }
-      const [historicalAttachmentRecall, recalledItems] = await Promise.all([
-        hasHistoricalAttachments
-          ? Promise.all(
-              recallQueries.map((query) =>
-                this.chatAttachmentService.createRecallContext(
-                  session.id,
-                  query,
-                  {
-                    excludeMessageId: userMessage.id,
-                  },
-                ),
-              ),
-            ).then((results) => ({
-              context: results
-                .map((result) => result.context)
-                .filter(Boolean)
-                .join("\n\n"),
-              items: results.flatMap((result) => result.items),
-              tokens: results.some((result) => result.tokens !== undefined)
-                ? results.reduce(
-                    (total, result) => total + (result.tokens ?? 0),
-                    0,
-                  )
-                : undefined,
-            }))
-          : Promise.resolve({
-              context: "",
-              items: [],
-              tokens: undefined,
-            }),
-        knowledgeConfig.ids.length
-          ? Promise.all(
-              recallQueries.map(async (query) => {
-                const result =
-                  await this.knowledgeService.recallForAppWithUsage({
-                    knowledgeIds: knowledgeConfig.ids,
-                    settings: knowledgeConfig.settings,
-                    query,
-                    userId: resourceUserId,
-                  });
-                tokenUsage.add(result.tokens);
+      const [historicalAttachmentRecall, recalledItems] = await trace.step(
+        "recall",
+        () =>
+          Promise.all([
+            hasHistoricalAttachments
+              ? Promise.all(
+                  recallQueries.map((query) =>
+                    this.chatAttachmentService.createRecallContext(
+                      session.id,
+                      query,
+                      {
+                        excludeMessageId: userMessage.id,
+                      },
+                    ),
+                  ),
+                ).then((results) => ({
+                  context: results
+                    .map((result) => result.context)
+                    .filter(Boolean)
+                    .join("\n\n"),
+                  items: results.flatMap((result) => result.items),
+                  tokens: results.some((result) => result.tokens !== undefined)
+                    ? results.reduce(
+                        (total, result) => total + (result.tokens ?? 0),
+                        0,
+                      )
+                    : undefined,
+                }))
+              : Promise.resolve({
+                  context: "",
+                  items: [],
+                  tokens: undefined,
+                }),
+            knowledgeConfig.ids.length
+              ? Promise.all(
+                  recallQueries.map(async (query) => {
+                    const result =
+                      await this.knowledgeService.recallForAppWithUsage({
+                        knowledgeIds: knowledgeConfig.ids,
+                        settings: knowledgeConfig.settings,
+                        query,
+                        userId: resourceUserId,
+                      });
+                    tokenUsage.add(result.tokens);
 
-                return result.items.map((item) => ({ ...item, query }));
-              }),
-            ).then((items) => items.flat())
-          : Promise.resolve([] as KnowledgeRecallItemWithQuery[]),
-      ]);
+                    return result.items.map((item) => ({ ...item, query }));
+                  }),
+                ).then((items) => items.flat())
+              : Promise.resolve([] as KnowledgeRecallItemWithQuery[]),
+          ]),
+      );
+      if (isAborted()) return;
       tokenUsage.add(historicalAttachmentRecall.tokens);
       const attachmentItems = [
         ...currentAttachmentContext.items,
@@ -1849,19 +1897,23 @@ export class ChatService {
       }
       yield this.sse({ status: "生成回复中" }, "status");
 
-      const { agent, tools, systemPrompt } =
-        await this.aiRuntimeService.createAgentFromDraft(
-          version,
-          model,
-          resourceUserId,
-          {
-            longTermMemoryContext,
-            sessionSummaryContext,
-            knowledgeContext,
-            currentAttachmentContext: currentAttachmentContext.context,
-            recalledAttachmentContext: historicalAttachmentRecall.context,
-          },
-        );
+      const { agent, tools, systemPrompt } = await trace.step(
+        "create-agent",
+        () =>
+          this.aiRuntimeService.createAgentFromDraft(
+            version,
+            model,
+            resourceUserId,
+            {
+              longTermMemoryContext,
+              sessionSummaryContext,
+              knowledgeContext,
+              currentAttachmentContext: currentAttachmentContext.context,
+              recalledAttachmentContext: historicalAttachmentRecall.context,
+            },
+          ),
+      );
+      if (isAborted()) return;
       const messages = this.createMessages(content, history);
 
       if (tools.length) {
@@ -1873,6 +1925,8 @@ export class ChatService {
           systemPrompt,
           messages,
           tokenUsage,
+          trace,
+          signal,
         });
         for await (const event of toolRun) {
           if (event.type === "tool-call") {
@@ -1882,43 +1936,47 @@ export class ChatService {
             }
             continue;
           }
+          if (event.type === "tool-result") {
+            yield this.sse({ status: "整理插件结果中" }, "status");
+            continue;
+          }
           result = event.result;
         }
         if (!result) {
           result = { messages };
         }
-        if (result.answer) {
-          const answerStream = this.streamTextChunks(result.answer);
-          while (true) {
-            const chunk = await answerStream.next();
-            if (chunk.done) break;
-            yield* emitContent(chunk.value);
-          }
-        } else {
-          if (pluginStatusSent) {
-            yield this.sse({ status: "生成回复中" }, "status");
-          }
-          const answerStream = this.streamModelAnswerChunks({
-            model,
-            messages: result.messages,
-            tokenUsage,
-          });
-          while (true) {
-            const chunk = await answerStream.next();
-            if (chunk.done) break;
-            yield* emitContent(chunk.value);
-          }
+        if (pluginStatusSent) {
+          yield this.sse({ status: "生成回复中" }, "status");
+        }
+        const answerStream = result.answer
+          ? this.streamTextChunks(result.answer)
+          : this.streamModelAnswerChunks({
+              model,
+              messages: result.messages,
+              tokenUsage,
+              signal,
+            });
+        for await (const chunk of answerStream) {
+          if (isAborted()) return;
+          yield* emitContent(chunk);
         }
       } else {
-        const run = await agent.streamEvents({ messages }, { version: "v3" });
+        trace.mark("agent.stream-start");
+        const run = await agent.streamEvents(
+          { messages },
+          { version: "v3", signal },
+        );
 
         for await (const item of run.messages) {
+          if (isAborted()) return;
           for await (const content of item.text) {
+            if (isAborted()) return;
             yield* emitContent(content);
           }
         }
         const result = await run.output;
         tokenUsage.add(getAiMessageTokens(result.messages));
+        trace.mark("agent.stream-complete");
       }
       yield* finishSpeech();
 
@@ -1948,6 +2006,7 @@ export class ChatService {
         tokens: tokenUsage.total(),
         updatedBy: userId,
       });
+      messageFinalized = true;
       await this.sessionRepository.update(session.id, {
         lastMessageAt: new Date(),
         updatedBy: userId,
@@ -1977,16 +2036,47 @@ export class ChatService {
       const stack = error instanceof Error ? error.stack : undefined;
 
       this.logger.error(`AI应用调试失败: ${message}`, stack);
-      activeSpeechInput?.close();
       if (assistantMessage) {
         await this.messageRepository.update(assistantMessage.id, {
           content: output || message,
-          status: CHAT_MESSAGE_STATUS.FAILED,
+          status: isAborted()
+            ? CHAT_MESSAGE_STATUS.STOPPED
+            : CHAT_MESSAGE_STATUS.FAILED,
           updatedBy: userId,
         });
+        messageFinalized = true;
       }
-      if (throwErrors) throw error;
-      yield this.sse({ message }, "error");
+      if (!isAborted()) {
+        if (throwErrors) throw error;
+        yield this.sse({ message }, "error");
+      }
+    } finally {
+      activeSpeechInput?.close();
+      if (assistantMessage && !messageFinalized && isAborted()) {
+        try {
+          await this.messageRepository.update(assistantMessage.id, {
+            content: output,
+            status: CHAT_MESSAGE_STATUS.STOPPED,
+            updatedBy: userId,
+          });
+          messageFinalized = true;
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          this.logger.warn(`停止AI对话时更新消息状态失败: ${message}`);
+        }
+      }
+      trace.end({ outputLength: output.length });
     }
+  }
+
+  private createAbortableAppChatStream(
+    createGenerator: (signal: AbortSignal) => AsyncGenerator<string>,
+  ): Readable {
+    const controller = new AbortController();
+    const stream = Readable.from(createGenerator(controller.signal));
+    stream.once("close", () => controller.abort());
+    stream.once("error", () => controller.abort());
+    return stream;
   }
 }

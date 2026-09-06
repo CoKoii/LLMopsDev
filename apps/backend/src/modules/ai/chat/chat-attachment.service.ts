@@ -600,7 +600,8 @@ export class ChatAttachmentService {
             tokenCount: chunk.tokenCount,
             characterCount: chunk.characterCount,
             recallCount: 0,
-            enabled: true,
+            // 只有向量和数据库都写入成功后才允许历史召回看到新分块。
+            enabled: false,
             embeddingModel: embeddingResult!.model,
             embeddingDimension: embeddingResult!.dimension,
             vectorId: randomUUID(),
@@ -638,8 +639,26 @@ export class ChatAttachmentService {
             },
           })),
         );
+        await this.chunkRepository.update(
+          { id: In(savedChunks.map((chunk) => chunk.id)) },
+          { enabled: true },
+        );
+        for (const chunk of savedChunks) {
+          chunk.enabled = true;
+        }
         vectorUpserted = true;
       } catch (error) {
+        await this.documentVectorStoreService
+          .deleteAttachmentPoints(params.session.id, params.attachment.id)
+          .catch((cleanupError) => {
+            const cleanupMessage =
+              cleanupError instanceof Error
+                ? cleanupError.message
+                : String(cleanupError);
+            this.logger.warn(
+              `附件失败向量清理失败 attachmentId=${params.attachment.id}: ${cleanupMessage}`,
+            );
+          });
         await this.chunkRepository.delete({
           id: In(savedChunks.map((chunk) => chunk.id)),
         });
@@ -701,14 +720,34 @@ export class ChatAttachmentService {
       tokens: params.document.metadata.tokens,
     });
 
-    await this.attachmentRepository.save({
-      id: params.attachment.id,
-      status: CHAT_ATTACHMENT_STATUS.READY,
-      extractedText: params.document.text,
-      summary: compactText(params.document.text, 500),
-      metadata: attachmentMetadata,
-      updatedBy: params.userId,
-    });
+    try {
+      await this.attachmentRepository.save({
+        id: params.attachment.id,
+        status: CHAT_ATTACHMENT_STATUS.READY,
+        extractedText: params.document.text,
+        summary: compactText(params.document.text, 500),
+        metadata: attachmentMetadata,
+        updatedBy: params.userId,
+      });
+    } catch (error) {
+      await this.documentVectorStoreService
+        .deleteAttachmentPoints(params.session.id, params.attachment.id)
+        .catch((cleanupError) => {
+          const cleanupMessage =
+            cleanupError instanceof Error
+              ? cleanupError.message
+              : String(cleanupError);
+          this.logger.warn(
+            `附件状态写入失败后的向量清理失败 attachmentId=${params.attachment.id}: ${cleanupMessage}`,
+          );
+        });
+      if (savedChunks?.length) {
+        await this.chunkRepository.delete({
+          id: In(savedChunks.map((chunk) => chunk.id)),
+        });
+      }
+      throw error;
+    }
   }
 
   private async createCurrentAttachmentContext(params: {

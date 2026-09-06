@@ -11,7 +11,7 @@ import {
 export const overridesPreferences = defineOverridesPreferences({
   // overrides
   app: {
-    defaultHomePath: '/ai/models',
+    defaultHomePath: '/operations',
     enableRefreshToken: true,
     name: import.meta.env.VITE_APP_TITLE,
   },

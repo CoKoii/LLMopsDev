@@ -4,6 +4,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Readable } from "stream";
 import { Repository } from "typeorm";
+import { createAiTrace } from "../../../common/trace/ai-trace";
 import { AiAppCategory } from "../app/entities/app-category.entity";
 import { Knowledge } from "../knowledge/entities/knowledge.entity";
 import { Llm, LlmUsageType } from "../llm/entities/llm.entity";
@@ -64,28 +65,43 @@ export class HomeBuilderService {
     private readonly toolFactory: HomeBuilderToolFactory,
   ) {}
 
-  createPlanSseStream(dto: CreateHomeBuilderPlanDto, userId: number): Readable {
-    return Readable.from(this.streamHomeBuilder(dto, userId));
+  createPlanSseStream(
+    dto: CreateHomeBuilderPlanDto,
+    userId: number,
+    signal?: AbortSignal,
+  ): Readable {
+    return Readable.from(this.streamHomeBuilder(dto, userId, signal));
   }
 
   private async *streamHomeBuilder(
     dto: CreateHomeBuilderPlanDto,
     userId: number,
+    signal?: AbortSignal,
   ): AsyncGenerator<string> {
+    const trace = createAiTrace("home-builder", { userId });
+    let outputLength = 0;
+
     try {
       yield this.sse({ status: "正在读取可用资源" }, "status");
-      const context = await this.loadCatalogContext(userId);
-      const model = await this.llmService.createDefaultChatModel(
-        LlmUsageType.BUILT_IN_LARGE,
-        { temperature: 0.2, maxRetries: 1 },
+      const context = await trace.step("load-catalog", () =>
+        this.loadCatalogContext(userId),
       );
-      const agent = createAgent({
-        model,
-        tools: this.toolFactory.create(context, userId),
-        systemPrompt: `${HOME_BUILDER_SYSTEM_PROMPT}\n可用资源目录：${JSON.stringify(
-          this.toolFactory.describeResources(context),
-        )}`,
-      });
+      const model = await trace.step("create-model", () =>
+        this.llmService.createDefaultChatModel(LlmUsageType.BUILT_IN_LARGE, {
+          temperature: 0.2,
+          maxRetries: 1,
+        }),
+      );
+      const tools = this.toolFactory.create(context, userId);
+      const agent = await trace.step("create-agent", () =>
+        createAgent({
+          model,
+          tools,
+          systemPrompt: `${HOME_BUILDER_SYSTEM_PROMPT}\n可用资源目录：${JSON.stringify(
+            this.toolFactory.describeResources(context),
+          )}`,
+        }),
+      );
       const messages = (dto.history ?? [])
         .slice(-12)
         .map((message) =>
@@ -98,20 +114,27 @@ export class HomeBuilderService {
       yield this.sse({ status: "正在分析你的需求" }, "status");
       const events = agent.streamEvents(
         { messages },
-        { version: "v2", recursionLimit: 12 },
+        { version: "v2", recursionLimit: 12, signal },
       );
       for await (const event of events) {
+        if (signal?.aborted) {
+          trace.end({ status: "stopped", outputLength });
+          return;
+        }
         if (event.event === "on_tool_start") {
+          trace.mark("tool.start", { tool: event.name });
           const status = TOOL_STATUSES[event.name];
           if (status) yield this.sse({ status }, "status");
           continue;
         }
 
         if (event.event === "on_tool_end") {
+          trace.mark("tool.complete", { tool: event.name });
           const result = this.parseToolResult(event.data.output);
           if (result?.kind === "created") {
             yield this.sse({ created: result.resource }, "created");
             yield this.sse({ content: result.reply }, "content");
+            outputLength += result.reply.length;
             break;
           }
           continue;
@@ -122,13 +145,23 @@ export class HomeBuilderService {
           const content = this.getMessageText(
             isObject(chunk) ? chunk.content : undefined,
           );
-          if (content) yield this.sse({ content }, "content");
+          if (content) {
+            outputLength += content.length;
+            yield this.sse({ content }, "content");
+          }
         }
       }
 
+      trace.end({ status: "completed", outputLength });
       yield SSE_DONE;
     } catch (error) {
+      if (signal?.aborted) {
+        trace.end({ status: "stopped", outputLength });
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
+      trace.mark("failed", { error: message });
+      trace.end({ status: "failed", outputLength });
       this.logger.error(
         `home-builder failed: ${message}`,
         error instanceof Error ? error.stack : undefined,

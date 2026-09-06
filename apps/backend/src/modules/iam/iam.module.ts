@@ -5,6 +5,7 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 import { FilesModule } from "../files/files.module";
 import { AuthSessionCleanupService } from "./auth/auth-session-cleanup.service";
 import { AuthSession } from "./auth/auth-session.entity";
+import { AuthBootstrapService } from "./auth/auth-bootstrap.service";
 import { AuthController } from "./auth/auth.controller";
 import { AuthPermissionCacheService } from "./auth/auth-permission-cache.service";
 import { AuthService } from "./auth/auth.service";
@@ -40,6 +41,7 @@ import { UsersService } from "./users/users.service";
   ],
   providers: [
     AuthService,
+    AuthBootstrapService,
     AuthPermissionCacheService,
     AuthSessionCleanupService,
     JwtStrategy,

@@ -3,7 +3,7 @@ import { LockKeyhole, UserRound } from '@lucide/vue'
 import { Button, Card, Form, FormItem, Input, InputPassword } from 'antdv-next'
 import { ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 const loading = ref(false)
 const authStore = useAuthStore()
@@ -12,6 +12,14 @@ const formModel = ref({
   password: '',
 })
 const router = useRouter()
+const route = useRoute()
+
+const resolveRedirect = () => {
+  const redirect = route.query.redirect
+  return typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
+    ? redirect
+    : '/'
+}
 
 const submit = async () => {
   loading.value = true
@@ -20,7 +28,7 @@ const submit = async () => {
       username: formModel.value.username,
       password: formModel.value.password,
     })
-    router.push('/')
+    router.push(resolveRedirect())
   } finally {
     loading.value = false
   }

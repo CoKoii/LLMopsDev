@@ -20,7 +20,7 @@ export async function getUserInfoApi() {
   return {
     avatar: profile.profile?.avatar ?? '',
     desc: '',
-    homePath: '/ai/models',
+    homePath: '/operations',
     realName: profile.profile?.nickname ?? profile.username,
     roles: profile.roles ?? [],
     token: '',

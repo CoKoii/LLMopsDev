@@ -730,6 +730,7 @@ export const streamAiAppPromptOptimizeApi = async ({
     events.forEach(consumeEvent)
   }
 
+  buffer += decoder.decode()
   if (buffer) {
     consumeEvent(buffer)
   }
@@ -914,6 +915,7 @@ export const streamAiAppDebugApi = async ({
     events.forEach(consumeEvent)
   }
 
+  buffer += decoder.decode()
   if (buffer) {
     consumeEvent(buffer)
   }

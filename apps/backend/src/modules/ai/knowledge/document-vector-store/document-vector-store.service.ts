@@ -127,6 +127,14 @@ export class DocumentVectorStoreService {
     ]);
   }
 
+  async deleteAttachmentPoints(sessionId: number, attachmentId: number) {
+    await this.deleteByFilter([
+      { key: "source", match: { value: "chat_attachment" } },
+      { key: "sessionId", match: { value: sessionId } },
+      { key: "attachmentId", match: { value: attachmentId } },
+    ]);
+  }
+
   async search(params: {
     vector: number[];
     knowledgeId: number;

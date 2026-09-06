@@ -9,6 +9,7 @@ import {
   Put,
   Query,
 } from "@nestjs/common";
+import { Permissions } from "../../../common/auth/permissions.decorator";
 import { CreateLlmDto } from "./dto/create-llm.dto";
 import { QueryLlmsDto } from "./dto/query-llms.dto";
 import { TestLlmDto } from "./dto/test-llm.dto";
@@ -21,6 +22,7 @@ export class LlmController {
 
   // -------------------------
   // 创建大模型
+  @Permissions("llm:create")
   @Post()
   create(@Body() createLlmDto: CreateLlmDto) {
     return this.llmService.create(createLlmDto);
@@ -29,6 +31,7 @@ export class LlmController {
 
   // -------------------------
   // 获取大模型列表
+  @Permissions("llm:list")
   @Get()
   list(@Query() query: QueryLlmsDto) {
     return this.llmService.list(query);
@@ -37,6 +40,7 @@ export class LlmController {
 
   // -------------------------
   // 获取大模型详情
+  @Permissions("llm:list")
   @Get(":id")
   findOne(@Param("id", ParseIntPipe) id: number) {
     return this.llmService.findOne(id);
@@ -45,6 +49,7 @@ export class LlmController {
 
   // -------------------------
   // 测试模型连通性
+  @Permissions("llm:test")
   @Post(":id/test")
   test(@Param("id", ParseIntPipe) id: number, @Body() dto: TestLlmDto) {
     return this.llmService.test(id, dto);
@@ -53,6 +58,7 @@ export class LlmController {
 
   // -------------------------
   // 更新大模型
+  @Permissions("llm:update")
   @Put(":id")
   update(
     @Param("id", ParseIntPipe) id: number,
@@ -64,6 +70,7 @@ export class LlmController {
 
   // -------------------------
   // 删除大模型
+  @Permissions("llm:delete")
   @Delete(":id")
   remove(@Param("id", ParseIntPipe) id: number) {
     return this.llmService.remove(id);

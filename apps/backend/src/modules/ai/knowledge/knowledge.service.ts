@@ -6,13 +6,14 @@ import {
   Logger,
   NotFoundException,
 } from "@nestjs/common";
-import { InjectRepository } from "@nestjs/typeorm";
+import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
 import { normalizeCjkText } from "./cjk-normalize";
 import { randomUUID } from "crypto";
-import { In, Repository } from "typeorm";
+import { DataSource, In, Repository } from "typeorm";
 import { z } from "zod";
 import { OssService } from "../../../common/oss/oss.service";
 import { FilesService } from "../../files/files.service";
+import { createAiTrace } from "../../../common/trace/ai-trace";
 import {
   createPageResult,
   type PageResult,
@@ -142,6 +143,8 @@ export class KnowledgeService {
   private readonly logger = new Logger(KnowledgeService.name);
 
   constructor(
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
     @InjectRepository(Knowledge)
     private readonly knowledgeRepository: Repository<Knowledge>,
     @InjectRepository(KnowledgeDocument)
@@ -336,6 +339,146 @@ export class KnowledgeService {
   private async clearDocumentIndex(documentId: number) {
     await this.documentVectorStoreService.deleteDocumentPoints(documentId);
     await this.chunkRepository.delete({ documentId });
+  }
+
+  private async replaceDocumentIndex(params: {
+    document: KnowledgeDocument;
+    chunks: DocumentChunkDraft[];
+    vectors: number[][];
+    embeddingModel: string;
+    embeddingDimension: number;
+    documentKeywords: string[];
+    userId: number;
+  }) {
+    const { document, chunks, vectors, embeddingModel, embeddingDimension } =
+      params;
+    const oldChunks = await this.chunkRepository.find({
+      where: { documentId: document.id },
+    });
+    const oldChunkIds = oldChunks
+      .filter((chunk) => chunk.chunkIndex >= 0)
+      .map((chunk) => chunk.id);
+
+    // 负序号是临时 staging 区，避开 documentId + chunkIndex 唯一约束。
+    // enabled=false 让数据库文本召回和 Qdrant 结果在切换前都忽略新版本。
+    const staleStagedChunks = oldChunks.filter(
+      (chunk) => chunk.chunkIndex < 0,
+    );
+    if (staleStagedChunks.length) {
+      await Promise.all(
+        staleStagedChunks.map((chunk) =>
+          this.documentVectorStoreService.deleteChunkPoint(chunk.id),
+        ),
+      );
+      await this.chunkRepository.remove(staleStagedChunks);
+    }
+
+    const stagedChunks = await this.chunkRepository.save(
+      chunks.map((chunk) =>
+        this.chunkRepository.create({
+          knowledgeId: document.knowledgeId,
+          documentId: document.id,
+          chunkIndex: -(chunk.chunkIndex + 1),
+          text: chunk.text,
+          searchText: chunk.searchText,
+          tokenCount: chunk.tokenCount,
+          characterCount: chunk.characterCount,
+          recallCount: 0,
+          enabled: false,
+          embeddingModel,
+          embeddingDimension,
+          vectorId: randomUUID(),
+          metadata: {
+            ...chunk.metadata,
+            documentKeywords: params.documentKeywords,
+          },
+          createdBy: params.userId,
+          updatedBy: params.userId,
+        }),
+      ),
+    );
+
+    const stagedPointIds = stagedChunks.map((chunk) => chunk.id);
+    try {
+      await this.documentVectorStoreService.upsert(
+        stagedChunks.map((chunk, index) => ({
+          id: chunk.vectorId,
+          vector: vectors[index] ?? [],
+          payload: {
+            knowledgeId: document.knowledgeId,
+            documentId: document.id,
+            documentName: document.name,
+            chunkId: chunk.id,
+            chunkIndex: chunks[index]?.chunkIndex ?? index,
+            text: chunk.text,
+            searchText: chunk.searchText,
+            // DB 中仍是 disabled，只有事务提升后才会被 loadCandidates 接受。
+            enabled: true,
+            metadata: chunk.metadata,
+          },
+        })),
+      );
+
+      await this.dataSource.transaction(async (manager) => {
+        await manager
+          .createQueryBuilder()
+          .delete()
+          .from(KnowledgeDocumentChunk)
+          .where('"documentId" = :documentId', { documentId: document.id })
+          .andWhere('"chunkIndex" >= 0')
+          .execute();
+
+        for (const [index, chunk] of stagedChunks.entries()) {
+          await manager.update(
+            KnowledgeDocumentChunk,
+            { id: chunk.id, documentId: document.id },
+            {
+              chunkIndex: chunks[index]?.chunkIndex ?? index,
+              enabled: true,
+              updatedBy: params.userId,
+            },
+          );
+          chunk.chunkIndex = chunks[index]?.chunkIndex ?? index;
+          chunk.enabled = true;
+        }
+      });
+    } catch (error) {
+      await this.cleanupStagedDocumentIndex(document.id, stagedPointIds);
+      throw error;
+    }
+
+    // 数据库已完成切换后再删除旧 point。删除失败不会破坏新版本，后续可重试清理。
+    await Promise.all(
+      oldChunkIds.map((chunkId) =>
+        this.documentVectorStoreService.deleteChunkPoint(chunkId).catch(
+          (error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            this.logger.warn(`旧文档向量清理失败 chunkId=${chunkId}: ${message}`);
+          },
+        ),
+      ),
+    );
+
+    return stagedChunks;
+  }
+
+  private async cleanupStagedDocumentIndex(
+    documentId: number,
+    stagedChunkIds: number[],
+  ) {
+    await Promise.all(
+      stagedChunkIds.map((chunkId) =>
+        this.documentVectorStoreService.deleteChunkPoint(chunkId).catch(
+          (error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            this.logger.warn(`临时文档向量清理失败 chunkId=${chunkId}: ${message}`);
+          },
+        ),
+      ),
+    );
+    if (stagedChunkIds.length) {
+      await this.chunkRepository.delete({ id: In(stagedChunkIds), documentId });
+    }
   }
 
   private async upsertChunkVector(
@@ -892,6 +1035,11 @@ export class KnowledgeService {
     userId: number,
     chunkConfig?: KnowledgeDocumentChunkConfig,
   ) {
+    const trace = createAiTrace("knowledge.process", {
+      knowledgeId,
+      documentId,
+      userId,
+    });
     const document = await this.findOwnedDocument(
       knowledgeId,
       documentId,
@@ -903,14 +1051,14 @@ export class KnowledgeService {
     await this.documentRepository.save(document);
 
     try {
-      await this.clearDocumentIndex(documentId);
-
       const buffer = await this.ossService.getObjectBuffer(document.objectKey);
-      const parsedDocument = await this.documentParserService.parse({
-        filename: document.name,
-        contentType: document.contentType,
-        buffer,
-      });
+      const parsedDocument = await trace.step("parse", () =>
+        this.documentParserService.parse({
+          filename: document.name,
+          contentType: document.contentType,
+          buffer,
+        }),
+      );
 
       document.parseStatus = KnowledgeDocumentParseStatus.PARSED;
       document.parseError = null;
@@ -923,9 +1071,8 @@ export class KnowledgeService {
       document.cleanStatus = KnowledgeDocumentCleanStatus.CLEANING;
       document.cleanError = null;
       await this.documentRepository.save(document);
-      const { document: cleanedDocument } = this.documentCleanerService.clean(
-        parsedDocument,
-        chunkConfig,
+      const { document: cleanedDocument } = await trace.step("clean", () =>
+        this.documentCleanerService.clean(parsedDocument, chunkConfig),
       );
 
       document.cleanStatus = KnowledgeDocumentCleanStatus.CLEANED;
@@ -939,8 +1086,9 @@ export class KnowledgeService {
       document.enhanceStatus = KnowledgeDocumentEnhanceStatus.ENHANCING;
       document.enhanceError = null;
       await this.documentRepository.save(document);
-      const { document: enhancedDocument } =
-        this.documentEnhancerService.enhance(cleanedDocument);
+      const { document: enhancedDocument } = await trace.step("enhance", () =>
+        this.documentEnhancerService.enhance(cleanedDocument),
+      );
       // 用模型生成文档级关键词（与“用户问题建议”同一模型：STRUCTURED），失败时保留规则版
       try {
         const keywords = await this.llmKeywordService.extractDocumentKeywords({
@@ -972,16 +1120,20 @@ export class KnowledgeService {
       document.chunkStatus = KnowledgeDocumentChunkStatus.CHUNKING;
       document.chunkError = null;
       await this.documentRepository.save(document);
-      const chunks = this.documentChunkerService.createChunks({
-        knowledgeId,
-        documentId,
-        documentName: document.name,
-        contentType: document.contentType,
-        document: enhancedDocument,
-        chunkConfig,
-      });
+      const chunks = await trace.step("chunk", () =>
+        this.documentChunkerService.createChunks({
+          knowledgeId,
+          documentId,
+          documentName: document.name,
+          contentType: document.contentType,
+          document: enhancedDocument,
+          chunkConfig,
+        }),
+      );
       // 按章节用模型生成片段关键词（失败时保留规则版），供检索精确召回与加权
-      await this.enrichChunkKeywords(chunks);
+      await trace.step("chunk-keywords", () =>
+        this.enrichChunkKeywords(chunks),
+      );
       const documentKeywords = enhancedDocument.metadata.keywords ?? [];
 
       document.chunkStatus = KnowledgeDocumentChunkStatus.CHUNKED;
@@ -993,16 +1145,18 @@ export class KnowledgeService {
       document.embeddingStatus = KnowledgeDocumentEmbeddingStatus.QUEUED;
       document.embeddingError = null;
       await this.documentRepository.save(document);
-      const embeddingResult = await this.documentEmbeddingService.embed(
-        chunks.map((chunk) => chunk.embeddingText),
-        {
-          onStart: async () => {
-            document.embeddingStatus =
-              KnowledgeDocumentEmbeddingStatus.EMBEDDING;
-            document.embeddingError = null;
-            await this.documentRepository.save(document);
+      const embeddingResult = await trace.step("embedding", () =>
+        this.documentEmbeddingService.embed(
+          chunks.map((chunk) => chunk.embeddingText),
+          {
+            onStart: async () => {
+              document.embeddingStatus =
+                KnowledgeDocumentEmbeddingStatus.EMBEDDING;
+              document.embeddingError = null;
+              await this.documentRepository.save(document);
+            },
           },
-        },
+        ),
       );
       if (embeddingResult.vectors.length !== chunks.length) {
         throw new BadGatewayException(
@@ -1020,58 +1174,20 @@ export class KnowledgeService {
       document.indexStatus = KnowledgeDocumentIndexStatus.INDEXING;
       document.indexError = null;
       await this.documentRepository.save(document);
-      await this.documentVectorStoreService.ensureCollection(
-        embeddingResult.dimension,
-      );
-      const savedChunks = await this.chunkRepository.save(
-        chunks.map((chunk) =>
-          this.chunkRepository.create({
-            knowledgeId,
-            documentId,
-            chunkIndex: chunk.chunkIndex,
-            text: chunk.text,
-            searchText: chunk.searchText,
-            tokenCount: chunk.tokenCount,
-            characterCount: chunk.characterCount,
-            recallCount: 0,
-            enabled: true,
-            embeddingModel: embeddingResult.model,
-            embeddingDimension: embeddingResult.dimension,
-            vectorId: randomUUID(),
-            metadata: {
-              ...chunk.metadata,
-              documentKeywords,
-            },
-            createdBy: userId,
-            updatedBy: userId,
-          }),
-        ),
-      );
-      try {
-        await this.documentVectorStoreService.upsert(
-          savedChunks.map((chunk, index) => ({
-            id: chunk.vectorId,
-            vector: embeddingResult.vectors[index] ?? [],
-            payload: {
-              knowledgeId,
-              documentId,
-              documentName: document.name,
-              chunkId: chunk.id,
-              chunkIndex: chunk.chunkIndex,
-              text: chunk.text,
-              searchText: chunk.searchText,
-              enabled: chunk.enabled,
-              metadata: chunk.metadata,
-            },
-          })),
+      await trace.step("index", async () => {
+        await this.documentVectorStoreService.ensureCollection(
+          embeddingResult.dimension,
         );
-      } catch (error) {
-        // 向量写入失败时回滚已入库的片段，避免 DB 与向量库不一致。
-        await this.chunkRepository.delete({
-          id: In(savedChunks.map((chunk) => chunk.id)),
+        await this.replaceDocumentIndex({
+          document,
+          chunks,
+          vectors: embeddingResult.vectors,
+          embeddingModel: embeddingResult.model,
+          embeddingDimension: embeddingResult.dimension,
+          documentKeywords,
+          userId,
         });
-        throw error;
-      }
+      });
 
       document.indexStatus = KnowledgeDocumentIndexStatus.INDEXED;
       document.indexError = null;
@@ -1079,8 +1195,13 @@ export class KnowledgeService {
       document.indexedAt = new Date();
     } catch (error) {
       this.applyProcessError(document, error);
+      trace.mark("failed");
+      await this.documentRepository.save(document);
+      trace.end({ status: "failed" });
+      throw error;
     }
 
+    trace.end({ chunkCount: document.chunkCount });
     return this.withAccessibleDocumentUrl(
       await this.documentRepository.save(document),
     );

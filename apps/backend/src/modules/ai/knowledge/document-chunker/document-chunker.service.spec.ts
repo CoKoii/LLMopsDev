@@ -47,6 +47,14 @@ const paragraph = (text: string, id = `p-${text.slice(0, 8)}`) =>
     text,
   }) satisfies ParsedDocumentBlock;
 
+const table = (rows: string[][], id = "table-1") =>
+  ({
+    id,
+    type: "table",
+    text: rows.map((row) => row.join(" | ")).join("\n"),
+    rows,
+  }) satisfies ParsedDocumentBlock;
+
 describe(DocumentChunkerService.name, () => {
   const service = new DocumentChunkerService();
 
@@ -148,5 +156,58 @@ describe(DocumentChunkerService.name, () => {
     expect(last?.text).toContain("# 第一章 绪论");
     expect(last?.text).toContain("## 1.1 开发背景");
     expect(last?.metadata.headingPath).toEqual(["第一章 绪论", "1.1 开发背景"]);
+  });
+
+  it("超长表格和相邻内容切分时，每个表格分块都保留表头", () => {
+    const rows = [
+      ["接口", "方法", "说明"],
+      ...Array.from({ length: 80 }, (_, index) => [
+        `/api/items/${index + 1}`,
+        "GET",
+        `返回第 ${index + 1} 条记录的详细说明，用于验证表格分块。`,
+      ]),
+    ];
+    const chunks = service.createChunks(
+      createInput([
+        heading("接口目录", 1, "h-api"),
+        table(rows),
+        paragraph("表格后面的补充说明不应破坏前面表格的行结构。"),
+      ]),
+    );
+
+    const tableChunks = chunks.filter((chunk) =>
+      chunk.metadata.blockTypes.includes("table"),
+    );
+    expect(tableChunks.length).toBeGreaterThan(1);
+    for (const chunk of tableChunks) {
+      expect(chunk.text).toContain("接口 | 方法 | 说明");
+      expect(chunk.text).toContain("# 接口目录");
+    }
+    expect(chunks[chunks.length - 1]?.text).toContain("表格后面的补充说明");
+  });
+
+  it("章节未超过章节阈值时，略大的表格也按行切分", () => {
+    const rows = [
+      ["字段", "类型", "说明"],
+      ...Array.from({ length: 24 }, (_, index) => [
+        `field_${index + 1}`,
+        "string",
+        `字段 ${index + 1} 的说明内容。`,
+      ]),
+    ];
+    const input = createInput([
+      heading("字段定义", 1, "h-fields"),
+      table(rows),
+    ]);
+    input.chunkConfig = { maxSegmentLength: 100 };
+    const chunks = service.createChunks(input);
+
+    const tableChunks = chunks.filter((chunk) =>
+      chunk.metadata.blockTypes.includes("table"),
+    );
+    expect(tableChunks.length).toBeGreaterThan(1);
+    expect(
+      tableChunks.every((chunk) => chunk.text.includes("字段 | 类型 | 说明")),
+    ).toBe(true);
   });
 });

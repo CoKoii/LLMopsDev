@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { routes } from './menus'
 import { useAuthStore } from '../stores/auth'
+import { getAccessToken } from '@/utils/auth'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -13,8 +14,27 @@ router.beforeEach(async (to) => {
     return true
   }
 
-  if (await authStore.getUserInfo()) {
-    return true
+  if (!getAccessToken()) {
+    return {
+      name: 'login',
+      query: { redirect: to.fullPath },
+    }
+  }
+
+  try {
+    if (await authStore.getUserInfo()) {
+      return true
+    }
+  } catch {
+    return {
+      name: 'login',
+      query: { redirect: to.fullPath },
+    }
+  }
+
+  return {
+    name: 'login',
+    query: { redirect: to.fullPath },
   }
 })
 export default router

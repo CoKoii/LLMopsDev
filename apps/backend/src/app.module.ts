@@ -22,6 +22,7 @@ import { RequestContextModule } from "./common/request-context/request-context.m
 import { AiModule } from "./modules/ai/ai.module";
 import { FilesModule } from "./modules/files/files.module";
 import { IamModule } from "./modules/iam/iam.module";
+import { AdminModule } from "./modules/admin/admin.module";
 
 loadEnvironmentFiles();
 const coreModules = [
@@ -38,7 +39,7 @@ const coreModules = [
   RedisModule,
 ];
 const optionalModules = [AppMailerModule, OssModule];
-const businessModules = [IamModule, FilesModule, AiModule];
+const businessModules = [IamModule, FilesModule, AiModule, AdminModule];
 
 @Module({
   imports: [...coreModules, ...optionalModules, ...businessModules],

@@ -15,6 +15,7 @@ import type {
 
 interface ParagraphUnit {
   text: string;
+  tableRows?: string[][];
   headingPath: string[];
   sourceBlockIds: string[];
   blockTypes: ParsedDocumentBlockType[];
@@ -108,6 +109,9 @@ const stripLeadingHeading = (content: string, headingPath: string[]) => {
 const normalizePreservedText = (value: string) =>
   value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
 
+const formatTableRow = (row: string[]) =>
+  row.map((cell) => cell.trim()).join(" | ");
+
 const normalizeFlowText = (value: string) =>
   value
     .replace(/\r\n/g, "\n")
@@ -181,6 +185,9 @@ const blockToUnit = (
 
   return {
     text,
+    ...(block.type === "table" && block.rows?.length
+      ? { tableRows: block.rows }
+      : {}),
     headingPath,
     sourceBlockIds: [block.id],
     blockTypes: [block.type],
@@ -202,8 +209,20 @@ const sameHeadingRoot = (left: string[], right: string[]) =>
 
 const mergeUnits = (units: ParagraphUnit[]): ParagraphUnit => {
   const text = units.map((unit) => unit.text).join("\n\n");
+  const tableUnits = units.filter((unit) => unit.tableRows?.length);
+  const tableRows =
+    tableUnits.length === 1 &&
+    units.every(
+      (unit) =>
+        unit.tableRows?.length ||
+        unit.blockTypes.every((type) => type === "heading"),
+    )
+      ? tableUnits[0]?.tableRows
+      : undefined;
+
   return {
     text,
+    ...(tableRows ? { tableRows } : {}),
     headingPath: commonHeadingPath(units),
     sourceBlockIds: units.flatMap((unit) => unit.sourceBlockIds),
     blockTypes: unique(units.flatMap((unit) => unit.blockTypes)),
@@ -350,6 +369,37 @@ const splitPreservedUnit = (
 ): ParagraphUnit[] => {
   if (unit.tokenCount <= maxTokens) return [unit];
 
+  if (unit.tableRows?.length) {
+    const [headerRow, ...bodyRows] = unit.tableRows;
+    const header = formatTableRow(headerRow ?? []);
+    const chunks: string[][] = [];
+    let currentRows: string[] = [];
+
+    for (const row of bodyRows) {
+      const formattedRow = formatTableRow(row);
+      const nextRows = [...currentRows, formattedRow];
+      const nextText = [header, ...nextRows].filter(Boolean).join("\n");
+
+      if (currentRows.length && estimateTokens(nextText) > maxTokens) {
+        chunks.push(currentRows);
+        currentRows = [formattedRow];
+      } else {
+        currentRows = nextRows;
+      }
+    }
+    if (currentRows.length || !chunks.length) chunks.push(currentRows);
+
+    return chunks.map((rows, index) => {
+      const text = [header, ...rows].filter(Boolean).join("\n");
+      return {
+        ...unit,
+        text: normalizePreservedText(text),
+        tokenCount: estimateTokens(text),
+        breakBefore: index > 0 || unit.breakBefore,
+      };
+    });
+  }
+
   const chunks: string[] = [];
   let current = "";
   for (const line of unit.text.split("\n")) {
@@ -443,6 +493,14 @@ const isHeadingOnlySection = (section: Pick<DocumentSection, "units">) =>
     unit.blockTypes.every((type) => type === "heading"),
   ) &&
   !section.units.some((unit) => isContentHeadingText(unit.text));
+
+const isHeadingOnlyUnit = (unit: ParagraphUnit) =>
+  unit.blockTypes.every((type) => type === "heading");
+
+const hasPreservedFormat = (units: ParagraphUnit[]) =>
+  units.some((unit) =>
+    unit.blockTypes.some((type) => PRESERVE_FORMAT_TYPES.has(type)),
+  );
 
 const overlapTail = (text: string) => {
   const normalized = compact(text);
@@ -548,14 +606,21 @@ export class DocumentChunkerService {
       const sectionMaxTokens = Math.floor(
         maxTokens * SECTION_SINGLE_CHUNK_MULTIPLIER,
       );
-      const rawGroups =
-        section.tokenCount <= sectionMaxTokens
+      const containsOversizedTable = section.units.some(
+        (unit) => unit.tableRows?.length && unit.tokenCount > maxTokens,
+      );
+      const sourceGroups =
+        section.tokenCount <= sectionMaxTokens && !containsOversizedTable
           ? [{ units: section.units }]
-          : this.createChunkGroups(section.units, maxTokens).flatMap((group) =>
-              splitOversizedUnit(mergeUnits(group.units), maxTokens).map(
-                (unit) => ({ units: [unit] }),
-              ),
-            );
+          : this.createChunkGroups(section.units, maxTokens);
+      const rawGroups = sourceGroups.flatMap((group) => {
+        const merged = mergeUnits(group.units);
+        return merged.tokenCount > maxTokens
+          ? splitOversizedUnit(merged, maxTokens).map((unit) => ({
+              units: [unit],
+            }))
+          : [group];
+      });
 
       return rawGroups.map((group, index) => ({
         section,
@@ -593,6 +658,8 @@ export class DocumentChunkerService {
       const mergedTokenCount = currentTokenCount + unit.tokenCount;
       const shouldMerge =
         !unit.breakBefore &&
+        !hasPreservedFormat(current) &&
+        !hasPreservedFormat([unit]) &&
         (sameSection ||
           (sameRootSection && currentTokenCount < MIN_CHUNK_TOKENS)) &&
         mergedTokenCount <= maxTokens;
@@ -602,10 +669,9 @@ export class DocumentChunkerService {
       } else {
         // 仅含标题的组（如“前 言”后紧跟超长段落无法合并）不单独成块：
         // 标题并入下一组开头，避免产生没有正文的孤立标题分块。
-        const headingOnly = current.every((item) =>
-          item.blockTypes.every((type) => type === "heading"),
-        );
+        const headingOnly = current.every(isHeadingOnlyUnit);
         if (headingOnly && !unit.breakBefore) {
+          // 标题与格式块一起进入分块，超长时仍可恢复标题上下文。
           current.push(unit);
         } else {
           groups.push({ units: current });
