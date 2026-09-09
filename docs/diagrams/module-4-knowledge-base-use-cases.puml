@@ -1,0 +1,47 @@
+@startuml
+title 知识库管理模块用例图
+
+left to right direction
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+actor "普通用户" as User
+actor "知识采集者" as Collector
+actor "系统管理员" as Admin
+actor "Embedding 模型" as EmbeddingModel
+actor "重排序模型" as RerankModel
+
+rectangle "知识库管理模块" {
+  usecase "创建知识库" as CreateKnowledge
+  usecase "编辑知识库信息" as EditKnowledge
+  usecase "上传文档" as UploadDocument
+  usecase "解析文档" as ParseDocument
+  usecase "清洗文档内容" as CleanDocument
+  usecase "增强文档内容" as EnhanceDocument
+  usecase "切分文档片段" as ChunkDocument
+  usecase "生成文档向量" as EmbedDocument
+  usecase "建立向量索引" as IndexDocument
+  usecase "查看处理状态" as ViewProcessStatus
+  usecase "管理文档片段" as ManageChunks
+  usecase "测试知识召回" as RecallTest
+  usecase "管理平台知识库" as AdminKnowledge
+}
+
+User --> CreateKnowledge
+User --> EditKnowledge
+User --> UploadDocument
+User --> ViewProcessStatus
+User --> ManageChunks
+User --> RecallTest
+Collector --> UploadDocument
+Admin --> AdminKnowledge
+
+UploadDocument ..> ParseDocument : <<include>>
+ParseDocument ..> CleanDocument : <<include>>
+CleanDocument ..> EnhanceDocument : <<include>>
+EnhanceDocument ..> ChunkDocument : <<include>>
+ChunkDocument ..> EmbedDocument : <<include>>
+EmbedDocument ..> IndexDocument : <<include>>
+EmbedDocument --> EmbeddingModel
+RecallTest --> RerankModel
+@enduml

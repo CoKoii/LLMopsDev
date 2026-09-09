@@ -1,0 +1,44 @@
+@startuml
+title 插件管理模块用例图
+
+left to right direction
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+actor "普通用户" as User
+actor "系统管理员" as Admin
+actor "第三方业务接口" as ThirdPartyApi
+actor "聊天模型" as ChatModel
+
+rectangle "插件管理模块" {
+  usecase "创建插件" as CreatePlugin
+  usecase "导入 OpenAPI Schema" as ImportSchema
+  usecase "解析接口定义" as ParseSchema
+  usecase "配置访问地址" as ConfigureBaseUrl
+  usecase "配置请求头" as ConfigureHeaders
+  usecase "校验工具参数" as ValidateArgs
+  usecase "发布插件" as PublishPlugin
+  usecase "启用或停用插件" as TogglePlugin
+  usecase "绑定 AI 应用" as BindApp
+  usecase "生成工具定义" as CreateTool
+  usecase "执行外部接口请求" as ExecuteRequest
+  usecase "管理平台插件" as AdminPlugin
+}
+
+User --> CreatePlugin
+User --> ImportSchema
+User --> ConfigureBaseUrl
+User --> ConfigureHeaders
+User --> PublishPlugin
+User --> TogglePlugin
+User --> BindApp
+Admin --> AdminPlugin
+ChatModel --> ValidateArgs
+
+ImportSchema ..> ParseSchema : <<include>>
+ParseSchema ..> CreateTool : <<include>>
+CreatePlugin ..> ImportSchema : <<include>>
+ExecuteRequest ..> ValidateArgs : <<include>>
+ExecuteRequest --> ThirdPartyApi
+BindApp ..> CreateTool : <<include>>
+@enduml
