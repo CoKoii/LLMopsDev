@@ -37,10 +37,11 @@ export class HomeBuilderController {
       controller.signal,
     );
     response.once("close", () => {
-      if (!response.writableFinished) stream.destroy();
+      if (response.writableFinished || controller.signal.aborted) return;
+      // Cancel the LangChain stream before destroying its downstream reader.
+      controller.abort();
+      stream.destroy();
     });
-    stream.once("close", () => controller.abort());
-    stream.once("error", () => controller.abort());
     return new StreamableFile(stream, {
       type: "text/event-stream; charset=utf-8",
     });
