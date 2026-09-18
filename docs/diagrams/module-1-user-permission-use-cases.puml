@@ -1,0 +1,37 @@
+@startuml
+title 用户权限管理模块用例图
+
+left to right direction
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+actor "普通用户" as User
+actor "系统管理员" as Admin
+
+rectangle "用户权限管理模块" {
+  usecase "用户注册" as Register
+  usecase "用户登录" as Login
+  usecase "刷新访问令牌" as RefreshToken
+  usecase "退出登录" as Logout
+  usecase "个人资料管理" as Profile
+  usecase "修改密码" as Password
+  usecase "用户管理" as UserManage
+  usecase "角色管理" as RoleManage
+  usecase "权限管理" as PermissionManage
+}
+
+User --> Register
+User --> Login
+User --> RefreshToken
+User --> Logout
+User --> Profile
+User --> Password
+
+Admin --> UserManage
+Admin --> RoleManage
+Admin --> PermissionManage
+
+Login ..> RefreshToken : <<extend>>
+Profile ..> Password : <<include>>
+RoleManage ..> PermissionManage : <<include>>
+@enduml

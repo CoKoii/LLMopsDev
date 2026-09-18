@@ -1,0 +1,52 @@
+@startuml
+title 智能对话与开放服务模块用例图
+
+left to right direction
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+actor "普通用户" as User
+actor "外部调用方" as Caller
+actor "聊天模型" as ChatModel
+actor "Embedding 模型" as EmbeddingModel
+actor "OpenAPI 插件" as Plugin
+
+rectangle "智能对话与开放服务模块" {
+  usecase "创建对话会话" as CreateSession
+  usecase "发送消息" as SendMessage
+  usecase "应用调试对话" as DebugChat
+  usecase "独立对话" as StandaloneChat
+  usecase "加载会话历史" as LoadHistory
+  usecase "处理对话附件" as ProcessAttachment
+  usecase "检索知识库" as RecallKnowledge
+  usecase "管理会话记忆" as ManageMemory
+  usecase "调用 OpenAPI 工具" as CallTool
+  usecase "保存对话消息" as SaveMessage
+  usecase "停止回答" as StopAnswer
+  usecase "返回 SSE 流式结果" as StreamResult
+  usecase "调用开放 API" as OpenApiChat
+}
+
+User --> DebugChat
+User --> StandaloneChat
+User --> CreateSession
+User --> SendMessage
+User --> ProcessAttachment
+User --> ManageMemory
+User --> StopAnswer
+Caller --> OpenApiChat
+
+DebugChat ..> SendMessage : <<include>>
+StandaloneChat ..> SendMessage : <<include>>
+OpenApiChat ..> SendMessage : <<include>>
+SendMessage ..> LoadHistory : <<include>>
+SendMessage ..> SaveMessage : <<include>>
+SendMessage ..> StreamResult : <<include>>
+SendMessage ..> RecallKnowledge : <<extend>>
+SendMessage ..> ProcessAttachment : <<extend>>
+SendMessage ..> CallTool : <<extend>>
+
+SendMessage --> ChatModel
+RecallKnowledge --> EmbeddingModel
+CallTool --> Plugin
+@enduml

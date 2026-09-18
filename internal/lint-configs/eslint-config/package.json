@@ -1,0 +1,25 @@
+{
+  "name": "@llmops/eslint-config",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "scripts": {
+    "stub": "pnpm exec tsdown"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@llmops/tsconfig": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "eslint-plugin-unused-imports": "catalog:",
+    "globals": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:"
+  }
+}

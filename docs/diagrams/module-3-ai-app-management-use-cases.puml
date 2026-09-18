@@ -1,0 +1,48 @@
+@startuml
+title AI 应用管理模块用例图
+
+left to right direction
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+actor "普通用户" as User
+actor "系统管理员" as Admin
+
+rectangle "AI 应用管理模块" {
+  usecase "创建 AI 应用" as CreateApp
+  usecase "编辑应用基本信息" as EditApp
+  usecase "配置系统提示词" as ConfigurePrompt
+  usecase "配置模型参数" as ConfigureModel
+  usecase "绑定知识库" as BindKnowledge
+  usecase "绑定插件" as BindPlugin
+  usecase "保存应用草稿" as SaveDraft
+  usecase "在线调试应用" as DebugApp
+  usecase "发布应用版本" as PublishVersion
+  usecase "查看历史版本" as VersionHistory
+  usecase "恢复历史版本" as RestoreVersion
+  usecase "设置独立对话页状态" as PublishStandalone
+  usecase "查看运行统计" as ViewStats
+  usecase "停用不合规应用" as DisableApp
+}
+
+User --> CreateApp
+User --> EditApp
+User --> ConfigurePrompt
+User --> ConfigureModel
+User --> BindKnowledge
+User --> BindPlugin
+User --> SaveDraft
+User --> DebugApp
+User --> PublishVersion
+User --> VersionHistory
+User --> RestoreVersion
+User --> PublishStandalone
+User --> ViewStats
+Admin --> DisableApp
+
+SaveDraft ..> ConfigurePrompt : <<include>>
+SaveDraft ..> ConfigureModel : <<include>>
+DebugApp ..> SaveDraft : <<include>>
+PublishVersion ..> SaveDraft : <<include>>
+RestoreVersion ..> VersionHistory : <<include>>
+@enduml

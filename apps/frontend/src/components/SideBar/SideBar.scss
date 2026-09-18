@@ -1,0 +1,284 @@
+.SideBar {
+  width: 100%;
+  height: 100%;
+  .content {
+    width: 100%;
+    height: 100%;
+    padding: 2.4rem 1.6rem;
+    border-radius: 0.8rem;
+    background-color: var(--white);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    .main {
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 0.8rem;
+        margin-bottom: 2rem;
+        .logo {
+          width: 3.6rem;
+          height: 3.6rem;
+        }
+        .text {
+          font-size: 2rem;
+          font-weight: bold;
+        }
+      }
+      .create-btn {
+        font-size: 1.4rem;
+      }
+      .menus {
+        display: flex;
+        flex-direction: column;
+        gap: 0.8rem;
+        margin-top: 1.6rem;
+        .menu-item {
+          display: flex;
+          flex-direction: column;
+          gap: 0.8rem;
+          .tag {
+            padding: 0 0.6rem;
+            color: var(--font-light-color);
+          }
+          .link {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0 0.8rem;
+            font-size: 1.4rem;
+            line-height: 1;
+            border-radius: 8px;
+            height: 3.2rem;
+            color: var(--font-color);
+            text-decoration: none;
+            transition: background-color 0.3s;
+            &:hover {
+              background-color: var(--touch-bg);
+            }
+          }
+          .link.active {
+            background-color: var(--touch-bg);
+            color: var(--font-active-color);
+            font-weight: bold;
+          }
+          .link :deep(.icon) {
+            width: 1.4rem;
+            height: 1.4rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            fill: none;
+          }
+          .link.active :deep(.icon) {
+            fill: currentColor;
+          }
+          .link :deep(.icon svg) {
+            width: 100%;
+            height: 100%;
+            display: block;
+          }
+          .link .text {
+            line-height: 1;
+          }
+        }
+      }
+    }
+    .user {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+      padding: 0.8rem;
+      border-radius: 0.8rem;
+      cursor: pointer;
+      transition: background-color 0.3s;
+      &:hover {
+        background-color: var(--touch-bg);
+      }
+      .avatar {
+        width: 3.2rem;
+        height: 3.2rem;
+        border-radius: 50%;
+        overflow: hidden;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        color: var(--white);
+        font-size: 1.4rem;
+        font-weight: 700;
+        img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+      }
+      .info {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+        .name {
+          font-size: 1.4rem;
+          font-weight: bold;
+          color: var(--font-color);
+        }
+        .email {
+          font-size: 1.2rem;
+          color: var(--font-light-color);
+        }
+      }
+    }
+  }
+}
+
+.account-settings {
+  display: grid;
+  grid-template-columns: 20.8rem minmax(0, 1fr);
+  min-height: 54.4rem;
+  font-size: 1.6rem;
+}
+
+.settings-nav {
+  border-right: 0.1rem solid var(--border-color);
+  padding-right: 2.4rem;
+}
+
+.settings-title,
+.settings-main-title {
+  margin: 0;
+  font-size: 1.8rem;
+  font-weight: 700;
+  line-height: 2.8rem;
+  color: var(--font-color);
+}
+
+.settings-nav-item {
+  min-height: 4rem;
+  margin-top: 2rem;
+  padding: 0.8rem 1.2rem;
+  border-radius: 0.6rem;
+  display: flex;
+  align-items: center;
+  font-size: 1.6rem;
+  line-height: 2rem;
+  color: var(--font-color);
+
+  &.active {
+    background-color: var(--touch-bg);
+  }
+}
+
+.settings-main {
+  min-width: 0;
+  padding-left: 3.2rem;
+}
+
+.settings-main-title {
+  margin-bottom: 2rem;
+}
+
+.settings-field {
+  margin-bottom: 2.4rem;
+}
+
+.field-label {
+  margin-bottom: 0.8rem;
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: var(--font-color);
+}
+
+.avatar-setting-row {
+  min-height: 6.8rem;
+  display: flex;
+  align-items: center;
+  gap: 1.2rem;
+}
+
+.settings-avatar {
+  flex-shrink: 0;
+  color: var(--white);
+  font-size: 2.4rem;
+  font-weight: 700;
+
+  :deep(img) {
+    object-fit: cover;
+  }
+}
+
+.avatar-upload {
+  line-height: 0;
+
+  :deep(.ant-upload) {
+    display: block;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+}
+
+.field-display {
+  display: flex;
+  align-items: center;
+  min-height: 4rem;
+  gap: 0.6rem;
+  font-size: 1.6rem;
+  line-height: 2rem;
+  color: var(--font-light-color);
+}
+
+.field-display.muted {
+  color: var(--font-light-color);
+}
+
+.inline-action {
+  width: 2.8rem;
+  height: 2.8rem;
+  padding: 0;
+  color: var(--primary-color);
+  font-size: 1.4rem;
+  background: transparent;
+
+  &:hover,
+  &:focus,
+  &:active {
+    color: var(--primary-color);
+    background: transparent;
+  }
+}
+
+.inline-form {
+  display: grid;
+  align-items: start;
+  gap: 0.8rem;
+
+  :deep(.ant-form-item) {
+    margin-bottom: 0;
+  }
+}
+
+.nickname-form {
+  grid-template-columns: minmax(28rem, 1fr) auto auto;
+}
+
+.password-form {
+  width: min(100%, 56rem);
+  grid-template-columns: 1fr;
+}
+
+.password-actions {
+  display: flex;
+  gap: 0.8rem;
+}
+
+.hidden-username {
+  position: absolute;
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+}

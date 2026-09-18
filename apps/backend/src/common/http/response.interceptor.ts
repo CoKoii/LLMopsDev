@@ -1,0 +1,43 @@
+import {
+  CallHandler,
+  ExecutionContext,
+  Injectable,
+  NestInterceptor,
+} from "@nestjs/common";
+import { Reflector } from "@nestjs/core";
+import { Observable, map } from "rxjs";
+import type { RequestWithRequestId } from "./request-id.middleware";
+import { SKIP_RESPONSE_WRAP_KEY } from "./skip-response-wrap.decorator";
+
+const SUCCESS_CODE = 0;
+
+@Injectable()
+export class ResponseInterceptor implements NestInterceptor {
+  constructor(private readonly reflector: Reflector) {}
+
+  intercept(
+    context: ExecutionContext,
+    next: CallHandler<unknown>,
+  ): Observable<unknown> {
+    const skipResponseWrap = this.reflector.getAllAndOverride<boolean>(
+      SKIP_RESPONSE_WRAP_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    const http = context.switchToHttp();
+
+    if (skipResponseWrap) {
+      return next.handle();
+    }
+
+    const request = http.getRequest<RequestWithRequestId>();
+
+    return next.handle().pipe(
+      map((data) => ({
+        code: SUCCESS_CODE,
+        data,
+        requestId: request.requestId,
+        timestamp: new Date().toISOString(),
+      })),
+    );
+  }
+}

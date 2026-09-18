@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "LLMops Web Clipper",
+  "description": "选择网页正文，清洗为 Markdown 并上传到 LLMops 知识库。",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "LLMops Web Clipper",
+    "default_popup": "index.html"
+  },
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["assets/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,272 @@
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { FilesService } from "../../files/files.service";
+import { RequestContextService } from "../../../common/request-context/request-context.service";
+import {
+  createPageResult,
+  type PageResult,
+  resolvePageQuery,
+} from "../../../common/http/page-query.dto";
+import { CreatePluginDto } from "./dto/create-plugin.dto";
+import { QueryPluginsDto } from "./dto/query-plugins.dto";
+import { UpdatePluginDto } from "./dto/update-plugin.dto";
+import { PluginCategory } from "./entities/plugin-category.entity";
+import { Plugin, type PluginHeader } from "./entities/plugin.entity";
+import { validatePluginOpenApiSchema } from "./openapi-schema.validator";
+
+/**
+ * headers 明文密钥脱敏占位符：前端回显/保存时以此标记"密钥已配置，未修改"。
+ */
+const HEADER_VALUE_PLACEHOLDER = "******";
+
+@Injectable()
+export class PluginService {
+  constructor(
+    @InjectRepository(Plugin)
+    private readonly pluginRepository: Repository<Plugin>,
+    @InjectRepository(PluginCategory)
+    private readonly pluginCategoryRepository: Repository<PluginCategory>,
+    private readonly filesService: FilesService,
+    private readonly requestContext: RequestContextService,
+  ) {}
+
+  private withAccessibleIcon(plugin: Plugin): Plugin {
+    return {
+      ...plugin,
+      icon: this.filesService.createAccessibleUrl(plugin.icon),
+    };
+  }
+
+  /**
+   * 插件响应脱敏：headers 中的明文密钥绝不返回给前端。
+   * 详情/列表保留 openapiSchema 供前端解析工具定义，但 headers 只回显 key 名。
+   */
+  private toSafePlugin(plugin: Plugin): Plugin {
+    return {
+      ...plugin,
+      icon: this.filesService.createAccessibleUrl(plugin.icon),
+      headers:
+        plugin.headers?.map((header) => ({
+          key: header.key,
+          value: HEADER_VALUE_PLACEHOLDER,
+        })) ?? [],
+    };
+  }
+
+  private isReadableByCurrentUser(plugin: Plugin) {
+    const userId = this.requestContext.getUserId();
+    return (
+      plugin.published || (userId !== undefined && plugin.createdBy === userId)
+    );
+  }
+
+  private validateOpenApiSchema(openapiSchema: string) {
+    const errors = validatePluginOpenApiSchema(openapiSchema);
+    if (errors.length) {
+      throw new BadRequestException(
+        `OpenAPI Schema不完整：${errors.join("；")}`,
+      );
+    }
+  }
+
+  private normalizeHeaders(headers: PluginHeader[]) {
+    return headers.map((header, index) => {
+      const key = header.key.trim();
+      const value = header.value.trim();
+      if (!key || !value) {
+        throw new BadRequestException(
+          `Headers第${index + 1}项的Key和Value都必须填写`,
+        );
+      }
+
+      return { key, value };
+    });
+  }
+
+  private async buildPluginPayload(
+    dto: CreatePluginDto | UpdatePluginDto,
+    userId: number,
+  ): Promise<Partial<Plugin>> {
+    const payload: Partial<Plugin> = {};
+
+    if (dto.icon !== undefined) {
+      payload.icon = dto.icon || null;
+    }
+    if (dto.name !== undefined) {
+      payload.name = dto.name;
+    }
+    if (dto.description !== undefined) {
+      payload.description = dto.description || null;
+    }
+    if (dto.categoryId !== undefined) {
+      const category: PluginCategory | null =
+        await this.pluginCategoryRepository.findOne({
+          where: { id: dto.categoryId },
+        });
+      if (!category) throw new NotFoundException("插件分类不存在");
+      payload.category = category;
+    }
+    if (dto.openapiSchema !== undefined) {
+      this.validateOpenApiSchema(dto.openapiSchema);
+      payload.openapiSchema = dto.openapiSchema;
+    }
+    if (dto.headers !== undefined) {
+      payload.headers = this.normalizeHeaders(dto.headers);
+    }
+    if (dto.status !== undefined) {
+      payload.status = dto.status;
+    }
+    if (dto.published !== undefined) {
+      payload.published = dto.published;
+    }
+    if (dto.iconFileId !== undefined) {
+      const file = await this.filesService.markUsed(dto.iconFileId, userId);
+      payload.icon = file.url;
+    }
+
+    return payload;
+  }
+
+  // --------------------------------------------------------------------------------------------------
+  // 创建插件
+  async create(createPluginDto: CreatePluginDto, userId: number) {
+    if (createPluginDto.categoryId === undefined) {
+      throw new BadRequestException("创建插件时必须选择分类");
+    }
+    const payload = await this.buildPluginPayload(createPluginDto, userId);
+    payload.createdBy = userId;
+    payload.updatedBy = userId;
+
+    await this.pluginRepository.save(this.pluginRepository.create(payload));
+    return { success: true };
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 获取插件分类
+  async listCategories() {
+    return this.pluginCategoryRepository.find({
+      order: { sort: "ASC", id: "ASC" },
+    });
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 获取插件列表
+  async list(query: QueryPluginsDto): Promise<PageResult<Plugin>> {
+    const { page, pageSize, skip } = resolvePageQuery(query);
+    const name = query.name?.trim();
+    const categoryKey = query.categoryKey?.trim();
+    const scope = query.scope ?? "available";
+    const userId = this.requestContext.getUserId();
+    const queryBuilder = this.pluginRepository
+      .createQueryBuilder("plugin")
+      .leftJoinAndSelect("plugin.category", "category")
+      .orderBy("plugin.id", "DESC")
+      .skip(skip)
+      .take(pageSize);
+
+    if (name) {
+      queryBuilder.andWhere("plugin.name LIKE :name", {
+        name: `%${name}%`,
+      });
+    }
+    if (categoryKey) {
+      queryBuilder.andWhere("category.key = :categoryKey", {
+        categoryKey,
+      });
+    }
+
+    if (scope === "mine" && userId === undefined) {
+      return createPageResult([], 0, page, pageSize);
+    }
+    if (scope === "mine") {
+      queryBuilder.andWhere("plugin.createdBy = :userId", { userId });
+    } else {
+      queryBuilder.andWhere("plugin.published = :published", {
+        published: true,
+      });
+    }
+
+    const [items, total]: [Plugin[], number] =
+      await queryBuilder.getManyAndCount();
+    return createPageResult(
+      items.map((item) => this.toSafePlugin(item)),
+      total,
+      page,
+      pageSize,
+    );
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 获取插件详情
+  async findOne(id: number) {
+    const plugin: Plugin | null = await this.pluginRepository.findOne({
+      where: { id },
+      relations: { category: true },
+    });
+    if (!plugin) throw new NotFoundException("插件不存在");
+    if (!this.isReadableByCurrentUser(plugin)) {
+      throw new NotFoundException("插件不存在");
+    }
+    return this.toSafePlugin(plugin);
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 更新插件
+  async update(id: number, updatePluginDto: UpdatePluginDto, userId: number) {
+    const plugin: Plugin | null = await this.pluginRepository.findOne({
+      where: { id },
+      relations: { category: true },
+    });
+    if (!plugin) throw new NotFoundException("插件不存在");
+    if (plugin.createdBy !== userId) {
+      throw new NotFoundException("插件不存在");
+    }
+    const payload = await this.buildPluginPayload(updatePluginDto, userId);
+    if (payload.headers) {
+      const existing = new Map(
+        (plugin.headers ?? []).map((header) => [header.key, header.value]),
+      );
+      // 前端回显时值为脱敏占位（空字符串），保存时保留原密钥，避免明文密钥往返。
+      payload.headers = payload.headers.map((header) => ({
+        key: header.key,
+        value:
+          header.value === HEADER_VALUE_PLACEHOLDER
+            ? existing.get(header.key) || ""
+            : header.value,
+      }));
+    }
+    Object.assign(plugin, payload);
+    await this.pluginRepository.save(plugin);
+    return { success: true };
+  }
+  // --------------------------------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------------------------------
+  // 删除插件
+  async remove(id: number) {
+    const plugin: Plugin | null = await this.pluginRepository.findOne({
+      where: { id },
+      relations: { category: true },
+    });
+    if (!plugin) throw new NotFoundException("插件不存在");
+    const userId = this.requestContext.getUserId();
+    if (userId === undefined || plugin.createdBy !== userId) {
+      throw new NotFoundException("插件不存在");
+    }
+    if (plugin.published) {
+      throw new BadRequestException("已发布插件不允许删除");
+    }
+    await this.pluginRepository.softRemove(plugin);
+    return { success: true };
+  }
+  // --------------------------------------------------------------------------------------------------
+}

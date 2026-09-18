@@ -1,0 +1,37 @@
+@startuml
+title 模型管理模块用例图
+
+left to right direction
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+actor "系统管理员" as Admin
+actor "模型服务" as ModelService
+actor "普通用户" as User
+
+rectangle "模型管理模块" {
+  usecase "新增模型配置" as CreateModel
+  usecase "编辑模型配置" as UpdateModel
+  usecase "删除模型配置" as DeleteModel
+  usecase "配置模型用途" as SetUsage
+  usecase "测试模型连通性" as TestModel
+  usecase "启用模型" as EnableModel
+  usecase "停用模型" as DisableModel
+  usecase "设置默认模型" as SetDefault
+  usecase "查看可用模型" as ListModels
+}
+
+Admin --> CreateModel
+Admin --> UpdateModel
+Admin --> DeleteModel
+Admin --> SetUsage
+Admin --> TestModel
+Admin --> EnableModel
+Admin --> DisableModel
+Admin --> SetDefault
+User --> ListModels
+
+TestModel --> ModelService
+CreateModel ..> SetUsage : <<include>>
+TestModel ..> ModelService : <<include>>
+@enduml

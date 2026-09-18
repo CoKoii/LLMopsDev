@@ -1,0 +1,97 @@
+import { ref } from 'vue'
+import { defineStore } from 'pinia'
+import {
+  loginApi,
+  logoutApi,
+  getUserInfoApi,
+  refreshAccessTokenApi,
+  type LoginParams,
+} from '../api/core/auth'
+import { message } from 'antdv-next'
+
+let redirectToLoginHandler: (() => void) | undefined
+
+export const setAuthRedirectHandler = (handler: () => void) => {
+  redirectToLoginHandler = handler
+}
+
+export const useAuthStore = defineStore(
+  'auth',
+  () => {
+    const accessToken = ref()
+    const refreshToken = ref()
+    const userInfo = ref()
+    // 获取用户信息函数
+    const getUserInfo = async (force = false) => {
+      if (userInfo.value && !force) {
+        return userInfo.value
+      }
+      const userInfoRes = await getUserInfoApi()
+      userInfo.value = userInfoRes
+      return userInfoRes
+    }
+
+    const setUserInfo = (info: unknown) => {
+      userInfo.value = info
+    }
+
+    // 登录函数
+    const authLogin = async (params: LoginParams) => {
+      // 先进行登录
+      const loginRes = await loginApi(params)
+      // 登录成功后，保存 accessToken 和 refreshToken
+      accessToken.value = loginRes.accessToken
+      refreshToken.value = loginRes.refreshToken
+      // 用accessToken获取用户信息
+      const userInfoRes = await getUserInfoApi()
+      userInfo.value = userInfoRes
+      message.success('登录成功')
+    }
+
+    // 刷新accessToken函数
+    const refreshAccessToken = async () => {
+      const refreshRes = await refreshAccessTokenApi()
+      accessToken.value = refreshRes.accessToken
+      refreshToken.value = refreshRes.refreshToken
+      return refreshRes
+    }
+
+    const clearAuth = () => {
+      accessToken.value = undefined
+      refreshToken.value = undefined
+      userInfo.value = undefined
+      localStorage.removeItem('auth')
+    }
+
+    // 退出登录函数
+    const authLogout = async () => {
+      try {
+        await logoutApi()
+        message.success('退出登录成功')
+      } catch {
+        // 接口失败也清除本地登录态，避免用户卡在当前会话。
+      } finally {
+        clearAuth()
+      }
+
+      redirectToLoginHandler?.()
+    }
+
+    return {
+      accessToken,
+      refreshToken,
+      userInfo,
+      getUserInfo,
+      setUserInfo,
+      authLogin,
+      authLogout,
+      refreshAccessToken,
+      clearAuth,
+    }
+  },
+  {
+    persist: {
+      pick: ['accessToken', 'refreshToken'],
+    },
+  },
+)
